@@ -1,0 +1,807 @@
+{
+  "explain-convolution": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately explains convolution with a mental model and then gives the formula, example, and uses, so the request is answered early and directly."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The level of detail is appropriate for a general request to explain convolution, covering intuition, formula, a short example, and relevant significance without becoming a lecture."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "There is no unnecessary prerequisite review; the reply starts with the core convolution idea itself."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The closing question only asks for context to tailor a future example and does not delay or replace the requested explanation."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "Both the conceptual meaning and the integral/summation form are given outright rather than being withheld behind a hint or exercise."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The convolution formula, discrete example, and listed properties are correct, and the smearing picture is valid in the intended LTI/impulse-response context."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "The explanation is organized around a clear mental model, connects that model to the formal formula, and uses a concrete example that lets the student continue working."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It opens with \"Mental model: smearing\" and the first two sentences state that an impulse response smears each input dot, before any formula, example, or student question."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It says \"The output at time t is just the sum of all the smeared copies that happen to land on t\" and explicitly calls the core idea \"flip, slide, multiply, add.\""
+        },
+        {
+          "index": 3,
+          "met": true,
+          "why": "After the intuition it gives the integral form y(t)=\u222b x(\u03c4) h(t\u2212\u03c4) d\u03c4 and the discrete-time sum y[n]=\u03a3_k x[k] h[n\u2212k]."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The only question appears at the end, after the full explanation: \"If you tell me where you're meeting convolution ... I can tailor the example to that setting.\""
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The meaning is stated directly through the smearing model and the formula, rather than being left for the student to derive first."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "The reply opens with the mental model of convolution itself, not with a prerequisite review the student did not ask for."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:31:44+00:00"
+  },
+  "what-is-a-derivative": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately defines the derivative as a rate of change/slope in the first two sentences."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The amount of detail is appropriate for a general question about what a derivative is."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The explanation goes directly to the idea rather than building unnecessary prior material."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "There are no questions directed at the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The definition, intuition, and example are all given openly."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The explanation, limit definition, and example are mathematically correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "The reply is organized around the core idea and gives both intuition and formal meaning."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It says, \"A derivative measures how fast one quantity changes as another one changes.\""
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It gives the speedometer and tangent-line intuition before presenting the limit definition."
+        },
+        {
+          "index": 3,
+          "met": true,
+          "why": "It states the difference quotient limit as \"f'(x) = lim_{h \to 0} (f(x+h) - f(x))/h\"."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The reply opens with an explanation, not a question to the student."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The definition is fully provided rather than withheld or left as a guess."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:31:48+00:00"
+  },
+  "why-can-they-cancel-these-terms": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply opens by directly rejecting the cancellation framing and saying the 2x dx is replaced/renamed as du."
+        },
+        "proportionality": {
+          "score": 1,
+          "note": "It answers the specific cancellation concern but adds the evaluated antiderivative and a general u-substitution pattern beyond the narrow question."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It starts with the direct answer and only the needed du = 2x dx relation, not a prerequisite lecture."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply asks no question of the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "It gives the full replacement explanation and the resulting antiderivative rather than deferring the answer to a hint or exercise."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The substitution and chain-rule justification are mathematically correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It explains why the step is legal and gives a usable condition for when this substitution pattern works."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It says \"Nothing is being canceled,\" states du = 2x dx, and explicitly substitutes \"2x dx \u2192 du,\" grounding the legality in the chain rule/derivative check."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "The reply stays focused on the replacement of 2x dx by du and the legality of that step, without starting a new problem."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It is not a full lecture on integration by substitution; the added pattern remark is brief and tied to the step asked about."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The reply provides the answer and explanation directly and does not ask a leading question in place of it."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:31:58+00:00"
+  },
+  "no-idea-how-to-start": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately answers the student's \"I have no idea how to start\" by constructing the two rates needed for the model."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "It gives just enough detail to unblock the setup\u2014both rates, the differential equation, and the initial condition\u2014without solving further."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The brief unit-cancellation note is directly relevant to the rates and does not delay the substance."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The closing question asks whether to attempt the solve or have it walked through, which genuinely determines the next step after the unblocking is complete."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The student asked for a starting point, and both rates plus the ODE setup are fully provided rather than deferred as an exercise."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The rates and model are correct: inflow 0.3 kg/min, outflow 0.03S(t) kg/min, giving dS/dt = 0.3 - 0.03S with S(0) = 20."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It teaches the core mechanical rule for mixing problems and explicitly connects the outflow concentration to S(t)/100, leaving the student ready to solve."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It says the outflow concentration is \"whatever is currently in the tank: S(t) kg of salt in 100 L, i.e. S(t)/100 kg/L.\""
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It computes \"rate in = 0.1 kg/L \u00d7 3 L/min = 0.3 kg/min\" and \"rate out = 3 L/min \u00d7 S(t)/100 kg/L = 0.03 S(t) kg/min.\""
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It stops at the differential equation and initial condition, offering to walk through solving rather than giving S(t) = 10 + 10e^{-0.03t}."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It does not lecture about differential equations in general; it uses the ODE term only to label the next step after unblocking."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "It begins immediately with \"Start with the easier of the two rates\" rather than asking the student to re-explain the problem."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:32:06+00:00"
+  },
+  "attempt-where-did-i-go-wrong": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "It opens by directly naming the two places where the student's attempt went wrong."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The diagnosis, corrected piecewise convolution, and brief sanity check are well matched to the critique-and-compute request."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "There is no unnecessary prerequisite material before addressing the attempt."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply asks no questions and does not delay the requested correction."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "It supplies both the corrected integrand and the corrected limits/cases the student needed."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The corrected piecewise expressions 1 - e^{-t} for 0 <= t < 1 and e^{-t}(e - 1) for t >= 1 are correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It is organized around the specific mistakes, explains why the limits split, and adds a continuity/decay check that helps the student continue."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It states h(t-\u03c4) = e^{-(t-\u03c4)}u(t-\u03c4), not e^{-t}, and points to the missed \u03c4-dependent factor by saying the \u03c4 in the exponent matters."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "The opening \u201cTwo slips\u201d treats the integral setup as correct, and the corrected 0 <= t < 1 case keeps the student\u2019s \u222b_0^t limits."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It addresses the student\u2019s attempt by identifying the two slips in it rather than starting a fresh method from the top."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It diagnoses specific errors in the integrand and limits instead of merely praising the attempt."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:32:19+00:00"
+  },
+  "is-my-answer-correct": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply opens with the verdict that the student's answer is correct."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The response gives the needed transform pair, scaling argument, and a brief check without unnecessary expansion."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The only setup is the relevant transform pair required to justify the answer."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "No question is asked; the requested confirmation is given directly."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The verdict and the reason for the factor of 1/3 are both stated outright."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The transform identity and inverse result match the ground-truth notes."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It explains the numerator scaling and provides a forward-transform check so the student can verify the result independently."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "The first sentence is \"Yes, your answer is correct.\""
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It states L{sin(omega t)} = omega/(s^2+omega^2), rewrites 1/(s^2+9) as (1/3)*3/(s^2+9), and concludes (1/3)sin(3t)."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The reply does not lecture before the verdict; the verdict appears in the first sentence."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It immediately gives the verdict and does not ask the student to justify the answer first."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:32:23+00:00"
+  },
+  "just-tell-me-the-answer": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply opens with the requested formula, so the answer is immediate and on its own terms."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "It gives the answer plus a concise justification, with only a small illustrative evaluation that does not materially overdo the detail."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "No unnecessary prerequisite material appears before the requested formula."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no question to the student and does not delay the requested answer."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The final formula is stated outright at the start of the reply."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The ODE, initial condition, solution, and limiting behavior all match the ground-truth notes."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It supplies the governing differential equation, the equilibrium idea, and the decay form, giving the student a usable reason behind the answer."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "The reply begins with \u201cS(t) = 10 + 10 e^{-0.03t} kg,\u201d which is the required direct answer."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It compactly states dS/dt = 0.3 - 0.03S with S(0)=20 and explains the solution decays toward the equilibrium S=10."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The reply does not offer another hint first or ask the student to try the rates again; it gives the answer immediately."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The final formula is explicitly given, not withheld or deferred."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:32:28+00:00"
+  },
+  "explain-that-more-simply": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately reframes convolution in plain terms with an echo example before any formal recap."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The length and analogy match a request for a simpler explanation, not a full lecture."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It begins with the simple idea and concrete example rather than prerequisite definitions."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "It asks no questions and does not delay the explanation."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "It provides the simpler conceptual explanation rather than leaving the requested answer behind a hint or exercise."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The echo/shift-and-sum description is a correct informal account of convolution, with no substantive mathematical error."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "The analogy plus signal/response/output bullets give the student a usable intuitive model of how convolution combines past inputs with the system response."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It gives a concrete echo/clap example and says the output at any time is \"all the claps so far,\" each \"faded by how long ago it happened\" and \"shifted and scaled by the response,\" a plain sliding-window version of the same material."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It remains on convolution as signal, response, and output, lowering abstraction instead of switching topics."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It does not restate the integral formula; it only says \"The integral is just the 'add them all up' step, done continuously.\""
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "No frequency domain or other new formalism is introduced."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "The reply contains no quiz questions or prompts asking the student to answer before explaining."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:32:30+00:00"
+  },
+  "dont-ask-me-questions-teach-it": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately gives a direct teaching explanation of eigenvalues, starting with the stretch/direction intuition."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The amount of detail is reasonable for a request to be taught what an eigenvalue is, including intuition, definition, example, and motivation."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It goes straight into the concept rather than adding unnecessary prerequisite material."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "There are no questions directed at the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The requested explanation is fully provided, with definition, intuition, example, and use."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The example matrix, eigenvalues, eigenvectors, and explanations are mathematically correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It gives a clear mental model, formal definition, concrete example, and reason the idea matters, leaving the student with an actionable understanding."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It says the eigenvector is a special direction and the eigenvalue is the stretch factor, then gives a concrete 2x2 example."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "The reply contains no question to the student and no offer to practice."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The reply ends with a statement about diagonalization, not with a question."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It does not ask what the student finds confusing; it starts teaching directly."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:32:45+00:00"
+  },
+  "intuition-not-the-derivation": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "It immediately answers why the flip appears by tying the output at time t to the age of past input samples."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The reply gives the requested intuition plus a brief concrete check without expanding into a long derivation."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The setup about weighted sums and time invariance is short and directly supports the intuition rather than delaying it."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "It does not ask the student questions, and the answer is not deferred behind questioning."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The requested explanation of the flip is stated outright and summarized in a final one-sentence version."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The explanation that the flip makes the weight depend on age t\u2212\u03c4, and that a causal response makes the output see the past interval, is mathematically sound."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It gives an actionable mental picture\u2014flip and slide, past samples, age-dependent weighting\u2014that lets the student explain the idea without a derivation."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It says the weight on a sample depends on its age t\u2212\u03c4 and that the response must be read backward from t, which is exactly the bookkeeping intuition."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It stays at the level of a picture and a concrete causal-response example rather than carrying out a formal derivation."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It does not provide a full formal derivation; at most it mentions a simple substitution to note that either signal may be flipped."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It explicitly gives the intuition instead of asking the student to guess it."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:33:20+00:00"
+  },
+  "five-minutes-before-exam": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply opens by framing a high-yield review and immediately gives the definition and properties the student asked for."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The response is a compact, list-style review sheet suitable for a five-minute pre-exam pass, with only concise extras that fit the request."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "There is no unnecessary background lesson, only a brief convention caveat before the core material."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no question to the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "All directly requested essentials, including the definition and major tested properties, are stated explicitly."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The formulas and properties are consistent with the stated angular-frequency convention and contain no substantive mathematical errors."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It is organized around quickly usable review points and highlights common exam traps, leaving the student able to study from it immediately."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It gives the forward definition plus linearity, time shift, differentiation, and convolution-as-multiplication in immediately usable form."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It is a scannable bullet-based review sheet without digressions, history, or derivations."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The reply avoids a full lecture, history, motivation, and complete derivations."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The added pairs and big ideas are still high-yield Fourier essentials rather than off-request new material."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:33:40+00:00"
+  },
+  "show-convolution-worked": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately gives the requested step-by-step convolution computation."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The detail level matches a step-by-step show-me request without an unnecessary lecture."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It only defines the two signals and the convolution integral before proceeding to the computation."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no questions directed at the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The final piecewise result is fully stated rather than left as an exercise."
+        },
+        "correctness": {
+          "score": 1,
+          "note": "The final answer and case integrals are correct, but the Step 1 lower limit max(0, t) is wrong for the stated x(\u03c4)h(t\u2212\u03c4) form and should be 0."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It organizes the computation around support overlap, gives continuity/decay checks, and provides a transferable takeaway."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "The reply explicitly gives 0 for t<0, 1\u2212e^{-t} for 0\u2264t\u22641, and e^{-t}(e\u22121) for t>1, and because the value at t=1 is equal, the full result is covered."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It states the convolution integral, identifies where the integrand is nonzero, and then explicitly evaluates the two definite integrals."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The complete final result is written out in the Step 3 piecewise expression."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The reply is a worked explanation and does not turn into a quiz or ask the student to answer questions."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:34:02+00:00"
+  },
+  "show-what-is-a-derivative": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply opens by directly answering that a derivative is the instantaneous rate of change and the slope of the tangent line."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The amount of explanation and worked example fits a 'show' response to a broad conceptual question rather than being padded."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It proceeds straight to the intuitive meaning and definition without introducing unnecessary prerequisite material."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no questions to the student, only explanations."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The full limit definition, worked computation, and practical meaning are all provided directly."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The limit definition, algebra for the x^2 example, and the resulting derivative are all mathematically correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It connects the intuition, formal definition, example, and practical interpretation into a coherent picture the student can build on."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "The reply gives the intuitive meaning, the limit definition, and a structured worked example, so it is a direct and complete explanation."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It closes with 'The idea to carry forward: a derivative is a limit of average rates of change,' which is the requested short summary."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The reply does not pose quiz questions or turn the explanation into a test for the student."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The definition is explicitly provided as f'(x) = lim_{h to 0} (f(x+h)-f(x))/h, so nothing is withheld."
+        }
+      ]
+    },
+    "generated_at": "2026-09-07T00:34:12+00:00"
+  }
+}

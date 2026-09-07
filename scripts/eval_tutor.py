@@ -52,14 +52,17 @@ Usage:
 
 import argparse
 import asyncio
+import hashlib
 import json
+import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -328,7 +331,7 @@ async def _run_one_class_chat(
     that calls `cas_evaluate` while answering "Explain convolution" is mid-conversation,
     not failed: the loop feeds the result back and keeps going, and the case is graded on
     the answer the loop ends with. The calls it made ride along as metadata (`tool_calls`,
-    `rounds`), and the loop's own stop reason is recorded on every non-terminal ending.
+    `rounds`), and the loop's own stop reason is recorded on every ending.
 
     Only a loop that never reaches a usable terminal answer fails truthfully - as
     `incomplete`, with the stop reason (depth, timeout, context overflow, output limit,
@@ -348,6 +351,11 @@ async def _run_one_class_chat(
             "tool_calls": [],
             "rounds": 1,
             "toolless": True,
+            "stopped": "completion_returned; provider finish reason not exposed",
+            "generation_parameters": {
+                "temperature": "server_default",
+                "max_tokens": "server_default",
+            },
         }
     # Count model calls (rounds) through the loop's own request seam: the loop reports its
     # tool calls via `on_call`, but rounds are model turns, so the counter wraps exactly
@@ -369,7 +377,7 @@ async def _run_one_class_chat(
             registry=dict(assembly.registry),
             context_budget=assembly.context_budget,
             # The loop reports each executed call (name, ok, bounded result) as evidence.
-            on_call=lambda call: tool_calls.append({"name": call.name, "ok": call.ok}),
+            on_call=lambda call: tool_calls.append(asdict(call)),
         )
     finally:
         llm_tools.complete_with_tools = original_with_tools
@@ -377,6 +385,18 @@ async def _run_one_class_chat(
         "tool_calls": tool_calls,
         "rounds": rounds["model_calls"],
         "toolless": False,
+        "stopped": result.stopped,
+        "generation_parameters": {
+            "temperature": llm_tools.DETERMINISTIC_TEMPERATURE,
+            "max_tokens": assembly.context_budget.generation_reserve
+            if assembly.context_budget
+            else None,
+            "max_depth": llm_tools.MAX_DEPTH,
+            "timeout_seconds": llm_tools.TIMEOUT_SECONDS,
+        },
+        "observed_tools_supported": True
+        if tool_calls
+        else (False if result.stopped == llm_tools.NO_TOOL_SUPPORT else None),
     }
     if result.complete:
         answer = result.content.strip()
@@ -393,7 +413,16 @@ async def _run_one_class_chat(
         answer = await client.complete(
             endpoint, api_key, model, [dict(message) for message in toolless.messages]
         )
-        record.update(toolless=True, rounds=rounds["model_calls"] + 1)
+        record.update(
+            toolless=True,
+            rounds=rounds["model_calls"] + 1,
+            fallback_reason=result.stopped,
+            stopped="completion_returned; provider finish reason not exposed",
+            fallback_generation_parameters={
+                "temperature": "server_default",
+                "max_tokens": "server_default",
+            },
+        )
         record.update(status="ok" if answer.strip() else "error", response=answer)
         return record
     # The loop never reached a usable terminal answer: record exactly why, truthfully.
@@ -628,6 +657,71 @@ def _locality(endpoint: str) -> str:
     return "local" if is_local_endpoint(endpoint) else "remote"
 
 
+def _safe_evidence(value: object, *secrets: str | None) -> object:
+    """Redact connection secrets and location-bearing text before retaining evidence."""
+    if isinstance(value, dict):
+        return {
+            str(key): "[redacted]"
+            if any(
+                token in str(key).lower() for token in ("api_key", "credential", "authorization")
+            )
+            else _safe_evidence(item, *secrets)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_evidence(item, *secrets) for item in value]
+    if isinstance(value, str):
+        for secret in sorted((item for item in secrets if item), key=len, reverse=True):
+            value = value.replace(secret, "[redacted]")
+        value = re.sub(r"https?://[^\s\"<>]+", "[redacted-url]", value)
+        return re.sub(r"/(?:Users|home|private|tmp|var)/[^\s\"<>]+", "[redacted-path]", value)
+    return value
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _provenance(corpus_path: Path, config: TutorConfig) -> dict[str, object]:
+    def git(*args: str) -> str:
+        return subprocess.check_output(  # noqa: S603 - fixed read-only git arguments
+            [shutil.which("git") or "/usr/bin/git", *args],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+
+    try:
+        app = {"sha": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
+    except (OSError, subprocess.CalledProcessError):
+        app = {"sha": None, "dirty": None}
+    return {
+        "evidence_version": 2,
+        "app": app,
+        "hashes": {
+            "corpus": _sha256(corpus_path.read_bytes()),
+            "rubric": _sha256(_GRADER_PROMPT.encode()),
+            "prompts": _sha256((ROOT / "backend/llm/prompts.py").read_bytes()),
+            "agent_prompt_source": _sha256(
+                (ROOT / "backend/api/routes_agent_chat.py").read_bytes()
+            ),
+            "harness": _sha256(Path(__file__).read_bytes()),
+        },
+        "model": config.model,
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": config.context_window,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": _locality(config.endpoint_url),
+        "capabilities": {"stored_tools_supported": config.tools_supported},
+        "review": {
+            "deterministic": "integrity checks only",
+            "model_judge": "separate grade stage",
+            "independent_agent": "not_run",
+            "human": "not_run",
+        },
+    }
+
+
 async def _run_one(
     endpoint: str,
     api_key: str | None,
@@ -778,8 +872,14 @@ def _run_class_chat_cases(
                 )
             )
         except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
-            print(f"{case.id}: run failed: {exc}")
-            cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
+            print(f"{case.id}: run failed: {type(exc).__name__}")
+            cases_run[case.id] = {
+                "status": "error",
+                "error": type(exc).__name__,
+                "stopped": "exception",
+                "duration_seconds": round(time.monotonic() - started, 2),
+                "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            }
             continue
         # Wall-clock time from planning through the endpoint's terminal answer - the
         # latency the non-streaming surface makes the student wait for (docs/phase-4-agent.md,
@@ -789,10 +889,15 @@ def _run_class_chat_cases(
             generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
             duration_seconds=duration_seconds,
             system_prompt_tokens=estimate_tokens(str(assembly.messages[0].get("content") or "")),
+            assembled_prompt_sha256=_sha256(json.dumps(assembly.messages, sort_keys=True).encode()),
+            assembled_system_prompt_sha256=_sha256(
+                str(assembly.messages[0].get("content") or "").encode()
+            ),
             tool_schema_tokens=llm_tools.schema_tokens(list(assembly.tools)),
             user=case.user,
             mode=case.mode,
         )
+        record = _safe_evidence(record, config.endpoint_url, config.api_key)
         cases_run[case.id] = record
         tool_names = [str(call["name"]) for call in record["tool_calls"]]
         if record["status"] == "incomplete":
@@ -818,6 +923,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     header, cases = load_corpus(corpus_path)
     config = _endpoint_config(Path(args.source_db).resolve())
     selected = _selected(cases, args.case)
+    provenance = _provenance(corpus_path, config)
+    provenance["surface"] = args.surface
+    provenance["synthetic_environment"] = args.class_id is None and args.session_id is None
 
     surface = args.surface
     conn = None
@@ -862,6 +970,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     runs = workspace.read("runs") if workspace.report("runs").exists() else {}
     cases_run = runs.get("cases")
     cases_run = cases_run if isinstance(cases_run, dict) else {}
+    previous_records = dict(cases_run)
 
     try:
         if surface == "class_chat":
@@ -877,23 +986,41 @@ def cmd_run(args: argparse.Namespace) -> int:
                 )
         else:
             for case in selected:
+                started = time.monotonic()
                 messages = case_messages(case)
                 try:
                     reply, system_tokens = asyncio.run(
                         _run_one(config.endpoint_url, config.api_key, config.model, case, messages)
                     )
                 except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
-                    print(f"{case.id}: run failed: {exc}")
-                    cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
+                    print(f"{case.id}: run failed: {type(exc).__name__}")
+                    cases_run[case.id] = {
+                        "status": "error",
+                        "error": type(exc).__name__,
+                        "stopped": "exception",
+                        "duration_seconds": round(time.monotonic() - started, 2),
+                        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                    }
                     continue
                 if not reply.strip():
                     print(f"{case.id}: empty reply")
-                    cases_run[case.id] = {"status": "error", "error": "empty reply"}
+                    cases_run[case.id] = {
+                        "status": "error",
+                        "error": "empty reply",
+                        "stopped": "empty_reply",
+                        "duration_seconds": round(time.monotonic() - started, 2),
+                    }
                     continue
                 cases_run[case.id] = {
                     "status": "ok",
                     "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
                     "response": reply,
+                    "stopped": "stream_ended; provider finish reason not exposed",
+                    "duration_seconds": round(time.monotonic() - started, 2),
+                    "generation_parameters": {
+                        "temperature": "server_default",
+                        "max_tokens": "server_default",
+                    },
                     "system_prompt_tokens": system_tokens,
                     "user": case.user,
                     "mode": case.mode,
@@ -903,7 +1030,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         # One terminal write, guaranteed: ok, empty, and failed cases all land in
         # runs.json, so a run in which every case failed still leaves a record
         # `grade` can consume, and an interrupted run keeps the cases it finished.
-        workspace.write("runs", {**runs, "cases": cases_run})
+        for case in selected:
+            if case.id in cases_run and cases_run[case.id] is not previous_records.get(case.id):
+                cases_run[case.id]["provenance"] = provenance
+        workspace.write(
+            "runs",
+            _safe_evidence({**runs, "cases": cases_run}, config.endpoint_url, config.api_key),
+        )
         if conn is not None:
             conn.close()
         # The default eval database is disposable: it held only audit/proposal rows from
@@ -913,7 +1046,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     meta: dict[str, object] = {
         "surface": surface,
-        "corpus": str(corpus_path),
+        "corpus": corpus_path.name,
+        **provenance,
         "corpus_version": header["corpus_version"],
         "prompt_contract_version": header["prompt_contract_version"],
         "expected_contract_version": TUTOR_PROMPT_CONTRACT_VERSION,
@@ -925,8 +1059,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         meta["class_id"] = class_id
         meta["session_id"] = session_id
         if eval_env:
-            meta["environment"] = eval_env
-    workspace.write("meta", meta)
+            meta["environment"] = {
+                key: value for key, value in eval_env.items() if key != "eval_db"
+            }
+    workspace.write("meta", _safe_evidence(meta, config.endpoint_url, config.api_key))
     if header["prompt_contract_version"] != TUTOR_PROMPT_CONTRACT_VERSION:
         print(
             f"warning: corpus is written against contract "
@@ -1040,7 +1176,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
                     _grade_one(judge_endpoint, judge_api_key, judge_model, case, reply)
                 )
             except Exception as exc:  # noqa: BLE001
-                grading = {"grader_failed": str(exc)[:300]}
+                grading = {"grader_failed": type(exc).__name__}
             verdict = verdict_for(case, grading) if "unreadable" not in grading else "fail"
             grades[case_id] = {
                 "verdict": verdict,
@@ -1056,6 +1192,8 @@ def cmd_grade(args: argparse.Namespace) -> int:
     workspace.write(
         "grade_meta",
         {
+            "corpus_sha256": _sha256(Path(args.corpus).read_bytes()),
+            "rubric_sha256": _sha256(_GRADER_PROMPT.encode()),
             "corpus_version": header["corpus_version"],
             "prompt_contract_version": header["prompt_contract_version"],
             "tutor": {

@@ -1,0 +1,345 @@
+{
+  "cases": {
+    "start-quadratic": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Divide both sides by 3:\n\n$$3x^2 - 12x = 15 \\quad\\Rightarrow\\quad x^2 - 4x = 5$$\n\nThat's the move that makes everything easier \u2014 the leading coefficient 3 is just in the way, and shrinking the numbers makes the equation factorable.\n\nFrom there, move the 5 to the left side:\n\n$$x^2 - 4x - 5 = 0$$\n\nNow it's in the form you want: you just need two numbers that multiply to $-5$ and add to $-4$. Try that next.",
+      "generated_at": "2026-09-07T00:47:18+00:00",
+      "duration_seconds": 6.01,
+      "system_prompt_tokens": 1218,
+      "assembled_prompt_sha256": "cf79ebfdb4997c173fa0122194fd926c8096b3c027288e7bf7239460fb207e31",
+      "tool_schema_tokens": 1266,
+      "user": "I only need help starting, please.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a8da42beaf04389a6bbd8c7d8ff88a6d62673de46606c4559c2cf6d38369b45b",
+          "agent_prompt_source": "f1ac552c43ebc68076b66e967a929566d774f0d726e16607ae69f6a3c1f4d715",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "attempt-distribution": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Your distribution step is where it breaks. When you multiply $2(x+3)$, the 2 has to go to **both** terms inside the parentheses:\n\n$$2(x+3) = 2\\cdot x + 2\\cdot 3 = 2x + 6$$\n\nYou wrote $2x + 3$, which means the 2 only landed on the $x$ and skipped the $3$. Everything after that was arithmetic consistent with that wrong line, so the error carried all the way through.\n\nThe corrected chain:\n\n$$2x + 6 = 10$$\n$$2x = 4$$\n$$x = 2$$\n\nQuick check: $2(2+3) = 2\\cdot 5 = 10$ \u2713",
+      "generated_at": "2026-09-07T00:47:21+00:00",
+      "duration_seconds": 3.44,
+      "system_prompt_tokens": 1218,
+      "assembled_prompt_sha256": "5ef15e99744c37240ec587dd7d6a1cec6cce86f39a005992432ed18c8cd0e6db",
+      "tool_schema_tokens": 1266,
+      "user": "I wrote 2(x+3)=10, then 2x+3=10, then x=3.5. Where did my work go wrong?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a8da42beaf04389a6bbd8c7d8ff88a6d62673de46606c4559c2cf6d38369b45b",
+          "agent_prompt_source": "f1ac552c43ebc68076b66e967a929566d774f0d726e16607ae69f6a3c1f4d715",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "simpler-osmosis": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Osmosis is water moving on its own through a membrane that only water can pass through.\n\nPicture a membrane that blocks sugar but lets water through. If one side has sugar water and the other side has plain water, water will drift from the plain side toward the sugary side. It keeps going until the two sides are equally concentrated.\n\nThe key idea: water moves to the side that has more stuff dissolved in it, and it does this without any energy input.",
+      "generated_at": "2026-09-07T00:47:22+00:00",
+      "duration_seconds": 1.41,
+      "system_prompt_tokens": 1218,
+      "assembled_prompt_sha256": "182ef484b7c920b7530dea0bc9deac69edbfac59a63af62448b99d9bba9e172d",
+      "tool_schema_tokens": 1266,
+      "user": "That is too abstract. Explain it in plain words.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a8da42beaf04389a6bbd8c7d8ff88a6d62673de46606c4559c2cf6d38369b45b",
+          "agent_prompt_source": "f1ac552c43ebc68076b66e967a929566d774f0d726e16607ae69f6a3c1f4d715",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "direct-pvalue": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(10 + 1) / 2**10"
+          },
+          "raw_arguments": "{\"expression\": \"(10 + 1) / 2**10\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "11/1024"
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "A p-value answers one question: **if the null hypothesis were true, how likely would it be to see data this extreme (or more extreme) than what you actually got?** It's a measure of how surprising your result would be under the \"nothing is going on\" assumption. A small p-value means your data would be rare if the null were true, so it counts as evidence against the null. It is *not* the probability that the null is true, and it's not the probability your result is a fluke.\n\n**Small example \u2014 a coin.**\n\nSuppose someone claims a coin is fair, so each flip has a 50/50 chance of heads. You flip it 10 times and get 9 heads. That looks suspicious, but how suspicious?\n\nThe p-value asks: if the coin really were fair, what's the chance of getting 9 *or more* heads in 10 flips?\n\n- Getting exactly 9 heads: $\\binom{10}{9}(0.5)^{10} = \\frac{10}{1024}$\n- Getting exactly 10 heads: $\\binom{10}{10}(0.5)^{10} = \\frac{1}{1024}$\n\nAdd them:\n\n$$p = \\frac{10}{1024} + \\frac{1}{1024} = \\frac{11}{1024} \\approx 0.011$$\n\nSo if the coin were fair, there's only about a 1.1% chance of seeing 9 or more heads in 10 flips. That's small, so the result is surprising under the \"fair coin\" story \u2014 evidence that the coin may not be fair.\n\n**How to read it:** a common threshold is $p < 0.05$. Below it, the data would be quite unlikely if the null were true, so we say the result is \"statistically significant\" and lean toward rejecting the null. Above it, the data are unremarkable under the null, so we don't have strong evidence to reject it.\n\nOne caution: a small p-value means the data are unlikely *if the null is true* \u2014 it doesn't prove the null is false, and it says nothing about how big or important the effect is.",
+      "generated_at": "2026-09-07T00:47:34+00:00",
+      "duration_seconds": 11.04,
+      "system_prompt_tokens": 1218,
+      "assembled_prompt_sha256": "8c074472755ec4cd0c3d9b9abdad54a9d1bf272070de5ebd1931ea62e9da4c1b",
+      "tool_schema_tokens": 1266,
+      "user": "Explain a p-value with a small example. Please do not ask me questions or offer practice.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a8da42beaf04389a6bbd8c7d8ff88a6d62673de46606c4559c2cf6d38369b45b",
+          "agent_prompt_source": "f1ac552c43ebc68076b66e967a929566d774f0d726e16607ae69f6a3c1f4d715",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "guide-to-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "5*(6-2)",
+            "compare_to": "20"
+          },
+          "raw_arguments": "{\"expression\": \"5*(6-2)\", \"compare_to\": \"20\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "**Solve** $5(x-2)=20$\n\n**Step 1 \u2014 Divide both sides by 5:**\n$$x-2 = \\frac{20}{5} = 4$$\n\n**Step 2 \u2014 Add 2 to both sides:**\n$$x = 4 + 2 = 6$$\n\n**Check:** Substitute $x=6$ back into the original equation:\n$$5(6-2) = 5 \\cdot 4 = 20 \\checkmark$$\n\nBoth sides match, so $x = 6$ is correct.",
+      "generated_at": "2026-09-07T00:47:37+00:00",
+      "duration_seconds": 3.15,
+      "system_prompt_tokens": 1218,
+      "assembled_prompt_sha256": "cd59cb657133f0c17ae299e324366a8be97481360f0d5eb9071538250551ece0",
+      "tool_schema_tokens": 1266,
+      "user": "Now give me the full worked solution, including a check.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a8da42beaf04389a6bbd8c7d8ff88a6d62673de46606c4559c2cf6d38369b45b",
+          "agent_prompt_source": "f1ac552c43ebc68076b66e967a929566d774f0d726e16607ae69f6a3c1f4d715",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-to-one-step": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start by finding how much salt is actually in the 60 mL, because that's the part that doesn't change when you add water:\n\n$$0.20 \\times 60 \\text{ mL} = 12 \\text{ mL of salt}$$\n\nThat 12 mL is your bridge between the old and new solutions. The water only changes the total volume:\n\n$$60 \\text{ mL} + 40 \\text{ mL} = 100 \\text{ mL}$$\n\nSo your setup for the new concentration is just:\n\n$$\\text{new concentration} = \\frac{12 \\text{ mL salt}}{100 \\text{ mL total}}$$\n\nFrom there it's one division \u2014 try finishing it and see if the answer feels reasonable (it should be less than 20%, since you made the solution more dilute).",
+      "generated_at": "2026-09-07T00:47:44+00:00",
+      "duration_seconds": 7.41,
+      "system_prompt_tokens": 1218,
+      "assembled_prompt_sha256": "29cbeb077d0487794c4b1f823a62be06a6e03a652bcc1678d12e3f74e5d316dd",
+      "tool_schema_tokens": 1266,
+      "user": "For this next one, just help me set it up: a 60 mL solution is 20% salt, then 40 mL water is added. How do I start finding the new concentration?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a8da42beaf04389a6bbd8c7d8ff88a6d62673de46606c4559c2cf6d38369b45b",
+          "agent_prompt_source": "f1ac552c43ebc68076b66e967a929566d774f0d726e16607ae69f6a3c1f4d715",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

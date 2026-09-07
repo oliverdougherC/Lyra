@@ -45,13 +45,18 @@ Request shapes the prompt names explicitly, and the behavior they map to:
 |Request|Behavior|
 |---|---|
 |"Explain X" / "What is X?"|Explain it; mental model first (the idea in a sentence or two), then the formalism or an example. Never make the student derive framing the tutor can simply explain.|
-|An attempt is supplied|Read and diagnose it first - what is right, what is wrong, why - before teaching anything new.|
+|An attempt is supplied|Acknowledge valid work, locate the first invalid transition, explain exactly what changed or was lost, and correct it within the student’s method. Do not blame an operation that is valid when applied correctly.|
 |"Just give me the answer"|Give it, with the briefest justification that makes it trustworthy.|
 
-Everything else - "why is this step valid?", "I'm stuck", "check my answer", "explain that
-more simply", "don't ask me questions", ambiguous requests - is left to the stated
-principles plus judgment, deliberately. A small model given the principle and a few
-patterns generalizes; a longer rulebook recreates the same failure as a different one.
+The prompt also names first-step help, simpler explanations, and explicit requests to omit
+questions. First-step help stops at a useful setup; simpler explanations reduce abstraction.
+Other requests are handled using the same scope and teaching principles. The class-chat tool
+layer limits verification claims to the expressions and conditions actually checked: a
+successful calculation does not certify its inputs, assumptions, bounds, or surrounding prose.
+Only the terminal tool-loop reply is saved: its explanation must stand alone even when
+the model wrote a draft before a tool call. Worked derivations must check intermediate
+equalities and signs, not merely produce a correct final expression. Simpler explanations
+must preserve necessary conditions. These instructions are evaluated behavior, not guarantees.
 
 ### Show
 
@@ -106,7 +111,7 @@ Prompt *behavior* is not proved by exact-string tests; it is held to a versioned
 contract:
 
 - **`scripts/eval_corpora/tutor_semantic.json`** - the corpus. `corpus_version`
-  (`1.1.0`) and `prompt_contract_version` (must equal
+  (`1.2.0`) and `prompt_contract_version` (must equal
   `TUTOR_PROMPT_CONTRACT_VERSION`). Thirteen cases covering at minimum the request shapes
   PLA-401 names: explain convolution, what is a derivative, why can they cancel these
   terms, I have no idea how to start, here's my attempt, is my answer correct, just tell me
@@ -160,3 +165,10 @@ Inventory of the surfaces this pass examined, and the findings:
 |Writer|`prompts.py` writer chat + drafting pipeline|One assistant, no modes by design; no Socratic tutoring. Unchanged (one stale doc reference fixed).|
 |Agent + tools|`routes_agent_chat.py`, `core/agent_tools.py`|Not a tutor surface (the tutor conversation has no tools). Tool-description/semantic-event wording is inventoried here for the record; changes belong to the agent workstream.|
 |UI wording about the tutor|`frontend/src/components/chat/chat-pane.tsx`|The Guide/Show hints described v1 ("asks leading questions and holds back the answer"). **Updated** to describe v2.|
+
+## September 6 beta quality work
+
+[Learning beta evidence](learning-beta-evidence/README.md) retains current-main baselines,
+candidate repeats, held-out transfer cases and separate independent-agent review. Corpus
+1.2.0 corrects an inaccurate factoring criterion; it is used for both baseline and candidate
+grading. Model self-judging is supporting evidence and cannot waive a critical semantic failure.

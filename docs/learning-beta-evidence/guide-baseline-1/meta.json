@@ -1,0 +1,17 @@
+{
+  "surface": "class_chat",
+  "corpus": "[redacted-path]",
+  "corpus_version": "1.1.0",
+  "prompt_contract_version": "2",
+  "expected_contract_version": "2",
+  "model": "Qwen3.8-27B",
+  "context_window": 262144,
+  "endpoint_locality": "remote",
+  "class_id": 1,
+  "session_id": 1,
+  "environment": {
+    "eval_db": "[redacted-path]",
+    "deterministic": true,
+    "temp": true
+  }
+}

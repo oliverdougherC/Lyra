@@ -1,0 +1,1053 @@
+{
+  "corpus_version": "study-beta-1",
+  "corpus_sha256": "aeba5901143e1f2f254263f9e46a3c68c067eda363fa93711c8b2a524d4e4e4b",
+  "rubric_version": "study-critical-1",
+  "critical_acceptance": [
+    "Every published answer is supported by selected material or an explicit valid derivation",
+    "Questions include enough context to answer independently",
+    "No ambiguous correct options or contradictory answer keys",
+    "Cards have useful self-contained answers and do not merely restate their fronts",
+    "No repeated knowledge probes masquerading as distinct practice",
+    "No excluded or wrong-class source provenance",
+    "Insufficient evidence may fail honestly; fabricated Ready content fails"
+  ],
+  "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+  "study_sha256": "2326f09017c82aa51b782783c526754faaca711bd53015718ca6296a1645a1e9",
+  "prompts_sha256": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+  "study_prompt_sha256": "431ce2166b94726ca4f6748432537c6b67eed4807bc258588bf17528480aa45e",
+  "app_version": "0.2.0-beta.0",
+  "configuration": {
+    "model": "Qwen3.8-27B",
+    "locality": "remote",
+    "tools_supported_stored": null,
+    "context_window": 262144,
+    "max_tokens": 65536,
+    "temperature": 0.0,
+    "concurrency": 1,
+    "request_timeout_seconds": {
+      "read": 600.0,
+      "connect": 10.0
+    },
+    "embedding": "real nomic local helper",
+    "schema_capability": "production fallback unchanged; exact accepted format unobserved"
+  },
+  "review": {
+    "deterministic": "per-case structural results only",
+    "model_self_judging": "not run",
+    "independent_agent": "pending",
+    "human": "not run"
+  },
+  "results": [
+    {
+      "case": "circuits",
+      "split": "development",
+      "kind": "deck",
+      "repeat": 1,
+      "state": "ready",
+      "latency_seconds": 68.274,
+      "terminal_content": [
+        {
+          "content": {
+            "front": "What is the Ohm's law relationship for an ideal DC resistive circuit, including the units of $V$, $I$, and $R$?",
+            "back": "Ohm's law is $V = IR$, where $V$ is voltage in volts, $I$ is current in amperes, and $R$ is resistance in ohms.",
+            "topic": "Ohm's law"
+          },
+          "provenance": [
+            {
+              "id": 1,
+              "part_id": 1,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Ohm's law",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 2,
+              "part_id": 1,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Ohm's law",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "For two series resistors of $2\\ \\Omega$ and $4\\ \\Omega$ connected to a $12\\ \\text{V}$ source, what is the current through the circuit?",
+            "back": "The equivalent resistance is $R_{eq} = 2 + 4 = 6\\ \\Omega$, so the current is $I = V/R_{eq} = 12/6 = 2\\ \\text{A}$.",
+            "topic": "Ohm's law"
+          },
+          "provenance": [
+            {
+              "id": 3,
+              "part_id": 2,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Ohm's law",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 4,
+              "part_id": 2,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Ohm's law",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "In a series resistor circuit, what is true about the current through each resistor, and how is the equivalent resistance calculated?",
+            "back": "The same current flows through all resistors in series. The equivalent resistance is the sum of the individual resistances: $R_{eq}=R_1+R_2+\\cdots$.",
+            "topic": "Series resistor circuits"
+          },
+          "provenance": [
+            {
+              "id": 5,
+              "part_id": 3,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Series resistor circuits",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 6,
+              "part_id": 3,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Series resistor circuits",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "Two series resistors of $2\\ \\Omega$ and $4\\ \\Omega$ are connected to a $12\\ \\text{V}$ source. What are the equivalent resistance, current, and voltage drops across the resistors?",
+            "back": "$R_{eq}=2+4=6\\ \\Omega$. The current is $I=V/R_{eq}=12/6=2\\ \\text{A}$. The voltage drops are $V_1=IR_1=(2)(2)=4\\ \\text{V}$ and $V_2=IR_2=(2)(4)=8\\ \\text{V}$, which sum to the $12\\ \\text{V}$ source voltage.",
+            "topic": "Series resistor circuits"
+          },
+          "provenance": [
+            {
+              "id": 7,
+              "part_id": 4,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Series resistor circuits",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 8,
+              "part_id": 4,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Series resistor circuits",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "What is the relationship used to find the equivalent resistance of resistors connected in parallel?",
+            "back": "The reciprocal of the equivalent resistance equals the sum of the reciprocals of the branch resistances: $1/R_{eq} = 1/R_1 + 1/R_2 + \\cdots$.",
+            "topic": "Parallel resistor circuits"
+          },
+          "provenance": [
+            {
+              "id": 9,
+              "part_id": 5,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Parallel resistor circuits",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 10,
+              "part_id": 5,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Parallel resistor circuits",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "What must be stated before comparing power dissipation in two resistors?",
+            "back": "You must state which quantity is fixed. At fixed voltage, a smaller resistance dissipates more power; at fixed current, a larger resistance dissipates more power.",
+            "topic": "Parallel resistor circuits"
+          },
+          "provenance": [
+            {
+              "id": 11,
+              "part_id": 6,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Parallel resistor circuits",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 12,
+              "part_id": 6,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Parallel resistor circuits",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "For an ideal resistor, what are the three equivalent expressions for power dissipation in terms of voltage, current, and resistance, and what are the units?",
+            "back": "The power dissipated by an ideal resistor is $P = VI = I^2 R = V^2/R$. The unit of power is the watt, $\\text{W}$.",
+            "topic": "Resistor power dissipation"
+          },
+          "provenance": [
+            {
+              "id": 13,
+              "part_id": 7,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Resistor power dissipation",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 14,
+              "part_id": 7,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Resistor power dissipation",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "When comparing the power dissipated by two resistors, what must you state first, and how does the comparison differ when voltage is fixed versus when current is fixed?",
+            "back": "You must state which quantity is fixed before comparing power. At fixed voltage, a smaller resistance dissipates more power because $P = V^2/R$. At fixed current, a larger resistance dissipates more power because $P = I^2 R$.",
+            "topic": "Resistor power dissipation"
+          },
+          "provenance": [
+            {
+              "id": 15,
+              "part_id": 8,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Resistor power dissipation",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 16,
+              "part_id": 8,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Resistor power dissipation",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "How is an ideal ammeter connected in a circuit?",
+            "back": "An ideal ammeter is inserted in series with the branch or element whose current $I$ is to be measured.",
+            "topic": "Ideal meter connections"
+          },
+          "provenance": [
+            {
+              "id": 17,
+              "part_id": 9,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Ideal meter connections",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 18,
+              "part_id": 9,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Ideal meter connections",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "How is an ideal voltmeter connected in a circuit?",
+            "back": "An ideal voltmeter is connected in parallel across the element or two points whose voltage $V$ is to be measured.",
+            "topic": "Ideal meter connections"
+          },
+          "provenance": [
+            {
+              "id": 19,
+              "part_id": 10,
+              "chunk_id": 2,
+              "document_id": 2,
+              "page_number": 2,
+              "label": "Ideal meter connections",
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            },
+            {
+              "id": 20,
+              "part_id": 10,
+              "chunk_id": 1,
+              "document_id": 1,
+              "page_number": 1,
+              "label": "Ideal meter connections",
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are mapping course material so a student can study it. Read the material and name\nthe 4 to 8 topics that together cover what it teaches. A topic is a short noun phrase of\ntwo to four words, specific enough to study (\"eigenvalue decomposition\", not \"math\").\nPrefer the course's own terminology. Return JSON only."
+            },
+            {
+              "role": "user",
+              "content": "In an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage.\n\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "study_topics",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"topics\": [\n    \"Ohm's law\",\n    \"Series resistor circuits\",\n    \"Parallel resistor circuits\",\n    \"Resistor power dissipation\",\n    \"Ideal meter connections\"\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 373,
+            "total_tokens": 830,
+            "completion_tokens": 457,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 405
+            }
+          },
+          "latency_seconds": 3.272
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"Ohm's law\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Parallel and power.txt, page 2\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel.\n\n[2] Circuit foundations.txt, page 1\nIn an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"What is the Ohm's law relationship for an ideal DC resistive circuit, including the units of $V$, $I$, and $R$?\",\n      \"back\": \"Ohm's law is $V = IR$, where $V$ is voltage in volts, $I$ is current in amperes, and $R$ is resistance in ohms.\"\n    ,\n    \"topic\": \"Ohm's law\"\n    },\n    {\n      \"front\": \"For two series resistors of $2\\\\ \\\\Omega$ and $4\\\\ \\\\Omega$ connected to a $12\\\\ \\\\text{V}$ source, what is the current through the circuit?\",\n      \"back\": \"The equivalent resistance is $R_{eq} = 2 + 4 = 6\\\\ \\\\Omega$, so the current is $I = V/R_{eq} = 12/6 = 2\\\\ \\\\text{A}$.\"\n    ,\n    \"topic\": \"Ohm's law\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 457,
+            "total_tokens": 1699,
+            "completion_tokens": 1242,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1003
+            }
+          },
+          "latency_seconds": 9.912
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"Series resistor circuits\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Circuit foundations.txt, page 1\nIn an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage.\n\n[2] Parallel and power.txt, page 2\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"In a series resistor circuit, what is true about the current through each resistor, and how is the equivalent resistance calculated?\",\n      \"back\": \"The same current flows through all resistors in series. The equivalent resistance is the sum of the individual resistances: $R_{eq}=R_1+R_2+\\\\cdots$.\"\n    ,\n      \"topic\": \"Series resistor circuits\"\n    },\n    {\n      \"front\": \"Two series resistors of $2\\\\ \\\\Omega$ and $4\\\\ \\\\Omega$ are connected to a $12\\\\ \\\\text{V}$ source. What are the equivalent resistance, current, and voltage drops across the resistors?\",\n      \"back\": \"$R_{eq}=2+4=6\\\\ \\\\Omega$. The current is $I=V/R_{eq}=12/6=2\\\\ \\\\text{A}$. The voltage drops are $V_1=IR_1=(2)(2)=4\\\\ \\\\text{V}$ and $V_2=IR_2=(2)(4)=8\\\\ \\\\text{V}$, which sum to the $12\\\\ \\\\text{V}$ source voltage.\"\n    ,\n      \"topic\": \"Series resistor circuits\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 456,
+            "total_tokens": 1228,
+            "completion_tokens": 772,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 483
+            }
+          },
+          "latency_seconds": 7.634
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"Parallel resistor circuits\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Parallel and power.txt, page 2\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel.\n\n[2] Circuit foundations.txt, page 1\nIn an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"What is the relationship used to find the equivalent resistance of resistors connected in parallel?\",\n      \"back\": \"The reciprocal of the equivalent resistance equals the sum of the reciprocals of the branch resistances: $1/R_{eq} = 1/R_1 + 1/R_2 + \\\\cdots$.\"\n    ,\n      \"topic\": \"Parallel resistor circuits\"\n    },\n    {\n      \"front\": \"What must be stated before comparing power dissipation in two resistors?\",\n      \"back\": \"You must state which quantity is fixed. At fixed voltage, a smaller resistance dissipates more power; at fixed current, a larger resistance dissipates more power.\"\n    ,\n      \"topic\": \"Parallel resistor circuits\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 456,
+            "total_tokens": 2375,
+            "completion_tokens": 1919,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1736
+            }
+          },
+          "latency_seconds": 17.599
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"Resistor power dissipation\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Parallel and power.txt, page 2\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel.\n\n[2] Circuit foundations.txt, page 1\nIn an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"For an ideal resistor, what are the three equivalent expressions for power dissipation in terms of voltage, current, and resistance, and what are the units?\",\n      \"back\": \"The power dissipated by an ideal resistor is $P = VI = I^2 R = V^2/R$. The unit of power is the watt, $\\\\text{W}$.\"\n    ,\n      \"topic\": \"Resistor power dissipation\"\n    },\n    {\n      \"front\": \"When comparing the power dissipated by two resistors, what must you state first, and how does the comparison differ when voltage is fixed versus when current is fixed?\",\n      \"back\": \"You must state which quantity is fixed before comparing power. At fixed voltage, a smaller resistance dissipates more power because $P = V^2/R$. At fixed current, a larger resistance dissipates more power because $P = I^2 R$.\"\n    ,\n      \"topic\": \"Resistor power dissipation\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 458,
+            "total_tokens": 1267,
+            "completion_tokens": 809,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 574
+            }
+          },
+          "latency_seconds": 7.266
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"Ideal meter connections\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Parallel and power.txt, page 2\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel.\n\n[2] Circuit foundations.txt, page 1\nIn an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"How is an ideal ammeter connected in a circuit?\",\n      \"back\": \"An ideal ammeter is inserted in series with the branch or element whose current $I$ is to be measured.\"\n    ,\n      \"topic\": \"Ideal meter connections\"\n    },\n    {\n      \"front\": \"How is an ideal voltmeter connected in a circuit?\",\n      \"back\": \"An ideal voltmeter is connected in parallel across the element or two points whose voltage $V$ is to be measured.\"\n    ,\n      \"topic\": \"Ideal meter connections\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 456,
+            "total_tokens": 999,
+            "completion_tokens": 543,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 396
+            }
+          },
+          "latency_seconds": 5.509
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "deterministic": {
+        "published_count": 10,
+        "duplicate_stems": 0,
+        "selected_provenance_only": true,
+        "semantic_correctness": "not established by structural checks"
+      },
+      "source_documents": [
+        {
+          "filename": "Circuit foundations.txt",
+          "page": 1,
+          "text": "In an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage."
+        },
+        {
+          "filename": "Parallel and power.txt",
+          "page": 2,
+          "text": "In parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel."
+        }
+      ],
+      "expected_concepts": [
+        "Ohm's law",
+        "series current and voltage",
+        "parallel branches",
+        "power and fixed-variable assumptions",
+        "measurement"
+      ]
+    },
+    {
+      "case": "thin-evidence",
+      "split": "development",
+      "kind": "deck",
+      "repeat": 1,
+      "state": "ready",
+      "latency_seconds": 59.764,
+      "terminal_content": [
+        {
+          "content": {
+            "front": "What day of the week is the synthetic seminar scheduled to meet?",
+            "back": "The synthetic seminar meets on Tuesdays.",
+            "topic": "synthetic seminar"
+          },
+          "provenance": [
+            {
+              "id": 21,
+              "part_id": 11,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "synthetic seminar",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "What is the surname of the instructor for the synthetic seminar?",
+            "back": "The instructor's surname is Rowan.",
+            "topic": "synthetic seminar"
+          },
+          "provenance": [
+            {
+              "id": 22,
+              "part_id": 12,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "synthetic seminar",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "On what day does the synthetic seminar meet?",
+            "back": "The synthetic seminar meets on Tuesdays.",
+            "topic": "Tuesday meetings"
+          },
+          "provenance": [
+            {
+              "id": 23,
+              "part_id": 13,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "Tuesday meetings",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "What is the instructor's surname for the synthetic seminar?",
+            "back": "The instructor's surname is Rowan.",
+            "topic": "Tuesday meetings"
+          },
+          "provenance": [
+            {
+              "id": 24,
+              "part_id": 14,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "Tuesday meetings",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "What day of the week does the synthetic seminar meet?",
+            "back": "The synthetic seminar meets on Tuesdays.",
+            "topic": "instructor surname"
+          },
+          "provenance": [
+            {
+              "id": 25,
+              "part_id": 15,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "instructor surname",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "What surname is given for the instructor in the administrative note?",
+            "back": "The instructor's surname is Rowan.",
+            "topic": "instructor surname"
+          },
+          "provenance": [
+            {
+              "id": 26,
+              "part_id": 16,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "instructor surname",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "According to the administrative note, what is not supplied for the synthetic seminar?",
+            "back": "No subject-matter content or worked examples are supplied.",
+            "topic": "unsupplied subject matter"
+          },
+          "provenance": [
+            {
+              "id": 27,
+              "part_id": 17,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "unsupplied subject matter",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "What does the administrative note state about subject-matter content and worked examples for the synthetic seminar?",
+            "back": "No subject-matter content or worked examples are supplied.",
+            "topic": "unsupplied subject matter"
+          },
+          "provenance": [
+            {
+              "id": 28,
+              "part_id": 18,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "unsupplied subject matter",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "According to the administrative note, what is supplied regarding worked examples in the synthetic seminar?",
+            "back": "No worked examples are supplied.",
+            "topic": "unsupplied worked examples"
+          },
+          "provenance": [
+            {
+              "id": 29,
+              "part_id": 19,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "unsupplied worked examples",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "front": "According to the administrative note, what is supplied regarding subject-matter content in the synthetic seminar?",
+            "back": "No subject-matter content is supplied.",
+            "topic": "unsupplied worked examples"
+          },
+          "provenance": [
+            {
+              "id": 30,
+              "part_id": 20,
+              "chunk_id": 4,
+              "document_id": 4,
+              "page_number": 1,
+              "label": "unsupplied worked examples",
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are mapping course material so a student can study it. Read the material and name\nthe 4 to 8 topics that together cover what it teaches. A topic is a short noun phrase of\ntwo to four words, specific enough to study (\"eigenvalue decomposition\", not \"math\").\nPrefer the course's own terminology. Return JSON only."
+            },
+            {
+              "role": "user",
+              "content": "The synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "study_topics",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"topics\": [\n    \"synthetic seminar\",\n    \"Tuesday meetings\",\n    \"instructor surname\",\n    \"unsupplied subject matter\",\n    \"unsupplied worked examples\"\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 153,
+            "total_tokens": 1842,
+            "completion_tokens": 1689,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1637
+            }
+          },
+          "latency_seconds": 12.713
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"synthetic seminar\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Administrative note.txt, page 1\nThe synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"What day of the week is the synthetic seminar scheduled to meet?\",\n      \"back\": \"The synthetic seminar meets on Tuesdays.\"\n    ,\n    \"topic\": \"synthetic seminar\"\n    },\n    {\n      \"front\": \"What is the surname of the instructor for the synthetic seminar?\",\n      \"back\": \"The instructor's surname is Rowan.\"\n    ,\n    \"topic\": \"synthetic seminar\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 224,
+            "total_tokens": 526,
+            "completion_tokens": 302,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 185
+            }
+          },
+          "latency_seconds": 2.255
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"Tuesday meetings\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Administrative note.txt, page 1\nThe synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"On what day does the synthetic seminar meet?\",\n      \"back\": \"The synthetic seminar meets on Tuesdays.\"\n    ,\n    \"topic\": \"Tuesday meetings\"\n    },\n    {\n      \"front\": \"What is the instructor's surname for the synthetic seminar?\",\n      \"back\": \"The instructor's surname is Rowan.\"\n    ,\n    \"topic\": \"Tuesday meetings\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 223,
+            "total_tokens": 485,
+            "completion_tokens": 262,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 152
+            }
+          },
+          "latency_seconds": 2.313
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"instructor surname\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Administrative note.txt, page 1\nThe synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"What day of the week does the synthetic seminar meet?\",\n      \"back\": \"The synthetic seminar meets on Tuesdays.\"\n    ,\n    \"topic\": \"instructor surname\"\n    },\n    {\n      \"front\": \"What is the instructor's surname for the synthetic seminar?\",\n      \"back\": \"The instructor's surname is Rowan.\"\n    ,\n      \"topic\": \"instructor surname\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 224,
+            "total_tokens": 505,
+            "completion_tokens": 281,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 167
+            }
+          },
+          "latency_seconds": 2.473
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"instructor surname\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content.\n\nThe previous attempt produced only 1 of 2 required distinct, usable cards. Write at least 1 new cards with fronts not repeated from the previous attempt. Every card must have a non-empty front and back grounded in the material above."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Administrative note.txt, page 1\nThe synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"What surname is given for the instructor in the administrative note?\",\n      \"back\": \"The instructor's surname is Rowan.\"\n    ,\n      \"topic\": \"instructor surname\"\n    },\n    {\n      \"front\": \"On which day does the synthetic seminar associated with instructor Rowan meet?\",\n      \"back\": \"The synthetic seminar meets on Tuesdays.\"\n    ,\n      \"topic\": \"instructor surname\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 273,
+            "total_tokens": 1459,
+            "completion_tokens": 1186,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1068
+            }
+          },
+          "latency_seconds": 10.42
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"unsupplied subject matter\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Administrative note.txt, page 1\nThe synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"According to the administrative note, what is not supplied for the synthetic seminar?\",\n      \"back\": \"No subject-matter content or worked examples are supplied.\"\n    ,\n    \"topic\": \"unsupplied subject matter\"\n    },\n    {\n      \"front\": \"What is the instructor's surname for the synthetic seminar?\",\n      \"back\": \"The instructor's surname is Rowan.\"\n    ,\n    \"topic\": \"unsupplied subject matter\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 226,
+            "total_tokens": 900,
+            "completion_tokens": 674,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 549
+            }
+          },
+          "latency_seconds": 5.885
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"unsupplied subject matter\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content.\n\nThe previous attempt produced only 1 of 2 required distinct, usable cards. Write at least 1 new cards with fronts not repeated from the previous attempt. Every card must have a non-empty front and back grounded in the material above."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Administrative note.txt, page 1\nThe synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"What does the administrative note state about subject-matter content and worked examples for the synthetic seminar?\",\n      \"back\": \"No subject-matter content or worked examples are supplied.\"\n    ,\n      \"topic\": \"unsupplied subject matter\"\n    },\n    {\n      \"front\": \"What is the instructor's surname according to the administrative note?\",\n      \"back\": \"The instructor's surname is Rowan.\",\n      \"topic\": \"unsupplied subject matter\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 275,
+            "total_tokens": 1612,
+            "completion_tokens": 1337,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1210
+            }
+          },
+          "latency_seconds": 12.694
+        },
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing flashcards for the topic \"unsupplied worked examples\", grounded in the course material\nbelow. Each card tests one atomic fact or skill: the front is a question or prompt that\nforces recall (never yes/no), the back is a complete, self-contained answer a student\ncould check themselves against. Use the notation the course material uses; write math in\nKaTeX ($...$ inline, $$...$$ display). Write 2 cards. Base every card on the\nmaterial provided; if the material does not support that many distinct cards, write\nfewer rather than inventing content."
+            },
+            {
+              "role": "user",
+              "content": "Retrieved context from the student's uploaded material:\n\n[1] Administrative note.txt, page 1\nThe synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "flashcards",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"cards\": [\n    {\n      \"front\": \"According to the administrative note, what is supplied regarding worked examples in the synthetic seminar?\",\n      \"back\": \"No worked examples are supplied.\"\n    ,\n      \"topic\": \"unsupplied worked examples\"\n    },\n    {\n      \"front\": \"According to the administrative note, what is supplied regarding subject-matter content in the synthetic seminar?\",\n      \"back\": \"No subject-matter content is supplied.\"\n    ,\n      \"topic\": \"unsupplied worked examples\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 226,
+            "total_tokens": 1454,
+            "completion_tokens": 1228,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1098
+            }
+          },
+          "latency_seconds": 9.56
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "deterministic": {
+        "published_count": 10,
+        "duplicate_stems": 0,
+        "selected_provenance_only": true,
+        "semantic_correctness": "not established by structural checks"
+      },
+      "source_documents": [
+        {
+          "filename": "Administrative note.txt",
+          "page": 1,
+          "text": "The synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+        }
+      ],
+      "expected_concepts": [
+        "honest insufficiency; do not invent subject material"
+      ]
+    }
+  ]
+}

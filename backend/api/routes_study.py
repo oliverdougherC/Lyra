@@ -374,7 +374,7 @@ def create_quiz(class_id: int, payload: QuizCreate, conn: DbConn) -> dict[str, o
 
 @router.get("/classes/{class_id}/study", response_model=None)
 def list_study(class_id: int, conn: DbConn) -> dict[str, object]:
-    """Decks and quizzes for the hub panel; decks carry their bucket and due counts."""
+    """Study hub entries with deck due counts and resumable quiz answer progress."""
     get_class(conn, class_id)
     rows = conn.execute(
         "select id, kind, title, state, stage_detail, problems_total, problems_done, "
@@ -385,6 +385,7 @@ def list_study(class_id: int, conn: DbConn) -> dict[str, object]:
 
     decks: list[dict[str, object]] = []
     quizzes: list[dict[str, object]] = []
+    quiz_progress = _quiz_list_progress(conn, class_id)
     now = scheduler.to_storage(datetime.now(UTC))
     for row in rows:
         entry = dict(row)
@@ -392,8 +393,49 @@ def list_study(class_id: int, conn: DbConn) -> dict[str, object]:
             entry.update(_deck_counts(conn, int(row["id"]), now))
             decks.append(entry)
         else:
+            attempt_id, answered_count = quiz_progress.get(int(row["id"]), (None, 0))
+            entry.update(active_attempt_id=attempt_id, answered_count=answered_count)
             quizzes.append(entry)
     return {"decks": decks, "quizzes": quizzes}
+
+
+def _quiz_list_progress(conn: sqlite3.Connection, class_id: int) -> dict[int, tuple[int, int]]:
+    """Batch active progress without treating generated questions as student answers.
+
+    Match current_attempt's question snapshot check so regenerated quizzes never advertise
+    stale progress. Both queries are class-scoped, regardless of the number of quizzes.
+    """
+    attempts = conn.execute(
+        "select t.id, t.artifact_id, t.question_part_ids, count(ans.part_id) as answered_count "
+        "from quiz_attempts t join artifacts a on a.id = t.artifact_id "
+        "left join quiz_answers ans on ans.attempt_id = t.id "
+        "where a.class_id = ? and a.kind = ? and a.state = ? "
+        "and t.finished_at is null and t.abandoned = 0 group by t.id",
+        (class_id, artifacts.KIND_QUIZ, artifacts.READY),
+    ).fetchall()
+    if not attempts:
+        return {}
+    parts = conn.execute(
+        "select p.artifact_id, p.id from artifact_parts p "
+        "join artifacts a on a.id = p.artifact_id "
+        "join quiz_attempts t on t.artifact_id = a.id "
+        "where a.class_id = ? and a.kind = ? and a.state = ? and p.kind = ? "
+        "and t.finished_at is null and t.abandoned = 0 order by p.ordinal, p.id",
+        (class_id, artifacts.KIND_QUIZ, artifacts.READY, artifacts.QUIZ_QUESTION),
+    ).fetchall()
+    question_ids: dict[int, list[int]] = {}
+    for part in parts:
+        question_ids.setdefault(int(part["artifact_id"]), []).append(int(part["id"]))
+    progress: dict[int, tuple[int, int]] = {}
+    for attempt in attempts:
+        artifact_id = int(attempt["artifact_id"])
+        raw_snapshot = attempt["question_part_ids"]
+        if raw_snapshot is None:
+            continue
+        snapshot = json.loads(str(raw_snapshot))
+        if snapshot and snapshot == question_ids.get(artifact_id):
+            progress[artifact_id] = (int(attempt["id"]), int(attempt["answered_count"]))
+    return progress
 
 
 def _deck_counts(conn: sqlite3.Connection, artifact_id: int, now: str) -> dict[str, object]:

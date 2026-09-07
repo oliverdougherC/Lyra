@@ -1,0 +1,222 @@
+{
+  "cases": {
+    "transfer-ratio-attempt": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "5*(2/3)"
+          },
+          "raw_arguments": "{\"expression\": \"5*(2/3)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "10/3"
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "The ratio is flipped. Your recipe says 3 cups flour to 2 cups milk, so the milk-to-flour ratio is $\\frac{2}{3}$, not $\\frac{3}{2}$. You multiplied by the flour-to-milk ratio instead.\n\nThe correct setup:\n\n$$\\text{milk} = 5 \\times \\frac{2}{3} = \\frac{10}{3} \\approx 3.33 \\text{ cups}$$\n\nA quick sanity check: if 3 cups flour needs 2 cups milk, then 5 cups flour (a bit more) should need a bit more than 2 cups of milk \u2014 3.33 cups fits, but 7.5 cups would be more milk than flour, which is clearly off for this recipe.",
+      "generated_at": "2026-09-07T00:55:11+00:00",
+      "duration_seconds": 7.28,
+      "system_prompt_tokens": 1347,
+      "assembled_prompt_sha256": "83025326febc44b77becea31bcd9b9b59b08e90d0b761769b68e6a300d534cde",
+      "assembled_system_prompt_sha256": "c914ba13ba9c2b9533770b8890c42ec1afefd950b5089eecb6bfe7d142d0cb3e",
+      "tool_schema_tokens": 1266,
+      "user": "My recipe uses 3 cups flour for 2 cups milk. For 5 cups flour I wrote milk = 5*(3/2) = 7.5 cups. Which part is wrong?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "5900d4c99b9c42368ffd83e40621a79a2a2e805afe838390957d2b3c4d603e80",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "b6ed20c9d01bcfda7295f2c890c7b663e3e133157030fa64675babd3fe7d5a71",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "transfer-simple-feedback": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A thermostat runs a simple loop:\n\n1. It measures the room temperature.\n2. It compares that to the set point.\n3. It acts to push the temperature back toward the set point.\n\nIf the room is colder than the set point, it turns the heater on. The heater warms the room, and the temperature rises. Once it reaches the set point, the heater turns off. If the room gets warmer than the set point, the heater stays off (or the cooler runs), and the temperature falls back down.\n\nThe \"negative\" part is that the correction always works against the deviation. A cold error produces heating, which shrinks the cold error. A warm error produces cooling, which shrinks the warm error. The response reduces the error instead of amplifying it, so the temperature settles near the set point rather than running away.",
+      "generated_at": "2026-09-07T00:55:18+00:00",
+      "duration_seconds": 6.84,
+      "system_prompt_tokens": 1347,
+      "assembled_prompt_sha256": "67854a1e1ce80c20df61efdb7b657401e8d499dd996b8c3556bf44b4aa1b4416",
+      "assembled_system_prompt_sha256": "c914ba13ba9c2b9533770b8890c42ec1afefd950b5089eecb6bfe7d142d0cb3e",
+      "tool_schema_tokens": 1266,
+      "user": "Explain that more simply, without a question at the end.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "5900d4c99b9c42368ffd83e40621a79a2a2e805afe838390957d2b3c4d603e80",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "b6ed20c9d01bcfda7295f2c890c7b663e3e133157030fa64675babd3fe7d5a71",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "transfer-show-probability": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "3/5*2/4",
+            "compare_to": "3/10"
+          },
+          "raw_arguments": "{\"expression\": \"3/5*2/4\", \"compare_to\": \"3/10\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "5!/(2!*3!)",
+            "compare_to": "10"
+          },
+          "raw_arguments": "{\"expression\": \"5!/(2!*3!)\", \"compare_to\": \"10\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "3!/(2!*1!)",
+            "compare_to": "3"
+          },
+          "raw_arguments": "{\"expression\": \"3!/(2!*1!)\", \"compare_to\": \"3\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "The probability is $\\dfrac{3}{10} = 0.3$.\n\n**Method 1: Multiply the two draws in sequence**\n\n- First draw: 3 of the 5 balls are red, so $P(\\text{1st red}) = \\dfrac{3}{5}$.\n- Second draw: because the first ball was red and not replaced, 2 red balls remain out of 4 total, so $P(\\text{2nd red} \\mid \\text{1st red}) = \\dfrac{2}{4}$.\n- By the multiplication rule for dependent events, $P(\\text{both red}) = \\dfrac{3}{5} \\cdot \\dfrac{2}{4} = \\dfrac{6}{20} = \\dfrac{3}{10}$.\n\n**Method 2: Count combinations**\n\n- Total ways to choose 2 balls from 5: $\\binom{5}{2} = \\dfrac{5!}{2!\\,3!} = 10$.\n- Ways to choose 2 red balls from the 3 red ones: $\\binom{3}{2} = \\dfrac{3!}{2!\\,1!} = 3$.\n- So $P(\\text{both red}) = \\dfrac{3}{10}$.\n\nBoth routes agree, which is a good check: the sequential method builds the probability step by step, while the counting method compares favorable outcomes to all outcomes.\n\n**Idea to carry forward:** when drawing without replacement, the sample space shrinks after each draw \u2014 that's why the second fraction is $\\frac{2}{4}$, not $\\frac{3}{5}$ again. If the balls had been replaced, the draws would be independent and you'd multiply $\\frac{3}{5} \\cdot \\frac{3}{5} = \\frac{9}{25}$ instead.",
+      "generated_at": "2026-09-07T00:55:31+00:00",
+      "duration_seconds": 12.27,
+      "system_prompt_tokens": 1046,
+      "assembled_prompt_sha256": "b0b8c16450c26b795412d629c7a2887d059c7eff6a00fb0710e5c26f79c90b23",
+      "assembled_system_prompt_sha256": "5d8f37194d5487b7e81f664777087a12f7fd10fba6de237bf4a2e250d0e32258",
+      "tool_schema_tokens": 1266,
+      "user": "Show the complete calculation: a bag has 3 red and 2 blue balls. Two are drawn without replacement. What is the probability both are red?",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "5900d4c99b9c42368ffd83e40621a79a2a2e805afe838390957d2b3c4d603e80",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "b6ed20c9d01bcfda7295f2c890c7b663e3e133157030fa64675babd3fe7d5a71",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

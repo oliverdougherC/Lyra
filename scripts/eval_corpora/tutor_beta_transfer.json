@@ -1,0 +1,75 @@
+{
+  "about": [
+    "Fresh synthetic transfer set frozen after round2 findings; these questions were not used to tune prompts. All are critical. Previous heldout osmosis is now a regression case."
+  ],
+  "corpus_version": "beta-transfer-2.0.0",
+  "prompt_contract_version": "2",
+  "dimensions": [
+    "directness",
+    "proportionality",
+    "prerequisite_setup",
+    "questioning",
+    "withholding",
+    "correctness",
+    "pedagogical_usefulness"
+  ],
+  "cases": [
+    {
+      "id": "transfer-ratio-attempt",
+      "mode": "guide",
+      "user": "My recipe uses 3 cups flour for 2 cups milk. For 5 cups flour I wrote milk = 5*(3/2) = 7.5 cups. Which part is wrong?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Acknowledges scaling proportionally is appropriate",
+        "Explains the ratio must be 2 cups milk per 3 cups flour and corrects setup to 5*(2/3)"
+      ],
+      "must_not": [
+        "Says multiplying by a ratio is itself invalid",
+        "Accepts7.5cups as correct"
+      ],
+      "notes": "Milk=10/3cups. The setup must track milk/flour units. Full correction is appropriate."
+    },
+    {
+      "id": "transfer-simple-feedback",
+      "mode": "guide",
+      "user": "Explain that more simply, without a question at the end.",
+      "history": [
+        {
+          "role": "user",
+          "content": "What is negative feedback in a thermostat?"
+        },
+        {
+          "role": "assistant",
+          "content": "Negative feedback attenuates deviation from a set point by applying an opposing corrective control action to the measured error."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Explains that if room is colder than chosen temperature heating switches on, and when sufficiently warm heating switches off",
+        "Uses plain language and no compulsory question"
+      ],
+      "must_not": [
+        "Promises perfectly constant temperature with no fluctuation",
+        "Uses control-theory equations as the main explanation"
+      ],
+      "notes": "Simple thermostats typically have on/off cycling and small overshoot/hysteresis; no need to teach those details, but do not claim exact constancy."
+    },
+    {
+      "id": "transfer-show-probability",
+      "mode": "show",
+      "user": "Show the complete calculation: a bag has 3 red and 2 blue balls. Two are drawn without replacement. What is the probability both are red?",
+      "history": [],
+      "context": [],
+      "must": [
+        "States probability3/10 and explains3/5 for first then2/4 conditional probability for second",
+        "Provides the worked multiplication in a self-contained answer"
+      ],
+      "must_not": [
+        "Treats the draws as independent with second probability3/5",
+        "Only reports that a tool check succeeded"
+      ],
+      "notes": "(3/5)*(2/4)=6/20=3/10. An alternative combinations derivation is fine if explained."
+    }
+  ]
+}
