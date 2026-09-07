@@ -215,3 +215,8 @@ Full-proposal planning keeps the original brief, request, and assignment analysi
 section mapping. Existing notes are reference material, not a mandatory proposal outline.
 Saved source context and supporting revision metadata inform strategy calls; each snapshot
 excerpt is bounded, omissions are labeled, and normal whole-request budget checks still apply.
+
+Live document assessment receives bounded current saved context for the sources already in
+its evidence set, alongside separately labeled historical excerpts. This prevents an omitted
+selected excerpt from being the reviewer’s only view of an available source; current text
+does not replace the historical revision that supported earlier writing.

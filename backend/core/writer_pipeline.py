@@ -1466,6 +1466,14 @@ def _review_live_chunks(
                 "role": "user",
                 "content": (
                     prompts.format_ledger_block(list(evidence.values()))
+                    + "\nBounded current saved source context (separate from historical "
+                    "relied-on evidence; never relabel historical support "
+                    "with current revisions):\n"
+                    + json.dumps(
+                        source_ledger.saved_source_context(conn, class_id, list(evidence)),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
                     + "\nCheck new factual claims against this evidence, the original assignment "
                     "and student prose. Identify unsupported causal conclusions, invented costs, "
                     "methods or personal experiences. Selected excerpts are partial evidence, so "
