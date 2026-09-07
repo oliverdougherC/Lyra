@@ -74,7 +74,12 @@ type DocumentsPaneProps = {
   onClose?: () => void
 }
 
-export function DocumentsPane({
+export function DocumentsPane(props: DocumentsPaneProps) {
+  // A class change must not carry filters, bulk selections or upload UI into another class.
+  return <ClassDocumentsPane key={props.classId} {...props} />
+}
+
+function ClassDocumentsPane({
   classId,
   className,
   variant = 'ask',
@@ -125,7 +130,21 @@ export function DocumentsPane({
   const queryClient = useQueryClient()
   // A 36-document class is the real class: a filter turns a scroll hunt into a glance
   // (ui-overhaul 2.6). Filters by filename, case-insensitive.
-  const [filter, setFilter] = useState('')
+  const filterKey = `lyra:class:${classId}:files-query`
+  const [filter, setFilter] = useState(() => {
+    try {
+      return sessionStorage.getItem(filterKey) ?? ''
+    } catch {
+      return ''
+    }
+  })
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(filterKey, filter)
+    } catch {
+      /* Filtering still works in memory. */
+    }
+  }, [filterKey, filter])
 
   // Uploads run one at a time so the progress readout names a single file, and so a large
   // multi-file drop does not open a dozen request bodies at once. The queue lives in a ref

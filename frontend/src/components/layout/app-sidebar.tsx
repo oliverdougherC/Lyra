@@ -5,6 +5,9 @@ import { Archive, ChevronDown, Moon, RotateCcw, Settings, Sun } from 'lucide-rea
 import Link from '@/router/link'
 import { usePathname, useSearchParams } from '@/router/hooks'
 
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+
 import { CourseMark } from '@/components/classes/course-mark'
 import { LyraMark } from '@/components/chat/lyra-mark'
 import {
@@ -77,6 +80,7 @@ function workItems(
   solutions: SolutionRead[] | undefined,
   drafts: DraftRead[] | undefined,
   study: StudyListRead | undefined,
+  activeWorkPath: string,
 ): WorkItem[] {
   const items: WorkItem[] = []
 
@@ -136,7 +140,8 @@ function workItems(
     })
   }
 
-  return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, VISIBLE_WORK)
+  const sorted = items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  return sorted.filter((item, index) => index < VISIBLE_WORK || item.href === activeWorkPath)
 }
 
 /**
@@ -179,9 +184,13 @@ function SessionSubItem({
   const label = session.title || formatSessionFallbackTitle(session.created_at)
   return (
     <SidebarMenuSubItem>
-      <SidebarMenuSubButton asChild isActive={activeSessionId === String(session.id)}>
+      <SidebarMenuSubButton
+        asChild
+        className="h-auto min-h-8 py-1.5 [&>span:last-child]:whitespace-normal"
+        isActive={activeSessionId === String(session.id)}
+      >
         <Link href={`${href}/chat?session=${session.id}`} title={label}>
-          <span className="truncate">{label}</span>
+          <span className="break-words [overflow-wrap:anywhere]">{label}</span>
         </Link>
       </SidebarMenuSubButton>
     </SidebarMenuSubItem>
@@ -215,21 +224,28 @@ function ClassNavItem({
   activeWorkPath: string
 }) {
   const href = `/classes/${klass.id}`
-  const [showAllSessions, setShowAllSessions] = useState(false)
-  const recentWork = workItems(href, solutions, drafts, study)
-
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [sessionSearch, setSessionSearch] = useState('')
+  const [sessionPage, setSessionPage] = useState(0)
+  const recentWork = workItems(href, solutions, drafts, study, activeWorkPath)
   const allSessions = sessions ?? []
-  const headSessions = allSessions.slice(0, VISIBLE_SESSIONS)
-  const restSessions = allSessions.slice(VISIBLE_SESSIONS)
-  // The conversation being read is always on the list, wherever it sits in the history.
-  // Folding it away would leave the rail with no highlighted row and no way back to it.
-  const pinnedSessions = showAllSessions
-    ? []
-    : restSessions.filter((session) => activeSessionId === String(session.id))
-  // The rest open *below* the toggle. Growing the list upward would shove the control
-  // you just clicked off under the cursor, so collapsing again means hunting for it.
-  const tailSessions = showAllSessions ? restSessions : []
-  const hiddenCount = restSessions.length - pinnedSessions.length - tailSessions.length
+  const matches = historyOpen
+    ? allSessions.filter((session) =>
+        (session.title || formatSessionFallbackTitle(session.created_at))
+          .toLocaleLowerCase()
+          .includes(sessionSearch.trim().toLocaleLowerCase()),
+      )
+    : allSessions
+  const page = Math.min(sessionPage, Math.max(0, Math.ceil(matches.length / VISIBLE_SESSIONS) - 1))
+  const shownSessions = matches.slice(
+    historyOpen ? page * VISIBLE_SESSIONS : 0,
+    historyOpen ? (page + 1) * VISIBLE_SESSIONS : VISIBLE_SESSIONS,
+  )
+  const activeSession = allSessions.find((session) => String(session.id) === activeSessionId)
+  const pinnedSessions =
+    activeSession && !shownSessions.some((session) => session.id === activeSession.id)
+      ? [activeSession]
+      : []
 
   return (
     <Collapsible open={selected}>
@@ -244,7 +260,9 @@ function ClassNavItem({
             <Link href={href} aria-label={klass.code ? `${klass.code}, ${klass.name}` : klass.name}>
               <CourseMark klass={klass} size="sm" />
               <span className="grid min-w-0 flex-1">
-                <span className="truncate">{klass.name}</span>
+                <span className="whitespace-normal break-words [overflow-wrap:anywhere]">
+                  {klass.name}
+                </span>
                 {klass.code ? (
                   <span className="text-text-tertiary truncate text-xs font-normal">
                     {klass.code}
@@ -265,7 +283,7 @@ function ClassNavItem({
                 <SidebarMenuSkeleton />
               </SidebarMenuSubItem>
             ) : (
-              [...headSessions, ...pinnedSessions].map((session) => (
+              [...shownSessions, ...pinnedSessions].map((session) => (
                 <SessionSubItem
                   key={session.id}
                   session={session}
@@ -274,34 +292,59 @@ function ClassNavItem({
                 />
               ))
             )}
-            {hiddenCount > 0 || showAllSessions ? (
+            {allSessions.length > VISIBLE_SESSIONS ? (
               <SidebarMenuSubItem>
-                <SidebarMenuSubButton asChild onClick={() => setShowAllSessions(!showAllSessions)}>
+                <SidebarMenuSubButton asChild>
                   <button
                     type="button"
-                    aria-expanded={showAllSessions}
-                    className="text-text-tertiary"
+                    aria-expanded={historyOpen}
+                    onClick={() => {
+                      setHistoryOpen(!historyOpen)
+                      setSessionPage(0)
+                    }}
                   >
-                    <ChevronDown
-                      aria-hidden
-                      className={cn(
-                        'transition-transform duration-150',
-                        !showAllSessions && '-rotate-90',
-                      )}
-                    />
-                    <span>{showAllSessions ? 'Show fewer' : `Show all ${allSessions.length}`}</span>
+                    {historyOpen ? 'Close conversation history' : 'Find a conversation'}
                   </button>
                 </SidebarMenuSubButton>
+                {historyOpen ? (
+                  <div className="space-y-2 px-2 py-2">
+                    <Input
+                      aria-label="Search conversations"
+                      placeholder="Search conversations"
+                      value={sessionSearch}
+                      onChange={(event) => {
+                        setSessionSearch(event.target.value)
+                        setSessionPage(0)
+                      }}
+                      className="h-9 text-sm"
+                    />
+                    <p className="text-text-secondary text-xs" role="status">
+                      {matches.length
+                        ? `${page * VISIBLE_SESSIONS + 1}–${Math.min((page + 1) * VISIBLE_SESSIONS, matches.length)} of ${matches.length}`
+                        : 'No matching conversations'}
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={page === 0}
+                        onClick={() => setSessionPage(page - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={(page + 1) * VISIBLE_SESSIONS >= matches.length}
+                        onClick={() => setSessionPage(page + 1)}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </SidebarMenuSubItem>
             ) : null}
-            {tailSessions.map((session) => (
-              <SessionSubItem
-                key={session.id}
-                session={session}
-                href={href}
-                activeSessionId={activeSessionId}
-              />
-            ))}
 
             {recentWork.length > 0 ? (
               <SidebarMenuSubItem>
@@ -310,7 +353,7 @@ function ClassNavItem({
                     nothing sends you back to hunting. It opens the class, which is where
                     every kind of work is browsed and managed. */}
                 <Link
-                  href={href}
+                  href={`${href}?tab=work`}
                   className="eyebrow hover:text-text-secondary focus-visible:ring-ring mt-2 block rounded-sm px-2 transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none"
                 >
                   Work
@@ -319,9 +362,15 @@ function ClassNavItem({
             ) : null}
             {recentWork.map((item) => (
               <SidebarMenuSubItem key={item.key}>
-                <SidebarMenuSubButton asChild isActive={activeWorkPath === item.href}>
+                <SidebarMenuSubButton
+                  asChild
+                  className="h-auto min-h-8 flex-wrap py-1.5 [&>span:last-child]:whitespace-normal"
+                  isActive={activeWorkPath === item.href}
+                >
                   <Link href={item.href} title={item.title}>
-                    <span className="truncate">{item.title}</span>
+                    <span className="whitespace-normal break-words [overflow-wrap:anywhere]">
+                      {item.title}
+                    </span>
                     {item.note ? (
                       <span
                         className={cn(

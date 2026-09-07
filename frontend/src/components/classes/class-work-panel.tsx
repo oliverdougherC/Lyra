@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import Link from '@/router/link'
 import { usePathname, useRouter, useSearchParams } from '@/router/hooks'
 
@@ -10,8 +10,9 @@ import { ClassSolutionsPanel } from '@/components/classes/class-solutions-panel'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { formatRelativeTime } from '@/lib/format'
+import { formatRelativeTime, formatSessionFallbackTitle } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useDrafts } from '@/lib/hooks/use-drafts'
 import { useSolutions } from '@/lib/hooks/use-solutions'
@@ -41,6 +42,30 @@ function readFilter(searchParams: URLSearchParams): WorkFilter {
  * it - rename, delete, and create live there, not here, so the list stays a list.
  */
 export function ClassWorkPanel({ classId }: { classId: number }) {
+  return <WorkList key={classId} classId={classId} />
+}
+
+function WorkList({ classId }: { classId: number }) {
+  const storageKey = `lyra:class:${classId}:work-list`
+  const [view, setView] = useState(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? '{}')
+      return {
+        query: typeof saved.query === 'string' ? saved.query : '',
+        limit: Number.isInteger(saved.limit) && saved.limit >= 20 ? saved.limit : 20,
+      }
+    } catch {
+      return { query: '', limit: 20 }
+    }
+  })
+  function updateView(next: typeof view) {
+    setView(next)
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(next))
+    } catch {
+      /* Browsing still works without storage. */
+    }
+  }
   const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -54,12 +79,13 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
   const studyQuery = useStudyList(classId)
   const { data: study, isPending: studyPending } = studyQuery
 
+  const [retryNames, setRetryNames] = useState<string[]>([])
   const unavailable = [
     { name: 'chats', query: sessionsQuery },
     { name: 'solutions', query: solutionsQuery },
     { name: 'drafts', query: draftsQuery },
     { name: 'practice', query: studyQuery },
-  ].filter(({ query }) => query.isError)
+  ].filter(({ name, query }) => query.isError || retryNames.includes(name))
 
   // The filter is part of the route, so it lives in the hash like the tab does: a link to
   // the class's work with a filter applied is a link that reloads and backs forward as
@@ -74,12 +100,12 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
   }
 
   const all = useMemo(() => {
-    if (sessionsPending || solutionsPending || draftsPending || studyPending) return null
+    if (sessionsPending && solutionsPending && draftsPending && studyPending) return null
     const rows = [
       ...(sessions ?? []).map((session) => ({
         key: `session-${session.id}`,
         kind: 'Chat' as const,
-        title: session.title ?? 'Untitled chat',
+        title: session.title || formatSessionFallbackTitle(session.created_at),
         href: `/classes/${classId}/chat?session=${session.id}`,
         status: null,
         time: session.created_at,
@@ -119,14 +145,7 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
         kind: 'Quiz' as const,
         title: quiz.title,
         href: `/classes/${classId}/study/${quiz.id}`,
-        status:
-          quiz.state === 'ready' &&
-          quiz.problems_total !== null &&
-          quiz.problems_done < quiz.problems_total
-            ? `${quiz.problems_done}/${quiz.problems_total} answered`
-            : quiz.state === 'ready'
-              ? null
-              : stateWord(quiz.state, quiz.stage_detail),
+        status: quiz.state === 'ready' ? null : stateWord(quiz.state, quiz.stage_detail),
         time: quiz.updated_at,
       })),
     ]
@@ -143,6 +162,13 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
     study,
     studyPending,
   ])
+
+  const kinds = { chats: 'Chat', solutions: 'Solution', drafts: 'Draft' }
+  const filtered = all?.filter((row) => filter === 'all' || row.kind === kinds[filter]) ?? []
+  const matches = filtered.filter((row) =>
+    row.title.toLocaleLowerCase().includes(view.query.trim().toLocaleLowerCase()),
+  )
+  const retrying = retryNames.length > 0 || unavailable.some(({ query }) => query.isFetching)
 
   return (
     <div className="flex flex-col gap-4">
@@ -170,25 +196,47 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
         ))}
       </div>
 
-      {filter === 'all'
-        ? unavailable.map(({ name, query }) => (
-            <Alert key={name} variant="destructive">
-              <AlertTitle>Could not load {name}</AlertTitle>
-              <AlertDescription>
-                <p>The work list may be incomplete. Previously loaded items remain available.</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={query.isFetching}
-                  aria-label={`Retry ${name}`}
-                  onClick={() => void query.refetch()}
-                >
-                  Retry
-                </Button>
-              </AlertDescription>
-            </Alert>
-          ))
-        : null}
+      {unavailable.length > 0 ? (
+        <Alert variant="destructive">
+          <AlertTitle>Some work could not be refreshed</AlertTitle>
+          <AlertDescription>
+            <p>
+              Could not load {unavailable.map(({ name }) => name).join(', ')}. Previously loaded
+              items remain available.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={retrying}
+              onClick={() => {
+                setRetryNames(unavailable.map(({ name }) => name))
+                void Promise.all(unavailable.map(({ query }) => query.refetch())).finally(() =>
+                  setRetryNames([]),
+                )
+              }}
+            >
+              {retrying ? 'Retrying…' : 'Retry all'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {filtered.length >= 10 || view.query ? (
+        <div className="flex items-center gap-2">
+          <Input
+            type="search"
+            aria-label="Search work by title"
+            placeholder="Search work"
+            value={view.query}
+            onChange={(event) => updateView({ query: event.target.value, limit: 20 })}
+          />
+          {view.query ? (
+            <Button variant="ghost" onClick={() => updateView({ query: '', limit: 20 })}>
+              Clear search
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {filter === 'all' ? (
         all === null ? (
@@ -206,34 +254,50 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
               Ask a question, start a problem set, or begin a draft and it will show up here.
             </EmptyDescription>
           </Empty>
+        ) : matches.length === 0 ? (
+          <p role="status" className="text-text-secondary text-sm">
+            No work matches this search.
+          </p>
         ) : (
-          <ul className="flex flex-col gap-1">
-            {all.map((row) => (
-              <li key={row.key}>
-                <Link
-                  href={row.href}
-                  className="hover:bg-muted focus-visible:ring-ring flex items-center gap-3 rounded-md px-3 py-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
-                >
-                  <span className="text-text-tertiary w-16 shrink-0 text-xs">{row.kind}</span>
-                  <span className="min-w-0 flex-1 truncate text-sm">{row.title}</span>
-                  {row.status ? (
-                    <span className="text-text-secondary shrink-0 text-xs">{row.status}</span>
-                  ) : null}
-                  <span className="text-text-tertiary shrink-0 text-xs">
-                    {formatRelativeTime(row.time)}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="flex flex-col gap-1">
+              {matches.slice(0, view.limit).map((row) => (
+                <li key={row.key}>
+                  <Link
+                    href={row.href}
+                    className="hover:bg-muted focus-visible:ring-ring flex min-w-0 flex-col gap-1 rounded-md px-3 py-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    <span className="min-w-0 break-words text-base">{row.title}</span>
+                    <span className="text-text-tertiary flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      <span>{row.kind}</span>
+                      {row.status ? (
+                        <span className="text-text-secondary">{row.status}</span>
+                      ) : null}
+                      <span>{formatRelativeTime(row.time)}</span>
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </>
         )
       ) : filter === 'chats' ? (
-        <ClassChatsPanel classId={classId} />
+        <ClassChatsPanel classId={classId} query={view.query} limit={view.limit} managedRecovery />
       ) : filter === 'solutions' ? (
-        <ClassSolutionsPanel classId={classId} />
+        <ClassSolutionsPanel
+          classId={classId}
+          query={view.query}
+          limit={view.limit}
+          managedRecovery
+        />
       ) : (
-        <ClassDraftsPanel classId={classId} />
+        <ClassDraftsPanel classId={classId} query={view.query} limit={view.limit} managedRecovery />
       )}
+      {matches.length > view.limit ? (
+        <Button variant="outline" onClick={() => updateView({ ...view, limit: view.limit + 20 })}>
+          Show more work ({matches.length - view.limit} remaining)
+        </Button>
+      ) : null}
     </div>
   )
 }

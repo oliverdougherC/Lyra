@@ -5,7 +5,7 @@ import { Archive, GraduationCap, Plus } from 'lucide-react'
 import Link from '@/router/link'
 import { toast } from 'sonner'
 
-import { ClassCard, ClassCardSkeleton, NewClassCard } from '@/components/classes/class-card'
+import { ClassCard, ClassCardSkeleton } from '@/components/classes/class-card'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
 import { DeleteClassDialog } from '@/components/classes/delete-class-dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -89,15 +89,40 @@ export function ClassList() {
     // A reading measure, not a dashboard: the index is a centered column with room to
     // breathe, because eleven classes is a page of a book, not a wall of tiles.
     <div className="mx-auto w-full max-w-3xl space-y-8">
-      {/* One action, one home (ui-overhaul 2.1): New class lives only as the ledger's final
-          line and the keyboard shortcut. The header carries the title, not a second button
-          for the verb the list already ends with. */}
-      <div className="pt-2 md:pt-6">
+      <div className="flex flex-wrap items-center justify-between gap-4 pt-2 md:pt-6">
         <h1 className="font-display text-3xl leading-tight md:text-4xl">Classes</h1>
-        <p className="text-text-secondary mt-1.5 text-sm">
-          Everything Lyra knows is organized by class.
-        </p>
+        {activeClasses.length > 0 ? (
+          <Button onClick={(event) => openCreate(event.currentTarget)}>
+            <Plus />
+            New class
+          </Button>
+        ) : null}
       </div>
+
+      {isError ? (
+        <Alert variant="destructive">
+          <AlertTitle>
+            {data ? 'Could not refresh your classes' : 'Could not load your classes'}
+          </AlertTitle>
+          <AlertDescription className="text-danger-text">
+            {data ? <p>Your saved list is still available.</p> : null}
+            <p>
+              {error instanceof ApiError
+                ? error.message
+                : 'Check your connection to Lyra and try again.'}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              {isFetching ? 'Retrying…' : 'Retry'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {archivedCount > 0 ? (
         <section className="space-y-3">
@@ -148,27 +173,7 @@ export function ClassList() {
             <ClassCardSkeleton key={index} />
           ))}
         </div>
-      ) : isError ? (
-        <Alert variant="destructive">
-          <AlertTitle>Could not load your classes</AlertTitle>
-          <AlertDescription className="text-danger-text">
-            <p>
-              {error instanceof ApiError
-                ? error.message
-                : "Could not load your classes. Check that Lyra's local server is running, then try again."}
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              disabled={isFetching}
-              onClick={() => void refetch()}
-            >
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : activeClasses.length === 0 ? (
+      ) : isError && !data ? null : activeClasses.length === 0 ? (
         archivedCount > 0 ? (
           <Empty>
             <EmptyHeader>
@@ -221,7 +226,6 @@ export function ClassList() {
               }
             />
           ))}
-          <NewClassCard onClick={openCreate} />
         </div>
       )}
 

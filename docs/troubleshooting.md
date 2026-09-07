@@ -69,3 +69,16 @@ prerequisites.
   raw course documents, databases, credentials, or unredacted screenshots.
 - If you are validating packaged-desktop evidence rather than checkout startup, pair that with
   `scripts/desktop_resource_report.py` output or a `scripts/packaged_soak_harness.py` run record.
+
+## Finding setup and recovery tasks
+
+Settings keeps optional Web research and maintenance tasks in labeled disclosures. Open the task
+to configure it; an active operation, unresolved error or direct Settings link opens the relevant
+section automatically. A remote tutor whose data-flow consent was acknowledged is shown neutrally.
+Existing class data prevents non-overwrite import; this restriction appears within Import rather
+than as a standing error during ordinary setup.
+
+A failed refresh leaves previously loaded classes, settings and saved work available with Retry.
+Retry shows progress and a failed outcome without implying that unsaved or uncertain operations
+succeeded. Startup recovery prevents duplicate retries while reconnecting. If an update is ready
+but restart is rejected, retain the ready state and use the displayed safe relaunch guidance.

@@ -2,7 +2,7 @@
 
 import { ChevronRight } from 'lucide-react'
 import Link from '@/router/link'
-import { usePathname } from '@/router/hooks'
+import { classReturnHref, usePathname } from '@/router/hooks'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 
 import { cn } from '@/lib/utils'
@@ -43,7 +43,7 @@ export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
   // The class now has a page of its own, so on any route inside it the class crumb is the
   // way back up to that page rather than a label naming where you already are.
   const insideClass = classId !== null && pathname !== `/classes/${classId}`
-  const classHref = insideClass ? `/classes/${classId}` : undefined
+  const classHref = insideClass ? classReturnHref(classId) : undefined
 
   // Settings is a root, not a child of Classes: nothing about it lives inside a class.
   const crumbs: Crumb[] =

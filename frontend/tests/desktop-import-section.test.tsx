@@ -1,3 +1,4 @@
+import { RouterProvider } from '@/router/hooks'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,7 +11,7 @@ import {
   useResetDesktopImport,
   useStartDesktopImport,
 } from '@/lib/hooks/use-settings'
-import { pickDesktopImportDirectory } from '@/lib/runtime'
+import { pickDesktopImportDirectory, publishDesktopImport } from '@/lib/runtime'
 
 vi.mock('@/lib/hooks/use-settings', () => ({
   useDesktopImportStatus: vi.fn(),
@@ -111,8 +112,13 @@ describe('DesktopImportSection', () => {
 
   it('previews a native opaque selection and starts staging without exposing a path', async () => {
     const user = userEvent.setup()
-    render(<DesktopImportSection />)
+    render(
+      <RouterProvider>
+        <DesktopImportSection />
+      </RouterProvider>,
+    )
 
+    await user.click(screen.getByRole('button', { name: /Import existing Lyra data/ }))
     expect(screen.getByText(/Database schema 40/)).toBeInTheDocument()
     expect(screen.getByText('1.0 KiB estimated')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('/private/')
@@ -151,7 +157,11 @@ describe('DesktopImportSection', () => {
     } as never)
 
     const user = userEvent.setup()
-    render(<DesktopImportSection />)
+    render(
+      <RouterProvider>
+        <DesktopImportSection />
+      </RouterProvider>,
+    )
 
     await user.click(screen.getByRole('button', { name: 'Discard staged import' }))
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Discard staged import?')
@@ -160,4 +170,54 @@ describe('DesktopImportSection', () => {
     await user.click(screen.getByRole('button', { name: 'Discard staged import' }))
     expect(vi.mocked(useResetDesktopImport)().mutateAsync).toHaveBeenCalledTimes(1)
   })
+})
+
+it('keeps an existing populated installation neutral until import is chosen', async () => {
+  vi.mocked(useDesktopImportStatus).mockReturnValue({
+    data: { available: true, destination_ready: false, status: 'idle' },
+    isPending: false,
+    isError: false,
+  } as never)
+  vi.mocked(usePreviewDesktopImport).mockReturnValue({ data: null, isPending: false } as never)
+  render(
+    <RouterProvider>
+      <DesktopImportSection />
+    </RouterProvider>,
+  )
+  expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Import existing Lyra data' }))
+  expect(screen.getByRole('note')).toHaveTextContent('Import needs an empty installation')
+  expect(screen.getByRole('note')).not.toHaveClass('border-danger-text')
+})
+
+it('retains the publication failure when refreshing import status also fails', async () => {
+  const status = {
+    available: true,
+    destination_ready: true,
+    status: 'staged',
+    phase: 'awaiting_publish',
+    preview: null,
+  }
+  const query = {
+    data: status,
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(async () => {
+      query.isError = true
+    }),
+  }
+  vi.mocked(useDesktopImportStatus).mockReturnValue(query as never)
+  vi.mocked(usePreviewDesktopImport).mockReturnValue({ data: null, isPending: false } as never)
+  vi.mocked(publishDesktopImport).mockRejectedValue(new Error('publish failed'))
+  render(
+    <RouterProvider>
+      <DesktopImportSection />
+    </RouterProvider>,
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Restart and finish import' }))
+  expect(await screen.findByText('Could not load import status')).toBeVisible()
+  expect(
+    screen.getByText('The staged import was not published. Your prior data was preserved.'),
+  ).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Retry import status' })).toBeEnabled()
 })

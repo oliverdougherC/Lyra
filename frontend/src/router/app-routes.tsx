@@ -7,6 +7,8 @@ import RouteErrorFallback from '@/app/error'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePathname } from '@/router/hooks'
+import Link from '@/router/link'
+import { Button } from '@/components/ui/button'
 
 type RoutePattern =
   | '/'
@@ -100,7 +102,12 @@ function NotFound() {
   return (
     <Alert variant="destructive" className="max-w-xl">
       <AlertTitle>That page could not be opened</AlertTitle>
-      <AlertDescription>Use the sidebar or return to Classes to keep working.</AlertDescription>
+      <AlertDescription>
+        <p>The saved page may have moved or been deleted.</p>
+        <Button asChild variant="outline" className="mt-3">
+          <Link href="/">Return to Classes</Link>
+        </Button>
+      </AlertDescription>
     </Alert>
   )
 }

@@ -1,3 +1,4 @@
+import { RouterProvider } from '@/router/hooks'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -9,9 +10,12 @@ function setup(unsavedSettings = false) {
   Object.assign(window, { __TAURI_INTERNALS__: { invoke } })
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <DesktopBackupSection unsavedSettings={unsavedSettings} />
+      <RouterProvider>
+        <DesktopBackupSection unsavedSettings={unsavedSettings} />
+      </RouterProvider>
     </QueryClientProvider>,
   )
+  fireEvent.click(screen.getByRole('button', { name: /Backup and restore/ }))
   return invoke
 }
 afterEach(() => {

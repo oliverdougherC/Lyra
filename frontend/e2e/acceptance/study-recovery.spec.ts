@@ -110,7 +110,13 @@ test.describe('Durable study recovery', () => {
         return getItem.call(this, key)
       }
     })
-    await page.getByRole('main').locator(`a[href$="/classes/${classId}/study/${deck.id}"]`).click()
+    await page
+      .getByRole('main')
+      .locator(
+        `a[href="/#/classes/${classId}/study/${deck.id}"], a[href^="/#/classes/${classId}/study/${deck.id}?"]`,
+      )
+      .first()
+      .click()
     await expect(
       page.getByText('Could not restore this study session', { exact: true }),
     ).toBeVisible()
@@ -289,7 +295,10 @@ test.describe('Durable study recovery', () => {
       await expect(page).toHaveURL(new RegExp(`/classes/${classId}\\?tab=practice$`))
       await page
         .getByRole('main')
-        .locator(`a[href$="/classes/${classId}/study/${deck.id}"]`)
+        .locator(
+          `a[href="/#/classes/${classId}/study/${deck.id}"], a[href^="/#/classes/${classId}/study/${deck.id}?"]`,
+        )
+        .first()
         .click()
       await expect(page.getByText(/Easy review could not be confirmed/)).toBeVisible()
       const replayA = page.waitForRequest((request) =>
@@ -374,7 +383,13 @@ test.describe('Durable study recovery', () => {
         })
       ).ok,
     ).toBeTruthy()
-    await page.getByRole('main').locator(`a[href$="/classes/${classId}/study/${deck.id}"]`).click()
+    await page
+      .getByRole('main')
+      .locator(
+        `a[href="/#/classes/${classId}/study/${deck.id}"], a[href^="/#/classes/${classId}/study/${deck.id}?"]`,
+      )
+      .first()
+      .click()
     await expect(page.getByText('CORRECTED: energy is conserved', { exact: true })).toBeVisible()
     const restored = await snapshot(page, deck.id)
     expect(restored.queue.map((card: Card) => card.part_id)).toEqual(

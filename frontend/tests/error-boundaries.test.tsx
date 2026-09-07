@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -116,4 +116,36 @@ describe('app/global-error.tsx, the bootstrap boundary', () => {
     await user.click(screen.getByRole('button', { name: 'Try again' }))
     expect(retry).toHaveBeenCalledTimes(1)
   })
+})
+
+it.each(['false', 'exception'])(
+  'shows a retry failure after %s without leaking details',
+  async (outcome) => {
+    const retry = vi.fn(async () => {
+      if (outcome === 'exception') throw sensitiveError()
+      return false
+    })
+    render(<GlobalErrorBoundary error={sensitiveError()} retry={retry} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Lyra still could not start')
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled()
+    assertNoSecrets()
+  },
+)
+it('guards repeated startup recovery and announces successful recovery', async () => {
+  let finish!: (value: boolean) => void
+  const retry = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finish = resolve
+      }),
+  )
+  render(<GlobalErrorBoundary error={sensitiveError()} retry={retry} />)
+  await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  const pending = screen.getByRole('button', { name: 'Trying again…' })
+  expect(pending).toBeDisabled()
+  await userEvent.click(pending)
+  expect(retry).toHaveBeenCalledTimes(1)
+  await act(async () => finish(true))
+  expect(screen.getByRole('status')).toHaveTextContent('Recovered. Opening Lyra…')
 })

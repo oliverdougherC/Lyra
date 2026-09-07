@@ -37,8 +37,18 @@ import type { SessionRead } from '@/types'
  * wrong as the only place the history exists: a term's chats were reachable but not
  * manageable, with no way to rename a bad auto-title or delete a conversation at all.
  */
-export function ClassChatsPanel({ classId }: { classId: number }) {
-  const { data: sessions, isPending, isError, refetch } = useSessions(classId)
+export function ClassChatsPanel({
+  classId,
+  query = '',
+  limit,
+  managedRecovery = false,
+}: {
+  classId: number
+  query?: string
+  limit?: number
+  managedRecovery?: boolean
+}) {
+  const { data: sessions, isPending, isError, isFetching, refetch } = useSessions(classId)
   const renameSession = useRenameSession(classId)
   const deleteSession = useDeleteSession(classId)
   const [renaming, setRenaming] = useState<SessionRead | null>(null)
@@ -68,6 +78,11 @@ export function ClassChatsPanel({ classId }: { classId: number }) {
   }
 
   const list = sessions ?? []
+  const matches = list.filter((session) =>
+    (session.title || formatSessionFallbackTitle(session.created_at))
+      .toLocaleLowerCase()
+      .includes(query.trim().toLocaleLowerCase()),
+  )
 
   return (
     <div className="flex flex-col gap-4">
@@ -83,11 +98,17 @@ export function ClassChatsPanel({ classId }: { classId: number }) {
         ) : null}
       </div>
 
-      {isError ? (
+      {isError && !managedRecovery ? (
         <div role="alert" className="rounded-md border p-4 text-sm">
           <p>Could not load conversations.</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void refetch()}>
-            Retry conversations
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            disabled={isFetching}
+            onClick={() => void refetch()}
+          >
+            {isFetching ? 'Retrying…' : 'Retry conversations'}
           </Button>
         </div>
       ) : null}
@@ -106,19 +127,21 @@ export function ClassChatsPanel({ classId }: { classId: number }) {
             <Link href={`/classes/${classId}/chat?session=new`}>Start a chat</Link>
           </Button>
         </Empty>
+      ) : matches.length === 0 ? (
+        <p role="status">No work matches this search.</p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {list.map((session) => (
+          {matches.slice(0, limit).map((session) => (
             <li key={session.id}>
               <div className="group border-border bg-card hover:border-border-strong focus-within:border-border-strong relative flex items-center gap-2 rounded-md border transition-colors">
                 <Link
                   href={`/classes/${classId}/chat?session=${session.id}`}
                   className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col gap-1 rounded-md px-4 py-3 focus-visible:ring-2 focus-visible:outline-none"
                 >
-                  <span className="text-text-primary truncate font-medium">
+                  <span className="text-text-primary break-words font-medium">
                     {session.title || formatSessionFallbackTitle(session.created_at)}
                   </span>
-                  <span className="text-text-tertiary flex items-center gap-2 text-xs">
+                  <span className="text-text-tertiary flex flex-wrap items-center gap-2 text-xs">
                     {formatRelativeTime(session.created_at)}
                     {/* A conversation opened from a solution step keeps that step pinned
                         into every turn, which is worth saying: it reads differently from
@@ -139,7 +162,7 @@ export function ClassChatsPanel({ classId }: { classId: number }) {
                         variant="ghost"
                         size="icon"
                         aria-label={`Actions for ${session.title || 'this conversation'}`}
-                        className="size-8 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                        className="size-8"
                       >
                         <MoreVertical />
                       </Button>

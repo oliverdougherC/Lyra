@@ -37,6 +37,7 @@ type RouteState = {
   search: string
   params: RouteParams
   navigationVersion: number
+  scrollPositions?: Record<string, number>
 }
 
 function normalizePath(path: string): string {
@@ -138,23 +139,139 @@ function canonicalizeLocation(next: Pick<RouteState, 'pathname' | 'search'>) {
   window.history.replaceState(window.history.state, '', canonical)
 }
 
-function restoreScroll(scroll = true) {
-  if (scroll) window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+const SCROLL_KEY = 'lyraScroll'
+const SCROLL_TARGETS: Record<string, string> = {
+  main: '#main-content',
+  files: '#documents-pane-body [data-slot="scroll-area-viewport"]',
+}
+
+function readScrollPositions(): Record<string, number> {
+  const positions: Record<string, number> = {}
+  for (const [key, selector] of Object.entries(SCROLL_TARGETS)) {
+    const element = document.querySelector<HTMLElement>(selector)
+    if (element) positions[key] = element.scrollTop
+  }
+  return positions
+}
+
+function rememberClassReturn(pathname: string, search: string) {
+  const match = /^\/classes\/(\d+)$/.exec(pathname)
+  if (!match) return
+  try {
+    sessionStorage.setItem(
+      `lyra:class:${match[1]}:return`,
+      JSON.stringify({
+        href: pathname + search,
+        positions: readScrollPositions(),
+      }),
+    )
+  } catch {
+    /* History navigation still works without session storage. */
+  }
+}
+
+export function classReturnHref(classId: number): string {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(`lyra:class:${classId}:return`) ?? 'null')
+    if (
+      typeof saved?.href === 'string' &&
+      new RegExp(`^/classes/${classId}(\\?|$)`).test(saved.href)
+    )
+      return saved.href
+  } catch {
+    /* Use the saved-work destination if context cannot be read. */
+  }
+  return `/classes/${classId}?tab=work`
+}
+
+function classReturnPositions(
+  pathname: string,
+  search: string,
+): Record<string, number> | undefined {
+  const match = /^\/classes\/(\d+)$/.exec(pathname)
+  if (!match) return
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(`lyra:class:${match[1]}:return`) ?? 'null')
+    if (saved?.href === pathname + search) return saved.positions
+  } catch {
+    /* A new visit starts at the top. */
+  }
+}
+
+function saveScrollPositions() {
+  window.history.replaceState({ ...window.history.state, [SCROLL_KEY]: readScrollPositions() }, '')
 }
 
 export function RouterProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<RouteState>(() => ({
     ...readLocation(),
     navigationVersion: 0,
+    scrollPositions: window.history.state?.[SCROLL_KEY],
   }))
   const stateRef = useRef(state)
   stateRef.current = state
 
   useEffect(() => {
+    const previous = window.history.scrollRestoration
+    window.history.scrollRestoration = 'manual'
+    const save = () => saveScrollPositions()
+    document.addEventListener('scroll', save, true)
+    window.addEventListener('pagehide', save)
+    return () => {
+      document.removeEventListener('scroll', save, true)
+      window.removeEventListener('pagehide', save)
+      window.history.scrollRestoration = previous
+    }
+  }, [])
+
+  useEffect(() => {
+    const positions = state.scrollPositions
+    if (!positions || routeAnchorFromSearch(state.search)) return
+    // Lazy routes can mount after navigation. Stop when positions fit or on user input.
+    let stopped = false
+    const restore = () => {
+      if (stopped) return
+      let complete = true
+      for (const [key, top] of Object.entries(positions)) {
+        const selector = SCROLL_TARGETS[key]
+        const element = selector ? document.querySelector<HTMLElement>(selector) : null
+        if (!element) {
+          complete = false
+          continue
+        }
+        element.scrollTop = top
+        if (Math.abs(element.scrollTop - top) > 1) complete = false
+      }
+      if (complete) stop()
+    }
+    const observer = new MutationObserver(restore)
+    const stop = () => {
+      stopped = true
+      observer.disconnect()
+    }
+    observer.observe(document.body, { childList: true, subtree: true })
+    const frame = requestAnimationFrame(restore)
+    window.addEventListener('wheel', stop, { once: true })
+    window.addEventListener('touchstart', stop, { once: true })
+    window.addEventListener('keydown', stop, { once: true })
+    return () => {
+      stop()
+      cancelAnimationFrame(frame)
+      window.removeEventListener('wheel', stop)
+      window.removeEventListener('touchstart', stop)
+      window.removeEventListener('keydown', stop)
+    }
+  }, [state.navigationVersion, state.scrollPositions, state.search])
+
+  useEffect(() => {
     const sync = () => {
       const next = readLocation(stateRef.current)
       canonicalizeLocation(next)
-      setState((current) => ({ ...next, navigationVersion: current.navigationVersion + 1 }))
+      setState((current) => ({
+        ...next,
+        navigationVersion: current.navigationVersion + 1,
+        scrollPositions: window.history.state?.[SCROLL_KEY],
+      }))
     }
     sync()
     window.addEventListener('hashchange', sync)
@@ -176,14 +293,24 @@ export function RouterProvider({ children }: { children: React.ReactNode }) {
         const { pathname, search, anchor } = splitHref(href)
         const nextSearch = anchor ? withRouteAnchor(search, anchor) : withRouteAnchor(search, null)
         const method = mode === 'replace' ? 'replaceState' : 'pushState'
-        window.history[method](window.history.state, '', createHashHref(pathname, nextSearch))
+        saveScrollPositions()
+        rememberClassReturn(state.pathname, state.search)
+        const scrollPositions =
+          options?.scroll === false || anchor !== null
+            ? readScrollPositions()
+            : (classReturnPositions(pathname, nextSearch) ?? { main: 0 })
+        window.history[method](
+          { ...window.history.state, [SCROLL_KEY]: scrollPositions },
+          '',
+          createHashHref(pathname, nextSearch),
+        )
         setState((current) => ({
           pathname,
           search: nextSearch,
           params: matchRoute(pathname).params,
+          scrollPositions,
           navigationVersion: current.navigationVersion + 1,
         }))
-        restoreScroll(options?.scroll ?? anchor === null)
       },
       setAnchor: (anchor, mode) => {
         const nextSearch = withRouteAnchor(

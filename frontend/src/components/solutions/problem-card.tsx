@@ -15,7 +15,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { formatCount } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 /** One problem as the review screen holds it, before it goes back to the backend. */
@@ -75,9 +74,6 @@ export function ProblemCard({
   return (
     <div className="border-border bg-card rounded-md border shadow-sm">
       <div className="flex items-start gap-3 p-4">
-        <span className="text-text-tertiary w-6 shrink-0 pt-0.5 text-sm tabular-nums">
-          {index + 1}
-        </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             {editingLabel ? (
@@ -85,7 +81,7 @@ export function ProblemCard({
                 autoFocus
                 value={problem.label}
                 aria-label="Problem label"
-                className="h-8 w-48"
+                className="h-8 w-full max-w-64"
                 onChange={(event) => onChange({ ...problem, label: event.target.value })}
                 onBlur={() => setEditingLabel(false)}
                 onKeyDown={(event) => {
@@ -98,7 +94,7 @@ export function ProblemCard({
             ) : (
               <button
                 type="button"
-                className="text-text-primary rounded-sm text-sm font-medium hover:underline"
+                className="text-text-primary rounded-sm text-left text-base font-medium break-words hover:underline"
                 onClick={() => setEditingLabel(true)}
               >
                 {problem.label || `Problem ${index + 1}`}
@@ -111,16 +107,17 @@ export function ProblemCard({
             ) : null}
           </div>
 
-          {showSource && problem.source ? (
-            <p className="text-text-tertiary mt-1 text-xs">
-              {problem.source}
-              {problem.page !== null ? `, page ${problem.page}` : ''}
+          {(showSource && problem.source) || problem.page !== null ? (
+            <p className="text-text-secondary mt-1 text-sm break-words">
+              {showSource && problem.source ? <span>{problem.source}</span> : null}
+              {showSource && problem.source && problem.page !== null ? ' · ' : null}
+              {problem.page !== null ? <span>Page {problem.page}</span> : null}
             </p>
           ) : null}
 
           {open ? (
             <Textarea
-              className="mt-3 min-h-32 font-sans text-sm"
+              className="mt-3 min-h-32 font-sans text-lg leading-relaxed md:text-lg"
               aria-label={`${problem.label} statement`}
               value={problem.statement}
               onChange={(event) =>
@@ -133,7 +130,9 @@ export function ProblemCard({
             // an ellipsis hid the half of the problem most likely to be misread: the
             // equations. A gate whose contents cannot be read is not a gate. The editor
             // above stays raw text, because the LaTeX is what a correction has to change.
-            <MathText className="text-text-secondary mt-2 text-sm">{problem.statement}</MathText>
+            <MathText className="text-text-primary mt-3 text-lg leading-relaxed">
+              {problem.statement}
+            </MathText>
           )}
 
           {problem.parts.length > 0 ? (
@@ -158,6 +157,7 @@ export function ProblemCard({
                         }
                       />
                       <Textarea
+                        className="text-lg leading-relaxed md:text-lg"
                         aria-label={`Part ${position + 1} statement of ${problem.label}`}
                         value={part.statement}
                         onChange={(event) =>
@@ -173,23 +173,25 @@ export function ProblemCard({
                     </div>
                   ) : (
                     <>
-                      <span className="text-text-tertiary shrink-0 pt-px text-xs">
+                      <span className="text-text-secondary shrink-0 pt-1 text-sm">
                         {part.label}
                       </span>
-                      <MathText className="text-text-secondary min-w-0 flex-1 text-sm">
+                      <MathText className="text-text-primary min-w-0 flex-1 text-lg leading-relaxed">
                         {part.statement}
                       </MathText>
                     </>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6 shrink-0"
-                    aria-label={`Remove part ${part.label} of ${problem.label}`}
-                    onClick={() => onRemovePart(position)}
-                  >
-                    <X className="size-3.5" />
-                  </Button>
+                  {open ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-9 shrink-0"
+                      aria-label={`Remove part ${part.label || position + 1} of ${problem.label}`}
+                      onClick={() => onRemovePart(position)}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -216,25 +218,22 @@ export function ProblemCard({
                 aria-label={`Solve each part of ${problem.label} on its own`}
                 className="mt-0.5"
               />
-              <span className="text-text-tertiary text-xs">
-                <span className="text-text-secondary">Solve each part on its own.</span>{' '}
-                {problem.separateParts
-                  ? `${formatCount(problem.parts.length, 'separate question')}, each with its own answer and its own check.`
-                  : 'One solution, answering all of them together. Leave it this way when a part needs the answer to an earlier one.'}
+              <span className="text-text-secondary text-sm">
+                Split into {problem.parts.length} questions
               </span>
             </label>
           ) : null}
 
           <button
             type="button"
-            className="text-text-tertiary hover:text-text-secondary mt-3 flex items-center gap-1 rounded-sm text-xs"
+            className="text-text-secondary hover:text-text-primary mt-3 flex min-h-9 items-center gap-1 rounded-sm text-sm"
             onClick={() => setOpen((current) => !current)}
             aria-expanded={open}
           >
             <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
             {/* The statement is already on screen in full, so this no longer reveals it:
                 it swaps the typeset reading for the raw text a correction is made in. */}
-            {open ? 'Done editing' : 'Edit the statement'}
+            {open ? 'Done editing' : 'Edit'}
           </button>
         </div>
 

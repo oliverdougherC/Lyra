@@ -191,22 +191,14 @@ describe('ClassHub', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows what is in the class on its tabs, so the counts are readable at a glance', async () => {
+  it('keeps task tab names stable without routine inventory counts', async () => {
     const { wrapper } = createWrapper()
-
     render(<ClassHub classId={1} tab="ask" />, { wrapper })
-
-    expect(await screen.findByRole('tab', { name: 'Files 2' })).toBeInTheDocument()
-    // Work counts the conversations, problem sets, drafts, and study artifacts together -
-    // one number for everything the student was doing, whatever the subsystem that owns
-    // each one is.
-    expect(screen.getByRole('tab', { name: 'Work 2' })).toBeInTheDocument()
-    // Every collection tab counts once its data has loaded, zero included, so the strip is
-    // consistent rather than counting only the tabs that happen to be non-empty (ui-overhaul
-    // 3.2). Ask is the front door, not a collection, so it carries no count.
-    expect(screen.getByRole('tab', { name: 'Practice 0' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument()
+    for (const name of ['Files', 'Work', 'Practice', 'Ask']) {
+      expect(await screen.findByRole('tab', { name })).toBeInTheDocument()
+    }
   })
+
   it('opens on a continuation surface: ask, resume, and the ways to start', async () => {
     const { wrapper } = createWrapper()
 
@@ -237,7 +229,7 @@ describe('ClassHub', () => {
 
     // Practice is the dominant way in: one balanced session, no choosing first. The rest of
     // the verbs stay one click away, and each goes somewhere real.
-    expect(screen.getByRole('button', { name: 'Practice now' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New quiz' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Solve a problem set' })).toHaveAttribute(
       'href',
       '/#/classes/1/solutions/new',
@@ -308,7 +300,7 @@ describe('ClassHub', () => {
     vi.spyOn(api, 'listDocuments').mockResolvedValue([])
     render(<ClassHub classId={1} tab="ask" />, { wrapper: createWrapper().wrapper })
     expect(await screen.findByRole('link', { name: 'Add course materials' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New quiz' })).not.toBeInTheDocument()
     expect(screen.queryByText('Summarize the material I uploaded')).not.toBeInTheDocument()
   })
 
@@ -321,7 +313,7 @@ describe('ClassHub', () => {
     render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     await screen.findByRole('textbox', { name: 'Ask about Continuous-Time Signals' })
-    expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New quiz' })).not.toBeInTheDocument()
   })
 
   it('says when the document list itself failed, and retries it on request', async () => {
@@ -333,7 +325,7 @@ describe('ClassHub', () => {
     render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     expect(await screen.findByText(/The document list did not load/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New quiz' })).not.toBeInTheDocument()
     // Not knowing what is uploaded is not the same as knowing nothing is.
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
 
@@ -343,7 +335,7 @@ describe('ClassHub', () => {
     ] as DocumentRead[])
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Practice now' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New quiz' })).toBeEnabled())
     expect(screen.queryByText(/The document list did not load/)).not.toBeInTheDocument()
   })
 
@@ -376,6 +368,6 @@ it('leads an unconfigured empty class to tutor setup and upload, while retaining
     '/#/classes/1?tab=files',
   )
   expect(screen.getByRole('button', { name: 'Start writing' })).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'New quiz' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Ask' })).not.toBeInTheDocument()
 })

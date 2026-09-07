@@ -39,7 +39,7 @@ export function BriefCard({ draftId }: { draftId: number }) {
   ) : null
 
   if (isPending) return <Skeleton className="mb-4 h-10 w-full" />
-  if (editing || (brief === null && editing)) {
+  if (editing) {
     return <BriefForm draftId={draftId} brief={brief ?? null} onDone={() => setEditing(false)} />
   }
   if (!brief) {
@@ -158,7 +158,7 @@ function BriefForm({
   return (
     <form
       aria-label="Edit the brief"
-      className="border-border/70 mb-4 flex flex-col gap-2.5 rounded-md border px-3 py-2.5"
+      className="@container border-border/70 mb-4 flex flex-col gap-2.5 rounded-md border px-3 py-2.5"
       onSubmit={async (event) => {
         event.preventDefault()
         try {
@@ -188,7 +188,7 @@ function BriefForm({
           className="text-sm"
         />
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 gap-3 @min-[28rem]:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-1">
           <Label htmlFor={`brief-type-${draftId}`} className="text-xs">
             Kind

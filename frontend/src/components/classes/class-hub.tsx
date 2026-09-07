@@ -24,14 +24,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { formatRelativeTime } from '@/lib/format'
-import { useSessions } from '@/lib/hooks/use-chat'
 import { useClass, useUpdateClass } from '@/lib/hooks/use-classes'
-import { useDocuments } from '@/lib/hooks/use-documents'
 import { useClassProfile } from '@/lib/hooks/use-profile'
-import { useDrafts } from '@/lib/hooks/use-drafts'
-import { useSolutions } from '@/lib/hooks/use-solutions'
-import { useStudyList } from '@/lib/hooks/use-study'
 import { cn } from '@/lib/utils'
 
 /**
@@ -93,11 +87,11 @@ export function readHubTab(value: string | null): HubTab {
  */
 const MARK_SIZE = [
   // text-3xl (1.875rem) x leading-tight (1.25), + mt-1.5, + text-sm's 1.25rem line box.
-  'size-[calc(1.875rem*1.25+0.375rem+1.25rem)]',
+  'size-10',
   // The same sum with the heading at md:text-4xl (2.25rem).
   'md:size-[calc(2.25rem*1.25+0.375rem+1.25rem)]',
   // The initials grow with the box, or a bigger mark just reads as more empty colour.
-  'text-lg md:text-xl',
+  'text-sm md:text-xl',
 ].join(' ')
 
 /**
@@ -110,11 +104,6 @@ const MARK_SIZE = [
 export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const router = useRouter()
   const classQuery = useClass(classId)
-  const { data: sessions } = useSessions(classId)
-  const { data: solutions } = useSolutions(classId)
-  const { data: study } = useStudyList(classId)
-  const { data: drafts } = useDrafts(classId)
-  const { data: documents } = useDocuments(classId)
   const { data: profile } = useClassProfile(classId)
   const updateClass = useUpdateClass()
 
@@ -125,18 +114,6 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const detailsTriggerRef = useRef<HTMLElement | null>(null)
 
   const klass = classQuery.data
-  const studyCount = study ? study.decks.length + study.quizzes.length : null
-  // Work is the getting-back-to-it list: the conversations, the problem sets, the half-
-  // written answers, and the study artifacts, in one count.
-  const workCount =
-    sessions && solutions && drafts && study
-      ? sessions.length +
-        solutions.length +
-        drafts.length +
-        study.decks.length +
-        study.quizzes.length
-      : null
-  const documentCount = documents?.length ?? klass?.document_count ?? null
   // Low-confidence facts Lyra has not been confirmed on are the only class facts that
   // still need the student: everything else is read-only. The count is the affordance,
   // the sheet is where the confirming happens.
@@ -168,7 +145,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
     // `min-h-0 flex-1` so the column can be measured against the window rather than against
     // its own contents: the Files tab hands the height it is given to the file list, and a
     // column sized by its contents would have nothing to hand over.
-    <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-6 pt-2 md:pt-6">
+    <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4 pt-2 md:gap-6 md:pt-6">
       <header className="flex flex-wrap items-start gap-4">
         {/* The mark and the words it names are one block, kept apart from the actions so
             they wrap as a unit on a narrow screen. */}
@@ -176,7 +153,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
             line of their own instead of squeezing the class name down to an ellipsis, which
             is what a 375px screen was doing to every course whose name is longer than a
             word. */}
-        <div className="flex min-w-[14rem] flex-1 items-start gap-4">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
           {klass ? (
             <CourseMark klass={klass} size="lg" className={MARK_SIZE} />
           ) : (
@@ -185,7 +162,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
 
           <div className="min-w-0 flex-1">
             {klass ? (
-              <h1 className="font-display text-3xl leading-tight text-pretty md:text-4xl">
+              <h1 className="font-display text-2xl leading-tight break-words text-pretty md:text-3xl">
                 {klass.name}
               </h1>
             ) : (
@@ -195,13 +172,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
                 middle dot wrapped onto a line by itself whenever the term and the activity
                 did not both fit. */}
             <p className="text-text-tertiary mt-1.5 flex flex-wrap items-center gap-2 text-sm">
-              {klass ? (
-                <span>
-                  {[subtitle, `Active ${formatRelativeTime(klass.last_active_at)}`]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
-              ) : null}
+              {klass ? <span>{subtitle}</span> : null}
               {klass?.archived ? (
                 <span className="text-text-tertiary border-border rounded-full border px-2 py-0.5 text-xs">
                   Archived
@@ -213,8 +184,8 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
                 // nudge rides on the class itself and opens the sheet where they are resolved.
                 <button
                   type="button"
-                  onClick={() => {
-                    detailsTriggerRef.current = document.activeElement as HTMLElement | null
+                  onClick={(event) => {
+                    detailsTriggerRef.current = event.currentTarget
                     setDetailsOpen(true)
                   }}
                   title="Open the class details to confirm them"
@@ -270,27 +241,17 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
       </header>
 
       <Tabs value={tab} onValueChange={selectTab} className="min-h-0 flex-1 gap-6">
-        {/* Scrolls rather than wraps: four task tabs with counts must fit 375px, and a tab
+        {/* Scrolls rather than wraps: four task tabs must fit 375px, and a tab
             bar on two lines stops reading as one control. */}
         <TabsList
           variant="line"
           aria-label="Class sections"
           className="shrink-0 overflow-x-auto overflow-y-hidden"
         >
-          <HubTabButton value="ask" label="Ask" count={null} active={tab === 'ask'} />
-          <HubTabButton
-            value="practice"
-            label="Practice"
-            count={studyCount}
-            active={tab === 'practice'}
-          />
-          <HubTabButton value="work" label="Work" count={workCount} active={tab === 'work'} />
-          <HubTabButton
-            value="files"
-            label="Files"
-            count={documentCount}
-            active={tab === 'files'}
-          />
+          <HubTabButton value="ask" label="Ask" active={tab === 'ask'} />
+          <HubTabButton value="practice" label="Practice" active={tab === 'practice'} />
+          <HubTabButton value="work" label="Work" active={tab === 'work'} />
+          <HubTabButton value="files" label="Files" active={tab === 'files'} />
         </TabsList>
 
         <TabsContent value="ask">
@@ -311,10 +272,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
             70svh before, which is a guess that is wrong on both sides: short windows had to
             be scrolled to reach the well, tall ones left a band of empty page beneath it. */}
         <TabsContent value="files" className="flex min-h-0 flex-1 flex-col gap-4">
-          <p className="text-text-secondary shrink-0 text-sm">
-            Everything Lyra reads for this class. Select files to move or delete them.
-          </p>
-          <div className="border-border min-h-0 flex-1 overflow-hidden rounded-md border">
+          <div className="border-border min-h-88 flex-1 overflow-hidden rounded-md border">
             <DocumentsPane classId={classId} variant="manage" />
           </div>
         </TabsContent>
@@ -354,21 +312,9 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
  * One section tab. The active tab is marked by the pen: a wobbled hand underline that hugs
  * the word itself, drawn in on selection, excluding the count superscript (design system
  * section 6). The default full-width line underline is suppressed so only the pen marks the
- * place. Counts are printed superscripts and, once their data has loaded, appear on every
- * collection tab including zero, so the strip is consistent rather than counting only some
- * of its tabs (ui-overhaul 3.2).
+ * place. Inventory counts belong with their lists, leaving navigation labels stable.
  */
-function HubTabButton({
-  value,
-  label,
-  count,
-  active,
-}: {
-  value: HubTab
-  label: string
-  count: number | null
-  active: boolean
-}) {
+function HubTabButton({ value, label, active }: { value: HubTab; label: string; active: boolean }) {
   return (
     <TabsTrigger value={value} className="after:hidden">
       {/* inline-block, so the absolutely positioned underline has a containing block the
@@ -377,14 +323,6 @@ function HubTabButton({
         {label}
         {active ? <HandUnderline /> : null}
       </span>
-      {/* A real space before the count, not only the margin: without it the tab announces
-          as "Files17", because JSX drops the newline between the label and this. */}
-      {count !== null ? (
-        <>
-          {' '}
-          <span className="text-text-tertiary text-xs tabular-nums">{count}</span>
-        </>
-      ) : null}
     </TabsTrigger>
   )
 }

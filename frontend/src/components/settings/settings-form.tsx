@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, ChevronRight, Info, RefreshCw, TriangleAlert } from 'lucide-react'
+import { AlertTriangle, Check, Info, RefreshCw, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -24,8 +24,8 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { DesktopBackupSection } from '@/components/settings/desktop-backup-section'
 import { DesktopUpdateSection } from '@/components/settings/desktop-update-section'
+import { SettingsDisclosure } from '@/components/settings/settings-disclosure'
 import { DesktopImportSection } from '@/components/settings/desktop-import-section'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, ApiError } from '@/lib/api'
 import { useClasses } from '@/lib/hooks/use-classes'
 import {
@@ -79,38 +79,80 @@ type TestState =
   | { status: 'error'; message: string }
 
 export function SettingsForm() {
-  const { data: settings, isPending, isError, error, refetch } = useSettings()
+  const { data: settings, isPending, isError, isFetching, error, refetch } = useSettings()
   const routeAnchor = useRouteAnchor()
   const navigationVersion = useNavigationVersion()
 
   useEffect(() => {
-    if (isPending || isError || !routeAnchor) return
-    if (!['extraction-enabled', 'endpoint-url', 'remote-ack', 'model'].includes(routeAnchor)) return
+    if (isPending || !settings || !routeAnchor) return
+    if (
+      ![
+        'extraction-enabled',
+        'endpoint-url',
+        'remote-ack',
+        'model',
+        'exa-api-key',
+        'allow-web-research',
+        'desktop-import',
+        'desktop-backup',
+        'desktop-update',
+        'context-window',
+        'parallel-concurrency',
+        'parallel-requests',
+      ].includes(routeAnchor)
+    )
+      return
     let target = document.getElementById(routeAnchor)
     if (target?.matches(':disabled')) target = document.getElementById('endpoint-url')
     if (!target) return
     target.focus({ preventScroll: true })
     target.scrollIntoView({ block: 'center', inline: 'nearest' })
-  }, [isPending, isError, routeAnchor, navigationVersion])
+  }, [isPending, settings, routeAnchor, navigationVersion])
 
   if (isPending) return <SettingsSkeleton />
 
-  if (isError) {
+  if (isError && !settings) {
     return (
       <Alert variant="destructive">
         <AlertTriangle />
         <AlertTitle>Could not load your settings</AlertTitle>
         <AlertDescription className="text-danger-text">
           <p>{error instanceof ApiError ? error.message : 'Could not read settings. Try again.'}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void refetch()}>
-            Retry
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            disabled={isFetching}
+            onClick={() => void refetch()}
+          >
+            {isFetching ? 'Retrying…' : 'Retry'}
           </Button>
         </AlertDescription>
       </Alert>
     )
   }
 
-  return <SettingsSections settings={settings} />
+  return (
+    <>
+      {isError && (
+        <Alert className="mb-6">
+          <AlertTitle>Settings could not refresh</AlertTitle>
+          <AlertDescription>
+            Your last loaded settings are still available.
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              {isFetching ? 'Retrying…' : 'Retry settings'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      <SettingsSections settings={settings} />
+    </>
+  )
 }
 
 function SettingsSection({
@@ -319,7 +361,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
       </header>
 
       <SettingsSection
-        title="Setup"
+        title="Tutor connection"
         description="Connect the model that answers questions about your course materials."
       >
         {settings.local_model_setup && (
@@ -344,11 +386,17 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               }}
             />
             <FieldDescription>
-              Lyra works best with a local model server. Remote endpoints send your documents over
-              the network.
+              Questions and relevant course passages go to this endpoint. Control whole-document
+              sharing in Privacy below.
             </FieldDescription>
             <div className="mt-2">
-              <EndpointLocalityBadge />
+              <EndpointLocalityBadge
+                className={
+                  settings.remote_ack
+                    ? 'border-border text-text-secondary hover:border-border hover:text-text-primary'
+                    : undefined
+                }
+              />
             </div>
             {saveStatus('endpoint_url')}
           </Field>
@@ -461,8 +509,61 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
       </SettingsSection>
 
       <SettingsSection
-        title="Research"
-        description="Let the writer find public sources on the web."
+        title="Privacy"
+        description="See what stays on this machine and control what may leave it."
+      >
+        <PrivacySection settings={settings} onSave={save} saveStatus={saveStatus} />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Appearance"
+        description="Choose the visual mode Lyra uses on this device."
+      >
+        <RadioGroup
+          value={theme}
+          onValueChange={(value) => setTheme(value as Theme)}
+          className="gap-2"
+        >
+          {THEME_CHOICES.map(([value, label, description]) => (
+            <Label
+              key={value}
+              htmlFor={`theme-${value}`}
+              className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
+                theme === value
+                  ? 'border-accent-primary bg-accent-surface/50'
+                  : 'border-border bg-card hover:bg-muted'
+              }`}
+            >
+              <RadioGroupItem value={value} id={`theme-${value}`} />
+              <span
+                aria-hidden
+                className={`size-5 shrink-0 rounded-sm border ${THEME_SWATCHES[value]}`}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{label}</span>
+                <span className="block text-sm text-muted-foreground">{description}</span>
+              </span>
+            </Label>
+          ))}
+        </RadioGroup>
+      </SettingsSection>
+
+      <SettingsDisclosure
+        title="Web research"
+        description={
+          settings.allow_web_research
+            ? 'Enabled for writing. Manage permission and the Exa connection.'
+            : 'Optional public sources for writing.'
+        }
+        anchors={['exa-api-key', 'allow-web-research']}
+        attention={
+          testExa.isPending ||
+          testExa.isError ||
+          testExa.data?.ok === false ||
+          ['exa_api_key', 'allow_web_research'].some(
+            (field) => saves[field] && saves[field].status !== 'saved',
+          )
+        }
       >
         <FieldGroup>
           <Field>
@@ -513,6 +614,11 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 {testExa.isPending ? <Spinner /> : null}
                 Test Exa
               </Button>
+              {testExa.isError && (
+                <p role="alert" className="text-danger-text text-sm">
+                  Could not test web research. Try Test Exa again.
+                </p>
+              )}
               <ExaTestOutcome
                 hasKey={settings.exa_api_key_set}
                 pending={testExa.isPending}
@@ -538,59 +644,27 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
             {saveStatus('allow_web_research')}
           </Field>
         </FieldGroup>
-      </SettingsSection>
+      </SettingsDisclosure>
 
-      <SettingsSection
-        title="Privacy"
-        description="See what stays on this machine and control what may leave it."
-      >
-        <PrivacySection settings={settings} onSave={save} saveStatus={saveStatus} />
-      </SettingsSection>
-
-      <SettingsSection
-        title="Appearance"
-        description="Choose the visual mode Lyra uses on this device."
-      >
-        <RadioGroup
-          value={theme}
-          onValueChange={(value) => setTheme(value as Theme)}
-          className="gap-2"
-        >
-          {THEME_CHOICES.map(([value, label, description]) => (
-            <Label
-              key={value}
-              htmlFor={`theme-${value}`}
-              className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
-                theme === value
-                  ? 'border-accent-primary bg-accent-surface/50'
-                  : 'border-border bg-card hover:bg-muted'
-              }`}
-            >
-              <RadioGroupItem value={value} id={`theme-${value}`} />
-              <span
-                aria-hidden
-                className={`size-5 shrink-0 rounded-sm border ${THEME_SWATCHES[value]}`}
-              />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">{label}</span>
-                <span className="block text-sm text-muted-foreground">{description}</span>
-              </span>
-            </Label>
-          ))}
-        </RadioGroup>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Import existing Lyra data"
-        description="Bring classes and documents from an older Lyra installation. The original folder stays untouched."
-      >
-        <DesktopImportSection />
-      </SettingsSection>
+      <DesktopImportSection />
 
       <DesktopBackupSection unsavedSettings={unsavedSettings} />
       <DesktopUpdateSection unsavedSettings={unsavedSettings} />
 
-      <AdvancedSection>
+      <SettingsDisclosure
+        title="Advanced"
+        description="Model limits, capability checks, and per-class research permissions."
+        anchors={['context-window', 'parallel-concurrency', 'parallel-requests']}
+        attention={
+          testTools.isPending ||
+          testTools.isError ||
+          testVision.isPending ||
+          testVision.isError ||
+          ['context_window', 'parallel_concurrency', 'parallel_requests'].some(
+            (field) => saves[field] && saves[field].status !== 'saved',
+          )
+        }
+      >
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="context-window">Context window</FieldLabel>
@@ -724,42 +798,8 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
 
           <ClassResearchOverrides />
         </FieldGroup>
-      </AdvancedSection>
+      </SettingsDisclosure>
     </div>
-  )
-}
-
-/**
- * The most technical surface on the page: context size, endpoint capability checks, parallel
- * writer tuning, and per-course research. Real configuration, but for the minority of setups
- * that need it - so it stays collapsed by default and never competes with the sections a
- * student actually uses.
- */
-function AdvancedSection({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <section className="border-border/70 border-t pt-6">
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="focus-visible:ring-ring [&[data-state=open]>svg]:rotate-90 flex w-full items-center justify-between gap-3 rounded-md text-left focus-visible:ring-2 focus-visible:outline-none">
-          <div className="min-w-0">
-            <h2 className="font-heading text-xl leading-tight font-medium tracking-tight">
-              Advanced
-            </h2>
-            <p className="text-text-secondary mt-1 text-sm">
-              Runtime tuning and diagnostics for unusual setups: context size, endpoint capability
-              checks, parallel writer requests, and per-course research.
-            </p>
-          </div>
-          <ChevronRight
-            aria-hidden
-            className="size-5 shrink-0 text-text-tertiary transition-transform"
-          />
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="mt-5">{children}</div>
-        </CollapsibleContent>
-      </Collapsible>
-    </section>
   )
 }
 
@@ -786,7 +826,11 @@ function ClassResearchOverrides() {
 function ClassResearchOverride({ course }: { course: ClassRead }) {
   const writerSettings = useClassWriterSettings(course.id)
   const update = useUpdateClassWriterSettings()
-  const override = writerSettings.data?.overrides.allow_web_research
+  const override = writerSettings.data?.overrides?.allow_web_research
+  const effective = writerSettings.data?.effective?.allow_web_research
+  const hasPermission =
+    (override === null || typeof override === 'boolean') && typeof effective === 'boolean'
+  const unavailable = writerSettings.isError || (!writerSettings.isPending && !hasPermission)
   const value =
     override === null || override === undefined ? 'inherit' : override ? 'allow' : 'block'
 
@@ -807,20 +851,33 @@ function ClassResearchOverride({ course }: { course: ClassRead }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{course.name}</p>
-        {writerSettings.data ? (
+        <p className="text-sm font-medium break-words">{course.name}</p>
+        {hasPermission ? (
           <p className="text-text-secondary text-xs">
-            Effective: {writerSettings.data.effective.allow_web_research ? 'allowed' : 'blocked'}
+            Effective: {effective ? 'allowed' : 'blocked'}
           </p>
         ) : null}
+        {unavailable && (
+          <div role="alert" className="text-danger-text text-sm">
+            <p>Could not load research permission.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={writerSettings.isFetching}
+              onClick={() => void writerSettings.refetch()}
+            >
+              {writerSettings.isFetching ? 'Retrying…' : 'Retry permission'}
+            </Button>
+          </div>
+        )}
       </div>
       <Select
-        value={value}
-        disabled={writerSettings.isPending || update.isPending}
+        value={hasPermission ? value : ''}
+        disabled={!hasPermission || writerSettings.isFetching || update.isPending}
         onValueChange={(next) => void change(next)}
       >
         <SelectTrigger size="sm" className="w-28" aria-label={`${course.name} web research`}>
-          <SelectValue />
+          <SelectValue placeholder={writerSettings.isPending ? 'Loading…' : 'Unavailable'} />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="inherit">Inherit</SelectItem>
@@ -874,9 +931,16 @@ function PrivacySection({ settings, onSave, saveStatus }: PrivacySectionProps) {
       </div>
 
       {isRemote ? (
-        <Alert variant="destructive">
+        <Alert
+          variant={settings.remote_ack ? 'default' : 'destructive'}
+          role={settings.remote_ack ? 'note' : 'alert'}
+        >
           <Info />
-          <AlertTitle>This endpoint is not on your machine</AlertTitle>
+          <AlertTitle>
+            {settings.remote_ack
+              ? 'Remote document use allowed'
+              : 'Allow document text to leave this device?'}
+          </AlertTitle>
           <AlertDescription>
             <div className="mt-2 flex items-start gap-3">
               <Switch
