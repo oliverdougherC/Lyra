@@ -11,8 +11,34 @@ Python, or local server platform. The shell selects an ephemeral loopback listen
 socket and per-launch credential over inherited descriptors/stdin, and reclaims the owned sidecar
 on quit.
 
-Quit the running app gracefully before replacing its bundle. Build a development-signed local
-review artifact with the same identity across rebuilds:
+### One local installation
+
+`/Applications/Lyra.app` is the canonical local installation. Quit Lyra, then run:
+
+```bash
+./scripts/build_local_app.sh
+```
+
+The command builds the current checkout, signs with the same development identity, verifies the
+installed frozen backend, and opens `/Applications/Lyra.app`. It consumes the temporary build-output
+app after successful installation, so Spotlight has one app to launch. Installation stages and
+rollback copies stay in a hidden `.noindex` directory and are removed after success. If verification
+fails, the previous installed app is restored. A running app is never overwritten.
+
+Application data, models, logs, and Keychain settings remain outside the bundle and are preserved.
+This builds the current checkout; it does not fetch or switch branches. Use current `main` for your
+normal installation, and check the source revision before intentionally installing another branch.
+Eject mounted installer DMGs when finished; their app copies can otherwise appear in macOS searches.
+
+For agents and contributors delivering local product changes, use this command instead of leaving
+an app in a worktree. If you already built and signed a candidate, quit Lyra and install it with
+`uv run python scripts/install_local_app.py src-tauri/target/release/bundle/macos/Lyra.app`, then open
+`/Applications/Lyra.app`.
+
+### Packaging steps for release and troubleshooting
+
+These lower-level steps leave a review artifact until the installer above consumes it. Build with
+the same identity across rebuilds:
 
 ```bash
 python3 scripts/release_metadata.py --check

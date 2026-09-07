@@ -18,7 +18,13 @@ tests, or a frontend-only build is not sufficient delivery.
   verification fails, resolve the failure or explicitly report the blocker; do not
   present a source-only fix as complete.
 
-The local review bundle is `src-tauri/target/release/bundle/macos/Lyra.app`.
+The canonical local app is `/Applications/Lyra.app`. For local product delivery, quit Lyra and
+run `./scripts/build_local_app.sh`, then verify the installed app opens. This command builds,
+signs, verifies, and replaces the canonical install, removing the temporary build-output app.
+Do not leave runnable Lyra.app copies in worktrees or launch a stale review bundle. The
+`src-tauri/target/release/bundle/macos/Lyra.app` path is an intermediate build artifact only.
+Do not replace a newer build with an older branch merely because its version string matches;
+check the embedded source revision and the intended checkout before installing.
 
 ## Documentation impact
 
