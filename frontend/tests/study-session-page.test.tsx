@@ -9,17 +9,20 @@ import type { DeckSummary, StudyArtifactRead, StudyStatus } from '@/types'
 
 // The artifact id used for deck tests vs quiz tests.
 let artifactId = '8'
+let reviewMode = ''
 
 vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({ id: '1', artifactId }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(reviewMode),
   usePathname: () => `/classes/1/study/${artifactId}`,
 }))
 
 vi.mock('@/components/study/deck-session', () => ({
-  DeckSession: ({ deckId }: { deckId: number }) => (
-    <div data-testid="deck-session">DeckSession for {deckId}</div>
+  DeckSession: ({ deckId, dueOnly }: { deckId: number; dueOnly?: boolean }) => (
+    <div data-testid="deck-session" data-due-only={dueOnly}>
+      DeckSession for {deckId}
+    </div>
   ),
 }))
 vi.mock('@/components/study/quiz-runner', () => ({
@@ -94,6 +97,7 @@ function status(overrides: Partial<StudyStatus>): StudyStatus {
 beforeEach(() => {
   vi.restoreAllMocks()
   artifactId = '8'
+  reviewMode = ''
 })
 
 describe('StudySessionPage', () => {
@@ -278,4 +282,12 @@ describe('StudySessionPage', () => {
     const backLink = screen.getByRole('link', { name: /Back to practice/ })
     expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=practice')
   })
+})
+
+it('carries the explicit due-review route into the deck session', async () => {
+  reviewMode = 'review=due'
+  vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [deck({})], quizzes: [] })
+  vi.spyOn(api, 'getDeckStatus').mockResolvedValue(status({}))
+  render(<StudySessionPage />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByTestId('deck-session')).toHaveAttribute('data-due-only', 'true')
 })

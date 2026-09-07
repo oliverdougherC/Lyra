@@ -95,16 +95,19 @@ function describeDeck(deck: DeckSummary): string {
   if (deck.state === 'pending' || deck.state === 'generating') {
     return deck.stage_detail ?? stateLabel(deck.state)
   }
-  const buckets = deck.buckets
-  const counts = `new ${buckets.new} · learning ${buckets.learning} · mastered ${buckets.mastered}`
-  return `${formatCount(deck.cards_total, 'card')} · ${counts}`
+  return formatCount(deck.cards_total, 'card')
 }
 
 function describeQuiz(quiz: StudyArtifactRead): string {
   if (quiz.state === 'pending' || quiz.state === 'generating') {
     return quiz.stage_detail ?? stateLabel(quiz.state)
   }
-  return formatCount(quiz.problems_total ?? 0, 'question')
+  const size = formatCount(quiz.problems_total ?? 0, 'question')
+  return quiz.state === 'ready' &&
+    quiz.active_attempt_id != null &&
+    quiz.answered_count !== undefined
+    ? `${size} · ${quiz.answered_count} answered`
+    : size
 }
 
 /** A deck or quiz being renamed or deleted; the kind picks the mutation. */
@@ -112,6 +115,30 @@ type StudyTarget = { kind: 'deck' | 'quiz'; id: number; title: string }
 
 /** Every deck and quiz in a class, with the actions the solutions panel taught. */
 export function ClassStudyPanel({ classId }: { classId: number }) {
+  return <StudyList key={classId} classId={classId} />
+}
+
+function StudyList({ classId }: { classId: number }) {
+  const storageKey = `lyra:class:${classId}:practice-list`
+  const [view, setView] = useState(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? '{}')
+      return {
+        query: typeof saved.query === 'string' ? saved.query : '',
+        limit: Number.isInteger(saved.limit) && saved.limit >= 20 ? saved.limit : 20,
+      }
+    } catch {
+      return { query: '', limit: 20 }
+    }
+  })
+  function updateView(next: typeof view) {
+    setView(next)
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(next))
+    } catch {
+      /* Browsing still works without storage. */
+    }
+  }
   const router = useRouter()
   const study = useStudyList(classId)
   const documents = useDocuments(classId)
@@ -181,29 +208,75 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
     )
   }
 
-  if (study.isError) {
+  if (study.isError && !study.data) {
     return (
       <Alert variant="destructive">
         <AlertTitle>Could not load your study tools</AlertTitle>
         <AlertDescription>
           <p>{study.error instanceof ApiError ? study.error.message : 'Something went wrong.'}</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => void study.refetch()}>
-            Retry
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            disabled={study.isFetching}
+            onClick={() => void study.refetch()}
+          >
+            {study.isFetching ? 'Retrying…' : 'Retry'}
           </Button>
         </AlertDescription>
       </Alert>
     )
   }
 
-  const { decks, quizzes } = study.data
+  const { decks, quizzes } = study.data!
   const empty = decks.length === 0 && quizzes.length === 0
+  const matches = [...decks, ...quizzes]
+    .filter((item) =>
+      item.title.toLocaleLowerCase().includes(view.query.trim().toLocaleLowerCase()),
+    )
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+  const visibleIds = new Set(matches.slice(0, view.limit).map((item) => item.id))
+  const visibleDecks = decks.filter((item) => visibleIds.has(item.id))
+  const visibleQuizzes = quizzes.filter((item) => visibleIds.has(item.id))
+  const dueDeck = decks.find((deck) => deck.state === 'ready' && deck.due_count > 0)
+  const activeQuiz = quizzes.find(
+    (quiz) => quiz.state === 'ready' && quiz.active_attempt_id != null,
+  )
+  const recommended = dueDeck ?? activeQuiz
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-text-secondary text-sm">
-          Flashcard decks and quizzes Lyra writes from this class&apos;s documents.
-        </p>
+      {study.isError ? (
+        <Alert variant="destructive">
+          <AlertTitle>Could not refresh your study tools</AlertTitle>
+          <AlertDescription>
+            Previously loaded study tools remain available.
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={study.isFetching}
+              onClick={() => void study.refetch()}
+            >
+              {study.isFetching ? 'Retrying…' : 'Retry study tools'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {recommended ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            onClick={() =>
+              router.push(
+                `/classes/${classId}/study/${recommended.id}${dueDeck ? '?review=due' : ''}`,
+              )
+            }
+          >
+            {dueDeck ? 'Review due' : 'Continue quiz'}
+          </Button>
+          <span className="min-w-0 flex-1 break-words text-sm">{recommended.title}</span>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-end gap-3">
         {!empty ? (
           <div className="flex shrink-0 gap-2">
             <DropdownMenu>
@@ -227,10 +300,11 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
             <Button
               size="sm"
               onClick={startPractice}
-              disabled={createQuiz.isPending || !documentsLoaded}
+              variant={recommended ? 'outline' : 'default'}
+              disabled={createQuiz.isPending || !documentsLoaded || readyCount === 0}
             >
               {createQuiz.isPending ? <Spinner /> : null}
-              Practice now
+              New quiz
             </Button>
           </div>
         ) : null}
@@ -241,13 +315,42 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
           thing, and says so rather than leaving the button dead without a word. */}
       {documents.isError ? (
         <p className="text-text-secondary flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-          <span>The document list did not load, so Practice now cannot tell what is ready.</span>
+          <span>The document list did not load, so New quiz cannot tell what is ready.</span>
           <Button variant="outline" size="sm" onClick={() => void documents.refetch()}>
             Retry
           </Button>
         </p>
       ) : null}
 
+      {documentsLoaded && readyCount === 0 ? (
+        <p className="text-text-secondary text-sm">
+          Add a document in Files and wait for it to be ready before creating a quiz.
+        </p>
+      ) : null}
+      {!empty ? (
+        <p className="text-text-tertiary text-xs">
+          New quiz uses all ready class documents. Choose New to select sources.
+        </p>
+      ) : null}
+      {decks.length + quizzes.length >= 10 || view.query ? (
+        <div className="flex items-center gap-2">
+          <Input
+            type="search"
+            aria-label="Search practice by title"
+            placeholder="Search practice"
+            value={view.query}
+            onChange={(event) => updateView({ query: event.target.value, limit: 20 })}
+          />
+          {view.query ? (
+            <Button variant="ghost" onClick={() => updateView({ query: '', limit: 20 })}>
+              Clear search
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {!empty && matches.length === 0 ? (
+        <p role="status">No practice matches this search.</p>
+      ) : null}
       {empty ? (
         <Empty className="py-12">
           <EmptyHeader>
@@ -256,31 +359,33 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
             </EmptyMedia>
             {/* "No decks or quizzes yet", not "nothing to study from": this state means
                 no saved study artifacts exist, and in a class full of ready documents
-                Practice now works perfectly well from here. */}
+                New quiz works perfectly well from here. */}
             <EmptyTitle>No decks or quizzes yet</EmptyTitle>
             <EmptyDescription>
-              Practice now writes a quiz from everything Lyra has read for this class. Or build a
-              deck or quiz your own way, choosing the sources and difficulty yourself.
+              Create a quiz from all ready class documents, or choose your own sources.
             </EmptyDescription>
           </EmptyHeader>
           <div className="mt-2 flex flex-wrap justify-center gap-2">
-            <Button onClick={startPractice} disabled={createQuiz.isPending || !documentsLoaded}>
+            <Button
+              onClick={startPractice}
+              disabled={createQuiz.isPending || !documentsLoaded || readyCount === 0}
+            >
               {createQuiz.isPending ? <Spinner /> : null}
-              Practice now
+              New quiz
             </Button>
             <Button variant="outline" onClick={() => setCreating('deck')}>
               New deck
             </Button>
             <Button variant="outline" onClick={() => setCreating('quiz')}>
-              New quiz
+              Choose quiz sources
             </Button>
           </div>
         </Empty>
       ) : (
         <>
-          {decks.length > 0 ? (
+          {visibleDecks.length > 0 ? (
             <StudySection title="Decks" icon={<Layers aria-hidden className="size-4" />}>
-              {decks.map((deck) => (
+              {visibleDecks.map((deck) => (
                 <li key={deck.id}>
                   <StudyRow
                     classId={classId}
@@ -295,9 +400,9 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
             </StudySection>
           ) : null}
 
-          {quizzes.length > 0 ? (
+          {visibleQuizzes.length > 0 ? (
             <StudySection title="Quizzes" icon={<ListChecks aria-hidden className="size-4" />}>
-              {quizzes.map((quiz) => (
+              {visibleQuizzes.map((quiz) => (
                 <li key={quiz.id}>
                   <StudyRow
                     classId={classId}
@@ -313,6 +418,11 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
         </>
       )}
 
+      {matches.length > view.limit ? (
+        <Button variant="outline" onClick={() => updateView({ ...view, limit: view.limit + 20 })}>
+          Show more practice ({matches.length - view.limit} remaining)
+        </Button>
+      ) : null}
       <CreateStudyDialog
         classId={classId}
         kind={creating}
@@ -420,25 +530,29 @@ function StudyRow({
   return (
     <div className="group border-border bg-card hover:border-border-strong focus-within:border-border-strong relative flex items-center rounded-md border transition-colors">
       <Link
-        href={`/classes/${classId}/study/${artifact.id}`}
-        className="focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-4 rounded-md py-3 pr-1 pl-4 focus-visible:ring-2 focus-visible:outline-none"
+        href={`/classes/${classId}/study/${artifact.id}${dueCount > 0 ? '?review=due' : ''}`}
+        className="focus-visible:ring-ring flex min-w-0 flex-1 flex-wrap items-center gap-2 rounded-md py-3 pr-1 pl-4 focus-visible:ring-2 focus-visible:outline-none"
       >
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-text-primary truncate font-medium">{artifact.title}</span>
-          <span className="text-text-tertiary truncate text-xs">
+        <span className="flex min-w-0 basis-40 flex-1 flex-col gap-1">
+          <span className="text-text-primary break-words font-medium">{artifact.title}</span>
+          <span className="text-text-tertiary break-words text-xs">
             {description} · {formatRelativeTime(artifact.updated_at)}
           </span>
         </span>
 
-        {dueCount > 0 ? <Badge variant="default">{dueCount} due</Badge> : null}
+        {dueCount > 0 ? <Badge variant="default">Review due · {dueCount}</Badge> : null}
         {failed ? (
           <span className="text-danger-text inline-flex shrink-0 items-center gap-1.5 text-xs">
             <FileWarning className="size-3.5" aria-hidden />
             {stateLabel(artifact.state)}
           </span>
-        ) : (
+        ) : artifact.state === 'ready' && artifact.kind === 'quiz' ? (
+          <span className="text-text-secondary text-xs">
+            {artifact.active_attempt_id != null ? 'Continue quiz' : 'Open quiz'}
+          </span>
+        ) : artifact.state !== 'ready' ? (
           <span className="text-text-tertiary shrink-0 text-xs">{stateLabel(artifact.state)}</span>
-        )}
+        ) : null}
       </Link>
 
       <div className="shrink-0 pr-2">

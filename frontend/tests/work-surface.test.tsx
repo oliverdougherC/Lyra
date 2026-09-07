@@ -516,6 +516,30 @@ describe('the contextual agent work surface (PLA-401)', () => {
     expect(screen.getByText(/each still need their own approval/)).toBeInTheDocument()
   })
 
+  it('surfaces failed command results without opening settled history', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    vi.spyOn(api, 'listAgentCommands').mockResolvedValue([
+      command({ state: 'failed', exit_code: 1, stderr_text: 'Required fixture is missing' }),
+    ])
+    const { wrapper } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    const failure = await screen.findByText('1 result needs attention')
+    expect(failure).toBeVisible()
+    fireEvent.click(failure)
+    expect(await screen.findByText('Required fixture is missing')).toBeVisible()
+  })
+
+  it('keeps successful activity history compact and removes routine event counts', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({ tool: 'read_file', target_kind: 'file', target_id: 'main.py' }),
+    ])
+    const { wrapper } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    expect(await screen.findByRole('button', { name: 'Activity history' })).toBeVisible()
+    expect(screen.queryByText(/activity events/)).not.toBeInTheDocument()
+  })
+
   it('keeps terminal work out of the primary band', async () => {
     // The list endpoints return every row in scope, so a finished change (applied or
     // rejected) or a settled command (completed or rejected) is history, not an
@@ -545,7 +569,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
     expect(screen.queryAllByText('pytest')).toHaveLength(0)
     // ...but they are not lost: the collapsed Details/audit carries them as settled
     // results, findable without being actionable.
-    const details = screen.getByRole('button', { name: /Details/i })
+    const details = screen.getByRole('button', { name: /Activity history/i })
     fireEvent.click(details)
     expect(await screen.findByText('main.py')).toBeInTheDocument()
     expect(screen.getByText('Applied', { exact: true })).toBeInTheDocument()
@@ -574,7 +598,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
 
     await waitFor(() => expect(api.listAgentWorkspaceChanges).toHaveBeenCalled())
     // The collapsed audit strip is present...
-    const details = screen.getByRole('button', { name: /Details/i })
+    const details = screen.getByRole('button', { name: /Activity history/i })
     expect(details).toBeInTheDocument()
     // ...with nothing live in the band: no actions, and the settled rows stay
     // inside the collapsed section.

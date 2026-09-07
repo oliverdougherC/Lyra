@@ -27,6 +27,7 @@ import {
 import { useMessages } from '@/lib/hooks/use-chat'
 import { ApiError, api } from '@/lib/api'
 import { parseTimestamp } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import type { AgentAuditEventRead, AgentWorkspaceChangeRead } from '@/types'
 import { hunksAreStale } from './types'
 import type { AgentToolActivity } from './types'
@@ -393,27 +394,39 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     { label: 'Commands', query: commands },
     { label: 'Access requests', query: dismissals },
   ].filter(({ query }) => query.isError)
-  const hasWork =
+  // Failures remain discoverable even when the rest of the run is settled. A later
+  // successful attempt at the same tool/target supersedes its old failure.
+  const latestActivity = new Map<string, AgentToolActivity>()
+  for (const entry of activityEntries)
+    latestActivity.set(`${entry.title}:${entry.targetLabel}`, entry)
+  const attentionCount =
+    [...latestActivity.values()].filter(
+      (entry) => entry.status === 'failed' || entry.status === 'disabled',
+    ).length +
+    settledChanges.filter((change) => change.state === 'failed').length +
+    settledCommands.filter((command) => command.state === 'failed' || command.state === 'timed_out')
+      .length
+  const hasLiveWork =
     workspaceError ||
     failedQueries.length > 0 ||
     pendingRequests.length > 0 ||
     pendingChanges.length > 0 ||
     pendingCommands.length > 0 ||
-    settledCount > 0 ||
     failedTurn !== null ||
-    hasActivity ||
     // The bounded path entry is live state the student is in the middle of: the surface
     // exists exactly as long as the form is on screen.
     cardPathEntryVisible
 
-  // The surface is purely contextual: nothing live, nothing rendered. The attached
-  // workspace lives in the composer's context chip, so an idle state has no surface of
-  // its own - no docked strip, no setup block, no second composer.
-  if (!hasWork) return null
+  // Idle workspaces need no setup surface. A completed run retains only its compact
+  // conversation history disclosure; pending work keeps its explicit review entry points.
+  if (!hasLiveWork && !hasActivity && settledCount === 0) return null
 
   return (
     <section
-      className="border-border bg-background flex min-h-0 flex-col gap-3 border-b px-4 py-3"
+      className={cn(
+        'bg-background flex min-h-0 flex-col px-4',
+        hasLiveWork ? 'border-border gap-3 border-b py-3' : 'py-1',
+      )}
       aria-label="Agent work"
     >
       {workspaceError ? (
@@ -511,47 +524,57 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
       ))}
 
       {pendingChanges.map((change) => (
-        <WorkspaceChangeReviewRail
-          key={change.id}
-          busy={effectBusy}
-          change={{
-            id: change.id,
-            path: change.path,
-            rationale: change.rationale ?? undefined,
-            state: change.state,
-            currentContent: change.current_content ?? undefined,
-            proposedContent: change.proposed_content ?? undefined,
-            hunks: change.hunks,
-          }}
-          onRefresh={() => void recheckChange(change.id)}
-          onAcceptHunk={(hunk) => void acceptHunks(change.id, [hunk])}
-          onAcceptAll={() => void acceptHunks(change.id, change.hunks)}
-          onRejectAll={() => void rejectChange(change.id)}
-        />
+        <details key={change.id} open={pendingChanges.length === 1} className="group">
+          <summary className="cursor-pointer py-2 text-sm font-medium break-words">
+            Review file: {change.path} ·{' '}
+            {change.state === 'stale' ? 'File changed' : 'Needs approval'}
+          </summary>
+          <WorkspaceChangeReviewRail
+            busy={effectBusy}
+            change={{
+              id: change.id,
+              path: change.path,
+              rationale: change.rationale ?? undefined,
+              state: change.state,
+              currentContent: change.current_content ?? undefined,
+              proposedContent: change.proposed_content ?? undefined,
+              hunks: change.hunks,
+            }}
+            onRefresh={() => void recheckChange(change.id)}
+            onAcceptHunk={(hunk) => void acceptHunks(change.id, [hunk])}
+            onAcceptAll={() => void acceptHunks(change.id, change.hunks)}
+            onRejectAll={() => void rejectChange(change.id)}
+          />
+        </details>
       ))}
 
       {pendingCommands.map((command) => (
-        <CommandConfirmationCard
-          key={command.id}
-          busy={effectBusy}
-          command={{
-            id: command.id,
-            argv: command.argv,
-            cwd: command.relative_cwd,
-            reason: command.reason,
-            expectedSignal: command.expected_signal ?? undefined,
-            timeoutSeconds: command.timeout_seconds,
-            networkRisk: 'unknown',
-            state: command.state,
-            stdout: command.stdout_text ?? undefined,
-            stderr: command.stderr_text ?? undefined,
-            exitCode: command.exit_code,
-            truncated: command.truncated,
-            confirmedAtLabel: command.confirmed_at ?? undefined,
-          }}
-          onConfirm={() => void runCommand(command.id)}
-          onReject={() => void rejectCommand(command.id)}
-        />
+        <details key={command.id} open={pendingCommands.length === 1}>
+          <summary className="cursor-pointer py-2 text-sm font-medium break-words">
+            Review command: {command.argv.join(' ')} ·{' '}
+            {command.state === 'running' ? 'Running' : 'Needs approval'}
+          </summary>
+          <CommandConfirmationCard
+            busy={effectBusy}
+            command={{
+              id: command.id,
+              argv: command.argv,
+              cwd: command.relative_cwd,
+              reason: command.reason,
+              expectedSignal: command.expected_signal ?? undefined,
+              timeoutSeconds: command.timeout_seconds,
+              networkRisk: 'unknown',
+              state: command.state,
+              stdout: command.stdout_text ?? undefined,
+              stderr: command.stderr_text ?? undefined,
+              exitCode: command.exit_code,
+              truncated: command.truncated,
+              confirmedAtLabel: command.confirmed_at ?? undefined,
+            }}
+            onConfirm={() => void runCommand(command.id)}
+            onReject={() => void rejectCommand(command.id)}
+          />
+        </details>
       ))}
 
       {hasActivity || settledCount > 0 ? (
@@ -559,22 +582,16 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
           <CollapsibleTrigger asChild>
             <button
               type="button"
-              className="border-border hover:bg-accent flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm font-medium"
+              className="text-text-secondary hover:text-text-primary flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-md py-1.5 text-left text-sm"
               aria-expanded={detailsOpen}
             >
-              <span>Details</span>
-              <span className="text-text-tertiary text-xs">
-                {[
-                  (activity.data ?? []).length > 0
-                    ? `${(activity.data ?? []).length} activity events`
-                    : null,
-                  settledCount > 0
-                    ? `${settledCount} settled ${settledCount === 1 ? 'result' : 'results'}`
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </span>
+              <span>{detailsOpen ? 'Hide activity history' : 'Activity history'}</span>
+              {attentionCount > 0 ? (
+                <span className="text-danger-text font-medium">
+                  {attentionCount} {attentionCount === 1 ? 'result needs' : 'results need'}{' '}
+                  attention
+                </span>
+              ) : null}
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent className="flex flex-col gap-4 pt-3">
@@ -587,14 +604,14 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
               <div className="flex flex-col gap-3" aria-label="Settled work">
                 {settledChanges.map((change) => (
                   <div key={change.id} className="flex items-center justify-between gap-2">
-                    <span className="break-all font-mono text-xs">{change.path}</span>
+                    <span className="break-all font-mono text-sm">{change.path}</span>
                     <ChangeStateBadge state={change.state} />
                   </div>
                 ))}
                 {settledCommands.map((command) => (
                   <div key={command.id} className="flex flex-col gap-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="break-all font-mono text-xs">{command.argv.join(' ')}</span>
+                      <span className="break-all font-mono text-sm">{command.argv.join(' ')}</span>
                       <span className="flex shrink-0 items-center gap-2">
                         {command.exit_code !== null ? (
                           <span className="text-text-tertiary text-xs">

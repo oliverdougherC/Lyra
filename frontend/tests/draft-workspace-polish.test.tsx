@@ -28,7 +28,7 @@ const controls = vi.hoisted(() => ({
     body: 'Original body',
     body_version: 1,
     state: 'ready',
-    stage_detail: null,
+    stage_detail: null as string | null,
     error_message: null,
   },
   comments: [{ id: 5, body: 'Clarify the evidence', resolved: false, section_ref: 'Evidence' }],
@@ -140,6 +140,7 @@ beforeEach(() => {
   controls.start.mockReset().mockResolvedValue({})
   controls.draftError = false
   controls.retryDraft.mockReset()
+  controls.draft.stage_detail = null
   controls.state = 'ready'
   controls.live = null
   controls.wide = false
@@ -358,4 +359,18 @@ describe('native essay printing', () => {
     await waitFor(() => expect(controls.save).toHaveBeenCalled())
     expect(controls.print).not.toHaveBeenCalled()
   })
+})
+
+it('keeps interrupted writer outcomes visible while settling an uneventful review into history', async () => {
+  controls.draft.stage_detail = 'The run was cancelled. Completed suggestion blocks were kept.'
+  const view = renderWorkspace()
+  expect(
+    screen.getByText('The run was cancelled. Completed suggestion blocks were kept.'),
+  ).toBeVisible()
+  controls.draft.stage_detail = 'Review complete: no findings.'
+  view.refresh()
+  const disclosure = screen.getByText('Last review details').closest('details')
+  expect(disclosure).not.toHaveAttribute('open')
+  await userEvent.click(screen.getByText('Last review details'))
+  expect(screen.getByText('Review complete: no findings.')).toBeVisible()
 })

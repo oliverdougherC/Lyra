@@ -442,11 +442,11 @@ export async function rateCard(page: Page, rating: 'Again' | 'Hard' | 'Good' | '
 }
 
 /**
- * Click "Study again" from the session summary screen.
+ * Choose intentional all-card practice from the session summary.
  */
 export async function clickStudyAgain(page: Page) {
   const summary = page.locator('[aria-label="Session summary"]')
-  await summary.getByRole('button', { name: 'Study again' }).click()
+  await summary.getByRole('button', { name: 'Practice again', exact: true }).click()
 }
 
 /**

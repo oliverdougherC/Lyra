@@ -451,7 +451,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
               disabled={createQuiz.isPending || !documentsLoaded}
             >
               {createQuiz.isPending ? <Spinner /> : <Layers aria-hidden className="size-4" />}
-              Practice now
+              New quiz
             </Button>
           ) : null}
           <div className="flex flex-wrap gap-x-1 gap-y-1">

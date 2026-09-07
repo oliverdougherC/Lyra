@@ -26,7 +26,17 @@ import { useDeleteSolution, useRenameSolution, useSolutions } from '@/lib/hooks/
 import type { SolutionRead } from '@/types'
 
 /** Every solution set in a class, with the actions the index page has never had. */
-export function ClassSolutionsPanel({ classId }: { classId: number }) {
+export function ClassSolutionsPanel({
+  classId,
+  query = '',
+  limit,
+  managedRecovery = false,
+}: {
+  classId: number
+  query?: string
+  limit?: number
+  managedRecovery?: boolean
+}) {
   const solutions = useSolutions(classId)
   const renameSolution = useRenameSolution(classId)
   const deleteSolution = useDeleteSolution(classId)
@@ -56,33 +66,35 @@ export function ClassSolutionsPanel({ classId }: { classId: number }) {
     )
   }
 
-  if (solutions.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>Could not load your solution sets</AlertTitle>
-        <AlertDescription>
-          <p>
-            {solutions.error instanceof ApiError
-              ? solutions.error.message
-              : 'Something went wrong.'}
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-3"
-            onClick={() => void solutions.refetch()}
-          >
-            Retry
-          </Button>
-        </AlertDescription>
-      </Alert>
-    )
-  }
+  const errorNotice = (
+    <Alert variant="destructive">
+      <AlertTitle>Could not load your solution sets</AlertTitle>
+      <AlertDescription>
+        <p>
+          {solutions.error instanceof ApiError ? solutions.error.message : 'Something went wrong.'}
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={() => void solutions.refetch()}
+        >
+          Retry
+        </Button>
+      </AlertDescription>
+    </Alert>
+  )
 
-  const list = solutions.data
+  if (solutions.isError && !solutions.data) return managedRecovery ? null : errorNotice
+
+  const list = solutions.data ?? []
+  const matches = list.filter((solution) =>
+    solution.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+  )
 
   return (
     <div className="flex flex-col gap-4">
+      {solutions.isError && !managedRecovery ? errorNotice : null}
       <div className="flex items-center justify-between gap-3">
         <p className="text-text-secondary text-sm">
           Every problem set you have handed to Lyra in this class.
@@ -113,9 +125,11 @@ export function ClassSolutionsPanel({ classId }: { classId: number }) {
             <Link href={`/classes/${classId}/solutions/new`}>Solve a problem set</Link>
           </Button>
         </Empty>
+      ) : matches.length === 0 ? (
+        <p role="status">No work matches this search.</p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {list.map((solution) => (
+          {matches.slice(0, limit).map((solution) => (
             <li key={solution.id}>
               <SolutionRow
                 classId={classId}

@@ -1017,7 +1017,7 @@ export default function DraftWorkspacePage() {
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col">
-      <HeaderCrumb>{artifact.title}</HeaderCrumb>
+      <HeaderCrumb>Writing</HeaderCrumb>
 
       {/* The writing desk's own header: the title (editable in place), the honest save
           state, and the four things you do to a draft. None of it prints. */}
@@ -1172,12 +1172,16 @@ export default function DraftWorkspacePage() {
           an interrupted pass got, or that it had nothing to suggest. Quiet, and gone the
           next time a pass runs. */}
       {!generating && state === 'ready' && stageDetail ? (
-        <div
-          className="border-border bg-muted/40 flex items-center gap-2 border-b px-4 py-2 text-sm md:px-6 print:hidden"
-          aria-live="polite"
-        >
-          <span className="text-text-secondary">{stageDetail}</span>
-        </div>
+        stageDetail === 'Review complete: no findings.' ? (
+          <details className="text-text-secondary px-4 py-1.5 text-sm md:px-6 print:hidden">
+            <summary className="cursor-pointer">Last review details</summary>
+            <p className="py-2">{stageDetail}</p>
+          </details>
+        ) : (
+          <p className="text-text-secondary px-4 py-2 text-sm md:px-6 print:hidden" role="status">
+            {stageDetail}
+          </p>
+        )
       ) : null}
 
       {state === 'failed' ? (
@@ -1428,8 +1432,8 @@ function DraftTitle({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-1">
-      <h1 className="text-text-primary truncate text-base font-medium">{title}</h1>
+    <div className="flex min-w-0 flex-1 items-center gap-1">
+      <h1 className="text-text-primary break-words text-base font-medium">{title}</h1>
       <Button
         variant="ghost"
         size="icon"

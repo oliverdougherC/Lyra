@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { SettingsDisclosure } from '@/components/settings/settings-disclosure'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { assertUpdateSafe } from '@/lib/update-safety'
@@ -26,6 +27,8 @@ export function DesktopUpdateSection({ unsavedSettings }: { unsavedSettings: boo
   const queryClient = useQueryClient()
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [operation, setOperation] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelMessage, setCancelMessage] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const native = !!(window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke)
@@ -40,15 +43,17 @@ export function DesktopUpdateSection({ unsavedSettings }: { unsavedSettings: boo
         .catch((failure) => setError(failure instanceof Error ? failure.message : String(failure)))
   }, [native])
   useEffect(() => {
-    if (!operation) return
+    if (!operation && !['checking', 'downloading', 'verifying'].includes(status?.phase ?? ''))
+      return
     const timer = window.setInterval(() => {
       void refresh().catch(() => undefined)
     }, 300)
     return () => window.clearInterval(timer)
-  }, [operation])
+  }, [operation, status?.phase])
   if (!native) return null
   async function run(command: string) {
     setError(null)
+    setCancelMessage(null)
     if (command === 'install_desktop_update') {
       try {
         if (unsavedSettings || queryClient.isMutating()) {
@@ -78,104 +83,150 @@ export function DesktopUpdateSection({ unsavedSettings }: { unsavedSettings: boo
       setOperation(false)
     }
   }
+  async function cancelDownload() {
+    if (cancelling) return
+    setError(null)
+    setCancelling(true)
+    setCancelMessage(null)
+    try {
+      await invoke('cancel_desktop_update')
+      setCancelMessage('Cancellation requested. Waiting for the download to stop.')
+      await refresh()
+    } catch {
+      setError(
+        'Could not confirm cancellation. Check the download status and try Cancel download again.',
+      )
+    } finally {
+      setCancelling(false)
+    }
+  }
   const restarting = status?.phase === 'restart'
   return (
-    <section className="space-y-3" aria-labelledby="desktop-update-title">
-      <h2 id="desktop-update-title" className="font-display text-xl">
-        Application updates
-      </h2>
-      <p className="text-sm text-muted-foreground">
-        Lyra {status?.currentVersion ?? '…'} (build {status?.currentBuild ?? '…'}) ·{' '}
-        {status?.channel ?? 'beta'} channel. Updates are checked and downloaded only when you ask.
-      </p>
-      <p className="text-sm" aria-live="polite">
-        {status?.checkedAt
-          ? `Last checked ${new Date(status.checkedAt * 1000).toLocaleString()}.`
-          : 'Not checked.'}
-        {status?.phase === 'up-to-date' && ' You have the latest version on this channel.'}
-        {status?.version && ` Version ${status.version} is available.`}
-        {status?.phase === 'checking' && ' Checking…'}
-        {status?.phase === 'verifying' && ' Verifying the downloaded application…'}
-        {status?.phase === 'downloading' &&
-          ` Downloading ${Math.floor(status.downloaded / 1024 / 1024)} of ${Math.ceil((status.total ?? 0) / 1024 / 1024)} MB…`}
-        {status?.phase === 'ready' && ' Download verified and ready to install.'}
-      </p>
-      {status?.notes && (
-        <details className="text-sm">
-          <summary>Release notes</summary>
-          <p className="whitespace-pre-wrap">{status.notes}</p>
-        </details>
-      )}
-      {(error || status?.error) && (
-        <p role="alert" className="text-sm text-danger-text">
-          {error ?? status?.error}
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          disabled={operation || restarting}
-          onClick={() => void run('check_desktop_update')}
-        >
-          Check for updates
-        </Button>
-        {status?.phase === 'available' && (
-          <Button disabled={operation} onClick={() => void run('download_desktop_update')}>
-            Download update
-          </Button>
-        )}
-        {status?.phase === 'downloading' && (
-          <Button variant="outline" onClick={() => void invoke('cancel_desktop_update')}>
-            Cancel download
-          </Button>
-        )}
-        {status?.phase === 'ready' && (
-          <Button disabled={operation} onClick={() => void run('install_desktop_update')}>
-            Install update
-          </Button>
-        )}
-      </div>
-      {status?.phase === 'ready' && (
+    <SettingsDisclosure
+      title="Application updates"
+      description="Check for a new version or find the previous app."
+      attention={
+        cancelling ||
+        operation ||
+        !!error ||
+        !!status?.error ||
+        ['checking', 'downloading', 'verifying', 'ready', 'restart'].includes(status?.phase ?? '')
+      }
+      anchors={['desktop-update']}
+    >
+      <div className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Save your changes first. Active work will be interrupted; durable jobs recover after
-          relaunch. Your documents, writing, settings, keys, and downloaded helpers stay on this
-          Mac. If the new app migrates data, it keeps a verified database backup; returning to an
-          older app then requires restoring that backup separately.
+          Lyra {status?.currentVersion ?? '…'} (build {status?.currentBuild ?? '…'}) ·{' '}
+          {status?.channel ?? 'beta'} channel. Updates are checked and downloaded only when you ask.
         </p>
-      )}
-      {status?.recoveryAvailable && (
-        <div className="space-y-2">
-          <Button
-            variant="outline"
-            disabled={operation}
-            onClick={() => void run('desktop_update_recovery')}
-          >
-            Show previous Lyra app
-          </Button>
-          <p className="text-sm text-muted-foreground">
-            For recovery, quit Lyra and open the retained app in Finder. If data was migrated,
-            restore a compatible backup separately first. Your current data is never downgraded.
+        <p className="text-sm" aria-live="polite">
+          {status?.checkedAt
+            ? `Last checked ${new Date(status.checkedAt * 1000).toLocaleString()}.`
+            : 'Not checked.'}
+          {status?.phase === 'up-to-date' && ' You have the latest version on this channel.'}
+          {status?.version && ` Version ${status.version} is available.`}
+          {status?.phase === 'checking' && ' Checking…'}
+          {status?.phase === 'verifying' && ' Verifying the downloaded application…'}
+          {status?.phase === 'downloading' &&
+            ` Downloading ${Math.floor(status.downloaded / 1024 / 1024)} MB${status.total == null || status.total <= 0 ? ' (total size unknown)' : ` of ${Math.ceil(status.total / 1024 / 1024)} MB`}…`}
+          {status?.phase === 'ready' && ' Download verified and ready to install.'}
+        </p>
+        {(cancelling || cancelMessage) && (
+          <p role="status" className="text-sm">
+            {cancelling
+              ? 'Requesting cancellation…'
+              : status?.phase === 'downloading'
+                ? cancelMessage
+                : 'Cancellation request sent. See the current update status above.'}
           </p>
-        </div>
-      )}
-      <Dialog open={installing || restarting}>
-        <DialogContent
-          showCloseButton={false}
-          onEscapeKeyDown={(event) => event.preventDefault()}
-          onInteractOutside={(event) => event.preventDefault()}
-        >
-          <DialogTitle>{restarting ? 'Update installed' : 'Installing update'}</DialogTitle>
-          <DialogDescription>
-            {restarting
-              ? 'Restart Lyra to use the new version. Your student data is retained.'
-              : 'Lyra is stopping its own active work and replacing the application. Keep the app open.'}
-          </DialogDescription>
-          {error && <p role="alert">{error}</p>}
-          {restarting && (
-            <Button onClick={() => void run('restart_desktop_update')}>Restart Lyra</Button>
+        )}
+        {status?.notes && (
+          <details className="text-sm">
+            <summary>Release notes</summary>
+            <p className="whitespace-pre-wrap">{status.notes}</p>
+          </details>
+        )}
+        {(error || status?.error) && (
+          <p role="alert" className="text-sm text-danger-text">
+            {error ?? status?.error}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            id="desktop-update"
+            variant="outline"
+            disabled={operation || restarting}
+            onClick={() => void run('check_desktop_update')}
+          >
+            Check for updates
+          </Button>
+          {status?.phase === 'available' && (
+            <Button disabled={operation} onClick={() => void run('download_desktop_update')}>
+              Download update
+            </Button>
           )}
-        </DialogContent>
-      </Dialog>
-    </section>
+          {status?.phase === 'downloading' && (
+            <Button variant="outline" disabled={cancelling} onClick={() => void cancelDownload()}>
+              {cancelling ? 'Requesting cancellation…' : 'Cancel download'}
+            </Button>
+          )}
+          {status?.phase === 'ready' && (
+            <Button disabled={operation} onClick={() => void run('install_desktop_update')}>
+              Install update
+            </Button>
+          )}
+        </div>
+        {status?.phase === 'ready' && (
+          <p className="text-sm text-muted-foreground">
+            Save your changes first. Active work will be interrupted; durable jobs recover after
+            relaunch. Your documents, writing, settings, keys, and downloaded helpers stay on this
+            Mac. If the new app migrates data, it keeps a verified database backup; returning to an
+            older app then requires restoring that backup separately.
+          </p>
+        )}
+        {status?.recoveryAvailable && (
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              disabled={operation}
+              onClick={() => void run('desktop_update_recovery')}
+            >
+              Show previous Lyra app
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              For recovery, quit Lyra and open the retained app in Finder. If data was migrated,
+              restore a compatible backup separately first. Your current data is never downgraded.
+            </p>
+          </div>
+        )}
+        <Dialog open={installing || restarting}>
+          <DialogContent
+            showCloseButton={false}
+            onEscapeKeyDown={(event) => event.preventDefault()}
+            onInteractOutside={(event) => event.preventDefault()}
+          >
+            <DialogTitle>{restarting ? 'Update installed' : 'Installing update'}</DialogTitle>
+            <DialogDescription>
+              {restarting
+                ? 'Restart Lyra to use the new version. Your student data is retained.'
+                : 'Lyra is stopping its own active work and replacing the application. Keep the app open.'}
+            </DialogDescription>
+            {error && <p role="alert">{error}</p>}
+            {restarting && error && (
+              <p className="text-sm">
+                The update is installed. Quit Lyra and reopen it manually. If the new app cannot
+                start, use the retained previous app; restore a compatible backup first if your data
+                was migrated.
+              </p>
+            )}
+            {restarting && (
+              <Button disabled={operation} onClick={() => void run('restart_desktop_update')}>
+                {operation ? 'Restarting…' : 'Restart Lyra'}
+              </Button>
+            )}
+          </DialogContent>
+        </Dialog>
+      </div>
+    </SettingsDisclosure>
   )
 }

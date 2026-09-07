@@ -33,7 +33,7 @@ export function CommandConfirmationCard({
     busy || command.state !== 'pending' || Boolean(command.unavailableReason) || !onConfirm
 
   return (
-    <Card aria-label={`Command request ${command.id}`}>
+    <Card className="@container" aria-label={`Command request ${command.id}`}>
       <CardHeader>
         <div className="flex min-w-0 items-start gap-3">
           <div className="bg-muted text-text-secondary rounded-md p-2" aria-hidden>
@@ -49,6 +49,67 @@ export function CommandConfirmationCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        <div className="grid gap-3 @min-[42rem]:grid-cols-[minmax(0,2fr)_minmax(14rem,1fr)]">
+          <section
+            aria-label="Command to run"
+            className="border-border bg-card rounded-md border p-3"
+          >
+            <h3 className="text-text-tertiary mb-2 text-xs font-medium tracking-[0.14em] uppercase">
+              Command to run
+            </h3>
+            <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-sm leading-6">
+              {command.argv
+                .map((arg) => (/^[a-zA-Z0-9_./:=+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
+                .join(' ')}
+            </pre>
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-text-secondary">Argument details</summary>
+              <p className="my-2 text-text-secondary">
+                Each argument is passed separately, without shell expansion.
+              </p>
+              <ol className="flex flex-wrap gap-2" role="list" aria-label="Command arguments">
+                {command.argv.map((arg, index) => (
+                  <li
+                    key={`${index}-${arg}`}
+                    className="bg-muted rounded-md px-2 py-1 font-mono text-sm leading-6"
+                  >
+                    <span className="text-text-tertiary mr-1">{index}:</span>
+                    <span>{arg}</span>
+                  </li>
+                ))}
+              </ol>
+            </details>
+          </section>
+
+          <section className="border-border bg-card rounded-md border p-3">
+            <h3 className="text-text-tertiary mb-2 text-xs font-medium tracking-[0.14em] uppercase">
+              Runtime
+            </h3>
+            <dl className="grid gap-2 text-sm">
+              <div>
+                <dt className="text-text-tertiary text-xs">Working directory</dt>
+                <dd className="break-all font-mono text-sm leading-6">{command.cwd}</dd>
+              </div>
+              <div>
+                <dt className="text-text-tertiary text-xs">Timeout</dt>
+                <dd>{command.timeoutSeconds} seconds</dd>
+              </div>
+              {command.expectedSignal ? (
+                <div>
+                  <dt className="text-text-tertiary text-xs">Expected result</dt>
+                  <dd>{command.expectedSignal}</dd>
+                </div>
+              ) : null}
+              {command.confirmedAtLabel ? (
+                <div>
+                  <dt className="text-text-tertiary text-xs">Confirmed</dt>
+                  <dd>{command.confirmedAtLabel}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </section>
+        </div>
+
         <Alert>
           <AlertTriangle className="size-4" />
           <AlertTitle>Runs exactly as shown</AlertTitle>
@@ -74,67 +135,6 @@ export function CommandConfirmationCard({
             <AlertDescription>{command.unavailableReason}</AlertDescription>
           </Alert>
         ) : null}
-
-        <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(14rem,1fr)]">
-          <section
-            aria-label="Command to run"
-            className="border-border bg-card rounded-md border p-3"
-          >
-            <h3 className="text-text-tertiary mb-2 text-xs font-medium tracking-[0.14em] uppercase">
-              Command to run
-            </h3>
-            <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs">
-              {command.argv
-                .map((arg) => (/^[a-zA-Z0-9_./:=+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
-                .join(' ')}
-            </pre>
-            <details className="mt-3 text-xs">
-              <summary className="cursor-pointer text-text-secondary">Argument details</summary>
-              <p className="my-2 text-text-secondary">
-                Each argument is passed separately, without shell expansion.
-              </p>
-              <ol className="flex flex-wrap gap-2" role="list" aria-label="Command arguments">
-                {command.argv.map((arg, index) => (
-                  <li
-                    key={`${index}-${arg}`}
-                    className="bg-muted rounded-md px-2 py-1 font-mono text-xs"
-                  >
-                    <span className="text-text-tertiary mr-1">{index}:</span>
-                    <span>{arg}</span>
-                  </li>
-                ))}
-              </ol>
-            </details>
-          </section>
-
-          <section className="border-border bg-card rounded-md border p-3">
-            <h3 className="text-text-tertiary mb-2 text-xs font-medium tracking-[0.14em] uppercase">
-              Runtime
-            </h3>
-            <dl className="grid gap-2 text-sm">
-              <div>
-                <dt className="text-text-tertiary text-xs">Working directory</dt>
-                <dd className="break-all font-mono text-xs">{command.cwd}</dd>
-              </div>
-              <div>
-                <dt className="text-text-tertiary text-xs">Timeout</dt>
-                <dd>{command.timeoutSeconds} seconds</dd>
-              </div>
-              {command.expectedSignal ? (
-                <div>
-                  <dt className="text-text-tertiary text-xs">Expected result</dt>
-                  <dd>{command.expectedSignal}</dd>
-                </div>
-              ) : null}
-              {command.confirmedAtLabel ? (
-                <div>
-                  <dt className="text-text-tertiary text-xs">Confirmed</dt>
-                  <dd>{command.confirmedAtLabel}</dd>
-                </div>
-              ) : null}
-            </dl>
-          </section>
-        </div>
 
         <div className="flex flex-wrap gap-2">
           {onConfirm ? (
@@ -179,7 +179,7 @@ function CommandOutput({ command }: { command: AgentCommandRequest }) {
       ) : null}
 
       {hasOutput ? (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 @min-[42rem]:grid-cols-2">
           <OutputPane label="Output" content={command.stdout} />
           <OutputPane label="Errors" content={command.stderr} />
         </div>
@@ -194,7 +194,7 @@ function OutputPane({ label, content }: { label: string; content?: string }) {
       <h4 className="text-text-tertiary mb-2 text-xs font-medium tracking-[0.14em] uppercase">
         {label}
       </h4>
-      <pre className="overflow-x-auto font-mono text-xs whitespace-pre-wrap">
+      <pre className="overflow-x-auto font-mono text-sm leading-6 whitespace-pre-wrap">
         {content && content.length > 0 ? content : 'No output.'}
       </pre>
     </section>

@@ -39,6 +39,10 @@ function RouterProbe() {
       <button type="button" onClick={() => router.replaceAnchor('source-2')}>
         Jump to source 2 again
       </button>
+      <button type="button" onClick={() => router.push('/settings')}>
+        Settings
+      </button>
+      <main id="main-content" tabIndex={-1} />
     </div>
   )
 }
@@ -180,4 +184,48 @@ describe('router hooks', () => {
       removeEventListener.mock.calls.filter((call) => isEventType(call, 'popstate')),
     ).toHaveLength(3)
   })
+
+  it('resets the actual pane on push and restores it on Back and Forward', async () => {
+    const user = userEvent.setup()
+    render(
+      <RouterProvider>
+        <RouterProbe />
+      </RouterProvider>,
+    )
+    const pane = screen.getByRole('main')
+    Object.defineProperty(pane, 'scrollHeight', { configurable: true, value: 4000 })
+    pane.scrollTop = 640
+    pane.dispatchEvent(new Event('scroll', { bubbles: true }))
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await waitFor(() => expect(pane.scrollTop).toBe(0))
+    pane.scrollTop = 920
+    pane.dispatchEvent(new Event('scroll', { bubbles: true }))
+    await act(async () => window.history.back())
+    await waitFor(() => expect(pane.scrollTop).toBe(640))
+    await act(async () => window.history.forward())
+    await waitFor(() => expect(pane.scrollTop).toBe(920))
+  })
+})
+
+it('restores a saved inner pane when slow content arrives after three seconds', async () => {
+  window.history.replaceState({ lyraScroll: { files: 320 } }, '', '/#/classes/7?tab=files')
+  render(
+    <RouterProvider>
+      <RouterProbe />
+    </RouterProvider>,
+  )
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 3100))
+  })
+  const container = document.createElement('div')
+  container.id = 'documents-pane-body'
+  const pane = document.createElement('div')
+  pane.setAttribute('data-slot', 'scroll-area-viewport')
+  container.append(pane)
+  document.body.append(container)
+  try {
+    await waitFor(() => expect(pane.scrollTop).toBe(320))
+  } finally {
+    container.remove()
+  }
 })

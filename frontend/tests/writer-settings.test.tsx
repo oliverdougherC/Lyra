@@ -76,6 +76,7 @@ it('saves the explicit web-research and parallel capability switches', async () 
     .mockImplementation(async (patch) => ({ ...settings, ...patch }))
   render(<SettingsForm />, { wrapper: createWrapper() })
 
+  await userEvent.click(await screen.findByRole('button', { name: /Web research/ }))
   await userEvent.click(await screen.findByRole('switch', { name: 'Allow web research' }))
   // Parallel writer tuning moved behind the Advanced disclosure, so the test opens it first.
   await userEvent.click(await screen.findByRole('button', { name: /Advanced/ }))
@@ -248,4 +249,98 @@ it('serializes repeated endpoint saves and keeps the newest address active', asy
   expect(update).toHaveBeenLastCalledWith({ endpoint_url: 'http://localhost:9001/v1' })
   expect(endpoint).toHaveValue('http://localhost:9001/v1')
   expect(await screen.findByText('Endpoint URL: Saved')).toBeInTheDocument()
+})
+
+it('shows acknowledged remote use neutrally and leaves consent available', async () => {
+  vi.spyOn(api, 'getSettings').mockResolvedValue({
+    ...settings,
+    endpoint_is_local: false,
+    remote_ack: true,
+  })
+  render(<SettingsForm />, { wrapper: createWrapper() })
+  const consent = await screen.findByRole('switch', { name: /I understand my document/ })
+  expect(consent).toBeChecked()
+  expect(consent.closest('[data-slot="alert"]')).not.toHaveAttribute('role', 'alert')
+  expect(consent.closest('[data-slot="alert"]')).not.toHaveClass('border-danger-text')
+})
+
+it.each(['exa-api-key', 'allow-web-research'])(
+  'opens optional research and focuses %s from a deep link',
+  async (anchor) => {
+    window.history.replaceState(null, '', `/#/settings#${anchor}`)
+    vi.spyOn(api, 'getSettings').mockResolvedValue(settings)
+    render(<SettingsForm />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.getElementById(anchor)).toHaveFocus())
+    expect(screen.getByRole('button', { name: /Web research/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+  },
+)
+it('keeps failed research saves visible when the disclosure is activated again', async () => {
+  vi.spyOn(api, 'getSettings').mockResolvedValue(settings)
+  vi.spyOn(api, 'updateSettings').mockRejectedValue(new Error('offline'))
+  render(<SettingsForm />, { wrapper: createWrapper() })
+  const disclosure = await screen.findByRole('button', { name: /Web research/ })
+  await userEvent.click(disclosure)
+  await userEvent.click(screen.getByRole('switch', { name: 'Allow web research' }))
+  await screen.findByRole('button', { name: 'Retry Web research save' })
+  await userEvent.click(disclosure)
+  expect(screen.getByRole('button', { name: 'Retry Web research save' })).toBeVisible()
+})
+
+it('preserves loaded settings and edited values when background refresh fails', async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  const get = vi.spyOn(api, 'getSettings').mockResolvedValue(settings)
+  render(
+    <QueryClientProvider client={client}>
+      <RouterProvider>
+        <SettingsForm />
+      </RouterProvider>
+    </QueryClientProvider>,
+  )
+  const endpoint = await screen.findByRole('textbox', { name: 'Endpoint URL' })
+  await userEvent.type(endpoint, '/unsaved')
+  get.mockRejectedValue(new Error('offline'))
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ['settings'] })
+  })
+  expect(await screen.findByText('Settings could not refresh')).toBeVisible()
+  expect(endpoint).toHaveValue(settings.endpoint_url + '/unsaved')
+  expect(screen.getByRole('button', { name: 'Retry settings' })).toBeEnabled()
+})
+
+it('shows an acknowledged remote badge neutrally without recommending a model location', async () => {
+  vi.spyOn(api, 'getSettings').mockResolvedValue({
+    ...settings,
+    endpoint_url: 'https://tutor.example.invalid/v1',
+    endpoint_host: 'tutor.example.invalid',
+    endpoint_is_local: false,
+    remote_ack: true,
+  })
+  render(<SettingsForm />, { wrapper: createWrapper() })
+  const badge = await screen.findByRole('link', { name: /Remote/ })
+  expect(badge).not.toHaveClass('text-danger-text')
+  expect(badge).not.toHaveClass('border-danger-text/40')
+  expect(screen.queryByText(/works best with a local model server/)).not.toBeInTheDocument()
+  expect(
+    screen.getByText(/Questions and relevant course passages go to this endpoint/),
+  ).toBeVisible()
+})
+
+it('does not crash Settings or infer permission from an incomplete class settings response', async () => {
+  vi.spyOn(api, 'getSettings').mockResolvedValue(settings)
+  vi.mocked(api.listClasses).mockResolvedValue([{ id: 7, name: 'Synthetic class' }] as never)
+  vi.spyOn(api, 'getClassWriterSettings').mockResolvedValue({} as never)
+  render(<SettingsForm />, { wrapper: createWrapper() })
+  await userEvent.click(await screen.findByRole('button', { name: 'Advanced' }))
+  expect(await screen.findByText('Could not load research permission.')).toBeVisible()
+  expect(screen.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  expect(screen.getByRole('combobox', { name: 'Synthetic class web research' })).toBeDisabled()
+  expect(screen.getByRole('combobox', { name: 'Synthetic class web research' })).toHaveTextContent(
+    'Unavailable',
+  )
+  expect(screen.queryByText('Effective: blocked')).not.toBeInTheDocument()
 })

@@ -453,6 +453,7 @@ function expectNavigationFits(measurement: Measurement, width: number) {
 }
 
 const MATRIX = [
+  { width: 540, height: 600 },
   { width: 540, height: 720 },
   { width: 640, height: 760 },
   { width: 768, height: 700 },
@@ -473,7 +474,7 @@ for (const { width, height } of MATRIX) {
     await page.goto(`/#/classes/${CLASS_ID}`)
     await page.waitForLoadState('networkidle')
     await expect(page.getByRole('textbox', { name: /Ask about/ })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Practice now' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'New quiz' })).toBeVisible()
     const hub = await measure(page)
     expect(
       hub.scrollWidth - hub.innerWidth,
@@ -542,6 +543,7 @@ for (const { width, height } of MATRIX) {
  * must be usable when operated, not merely unclipped when measured.
  */
 const INTERACTION_MATRIX = [
+  { width: 540, height: 600 },
   { width: 540, height: 720 },
   { width: 768, height: 700 },
   { width: 1024, height: 768 },

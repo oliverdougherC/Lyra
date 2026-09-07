@@ -159,12 +159,11 @@ export default function NewSolutionPage() {
             </EmptyMedia>
             <EmptyTitle>Nothing to solve yet</EmptyTitle>
             <EmptyDescription>
-              Upload a problem set to this class and Lyra will read it first. You can do that from
-              the class workspace.
+              Add a problem set in Files, then return here to choose it.
             </EmptyDescription>
           </EmptyHeader>
           <Button asChild className="mt-4">
-            <a href={`/classes/${classId}`}>Go to the workspace</a>
+            <a href={`/classes/${classId}?tab=files`}>Open Files</a>
           </Button>
         </Empty>
       ) : documentsQuery.isError && documents.length === 0 ? null : (

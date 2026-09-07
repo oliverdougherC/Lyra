@@ -45,6 +45,7 @@ const DOCUMENTS = [
 ] as DocumentRead[]
 
 beforeEach(() => {
+  sessionStorage.clear()
   vi.restoreAllMocks()
   vi.spyOn(api, 'listDocuments').mockResolvedValue(DOCUMENTS)
   vi.spyOn(api, 'getDocumentStatus').mockResolvedValue({ state: 'ready' } as never)
@@ -183,4 +184,22 @@ it('retains failed deletes in the confirmation and selection while retiring succ
   await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   expect(screen.getByText('1 file selected')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Deselect syllabus.pdf' })).toBeInTheDocument()
+})
+
+it('restores each class filter without copying the previous class query', async () => {
+  sessionStorage.setItem('lyra:class:1:files-query', 'homework')
+  sessionStorage.setItem('lyra:class:2:files-query', 'syllabus')
+  const { wrapper } = createWrapper()
+  const view = render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  expect(await screen.findByRole('searchbox', { name: 'Filter documents by name' })).toHaveValue(
+    'homework',
+  )
+  view.rerender(<DocumentsPane classId={2} variant="manage" />)
+  await waitFor(() =>
+    expect(screen.getByRole('searchbox', { name: 'Filter documents by name' })).toHaveValue(
+      'syllabus',
+    ),
+  )
+  expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
+  expect(sessionStorage.getItem('lyra:class:2:files-query')).toBe('syllabus')
 })
