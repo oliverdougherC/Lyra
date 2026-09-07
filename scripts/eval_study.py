@@ -120,6 +120,9 @@ def main() -> None:
         "--corpus", type=Path, default=ROOT / "scripts/eval_corpora/study-beta.json"
     )
     parser.add_argument("--cases", nargs="+")
+    parser.add_argument("--replay-report", type=Path)
+    parser.add_argument("--replay-case", default="ecology")
+    parser.add_argument("--replay-index", type=int, default=-1)
     parser.add_argument("--kinds", nargs="+", choices=["quiz", "deck"], default=["quiz", "deck"])
     parser.add_argument("--repeat", type=int, default=2)
     parser.add_argument("--models-dir", type=Path)
@@ -170,6 +173,7 @@ def main() -> None:
             [shutil.which("git") or "/usr/bin/git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
         "study_sha256": digest(ROOT / "backend/core/study.py"),
+        "runner_sha256": digest(Path(__file__)),
         "prompts_sha256": digest(ROOT / "backend/llm/prompts.py"),
         "study_prompt_sha256": hashlib.sha256(
             "\n".join(
@@ -182,7 +186,9 @@ def main() -> None:
             "locality": "loopback" if is_local_endpoint(config.endpoint_url) else "remote",
             "tools_supported_stored": config.tools_supported,
             "context_window": config.context_window,
-            "max_tokens": generation_reserve(config.context_window),
+            "max_tokens": min(
+                study._STUDY_OUTPUT_TOKEN_CAP, generation_reserve(config.context_window)
+            ),
             "temperature": client.DETERMINISTIC_TEMPERATURE,
             "concurrency": 1,
             "request_timeout_seconds": {
@@ -212,6 +218,7 @@ def main() -> None:
             "schema": getattr(pos[7], "name", None),
         }
         calls.append(record)
+        args.output.write_text(json.dumps(report, indent=2) + "\n")
         try:
             payload = await original_post(*pos, **kwargs)
             choices = payload.get("choices", [])
@@ -227,10 +234,41 @@ def main() -> None:
             raise
         finally:
             record["latency_seconds"] = round(time.monotonic() - start, 3)
+            args.output.write_text(json.dumps(report, indent=2) + "\n")
 
     client._post_constrained = capture
     args.output.parent.mkdir(parents=True, exist_ok=True)
     try:
+        if args.replay_report:
+            prior = json.loads(args.replay_report.read_text())
+            case = next(
+                item
+                for item in prior["results"]
+                if item["case"] == args.replay_case and item.get("calls")
+            )
+            captured = case["calls"][args.replay_index]
+            report["replay"] = {
+                "source_report_sha256": digest(args.replay_report),
+                "case": args.replay_case,
+                "call_index": args.replay_index,
+                "scope": "single captured flashcard call; not full deck acceptance",
+            }
+            report["in_progress"] = {"calls": calls, "state": "running"}
+            start = time.monotonic()
+            outcome = {"case": args.replay_case, "kind": "call_replay", "calls": calls}
+            try:
+                outcome["returned_json"] = study._call_json(
+                    config, captured["messages"], prompts.FLASHCARDS_SCHEMA
+                )
+                outcome["state"] = "returned"
+            except Exception as exc:
+                outcome["state"] = "failed"
+                outcome["error_type"] = type(exc).__name__
+            outcome["latency_seconds"] = round(time.monotonic() - start, 3)
+            report["results"].append(outcome)
+            report.pop("in_progress", None)
+            print(json.dumps({key: outcome[key] for key in ("state", "latency_seconds")}))
+            return
         for case in corpus["cases"]:
             if args.cases and case["id"] not in args.cases:
                 continue
@@ -295,6 +333,16 @@ def main() -> None:
                     )
                     study.persist_job(conn, job, str(artifact["kind"]))
                     start = time.monotonic()
+                    report["in_progress"] = {
+                        "case": case["id"],
+                        "kind": kind,
+                        "repeat": repeat + 1,
+                        "artifact_id": job.artifact_id,
+                        "calls": calls,
+                        "state": "running",
+                        "source_documents": case["documents"],
+                    }
+                    args.output.write_text(json.dumps(report, indent=2) + "\n")
                     study.run_generation(job)
                     final = artifacts.get_artifact(conn, job.artifact_id)
                     parts = artifacts.list_parts(conn, job.artifact_id)
@@ -325,6 +373,7 @@ def main() -> None:
                             conn, job.artifact_id, parts, kind
                         )
                     report["results"].append(result)
+                    report.pop("in_progress", None)
                     args.output.write_text(json.dumps(report, indent=2) + "\n")
                     print(
                         json.dumps(
@@ -336,6 +385,9 @@ def main() -> None:
                         flush=True,
                     )
     finally:
+        if "in_progress" in report:
+            report["in_progress"]["state"] = "interrupted_before_terminal_artifact"
+            report["in_progress"]["semantic_review"] = "not assessable; no terminal answer"
         args.output.write_text(json.dumps(report, indent=2) + "\n")
         conn.close()
         from backend.llm.embed_server import embedding_server

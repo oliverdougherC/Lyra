@@ -97,3 +97,37 @@ This memory is bounded to 4,096 characters, keeps whole fronts, and is included 
 source-budget and full-prompt chunk-admission checks. It adds no model calls and never changes
 the requested count or publishes incomplete output. Oversized fronts and larger decks may
 exceed this memory horizon, so it reduces duplicates without claiming a semantic guarantee.
+
+The runner checkpoints each model call before dispatch and on return, including an `in_progress`
+record. Interrupting a future run therefore retains completed calls and the current request even
+when no artifact was published. Older retained runs predate this checkpoint change; do not infer
+missing in-flight transcripts or completed answers for an interrupted older run. Runner hashes are
+recorded for new runs so this recording change is distinguishable from production behavior.
+
+The full-deck follow-up at `700d02f` fixed the repeated circuit-card problem, but the first final ecology
+deck failed after 483.488 seconds. Its last topic produced one card, then its bounded retry hit
+`finish_reason: length` at 65,536 output tokens after 337.3 seconds of largely whitespace JSON.
+No cards were published. The remaining final ecology repeat was cancelled through the production
+cancellation handler and the owned evaluation process was interrupted under the runtime/cost
+budget. It is not a semantic pass. These failures remain in the evidence.
+
+The general generation reserve scales with the configured context window; at 262,144 tokens it
+allowed this small study task 65,536 output tokens. A further study-only fix caps standard
+`max_tokens` at `min(8192, generation_reserve(context_window))`. The existing more conservative
+input ceiling, bounded retry and fatal truncation behavior stay intact. No nonstandard thinking
+flag is injected into providers. A single captured-prompt replay evaluates this bound; it does not
+constitute a successful full ecology-deck evaluation or replace the final-candidate/human gates.
+
+Reproduce the single offending-call replay (its default index `-1` selects the last call of the
+first matching case with a transcript):
+
+```bash
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run python scripts/eval_study.py \
+  --profile /path/to/isolated-config/lyra.db --workspace /path/to/new-private-replay \
+  --output /path/to/study-cap-replay.json --kinds quiz \
+  --replay-report docs/evidence/study-beta-final-deck.json --replay-case ecology --replay-index=-1
+```
+
+`--kinds quiz` avoids starting local embeddings for this captured flashcard-prompt replay; the
+replay still invokes the actual study JSON call with the flashcard schema. Inspect its retained
+stop reason and output rather than interpreting a zero runner exit status as semantic success.

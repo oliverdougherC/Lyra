@@ -79,6 +79,10 @@ _RETRY_HINT_RESERVE = 256
 # count is fixed so a bad endpoint cannot multiply model calls without bound.
 _MAX_ATTEMPTS = 2
 
+# A study call writes at most six cards or thirty quiz questions. A very large
+# context window must not authorize tens of thousands of output tokens for that task.
+_STUDY_OUTPUT_TOKEN_CAP = 8_192
+
 INTERRUPTED_MESSAGE = "Interrupted, please retry"
 
 # Why generation may not send course text, said in the words the student needs to act
@@ -1113,8 +1117,9 @@ def _call_json(
     """One constrained-JSON call against the tutor endpoint, from a worker thread.
 
     Every study call funnels through here, which is where the context-window invariant is
-    enforced rather than merely calculated (PLA-298): the output reserve is sent as
-    `max_tokens`, and the prompt is refused locally if it exceeds the input ceiling. The
+    enforced rather than merely calculated (PLA-298): the output reserve, capped at
+    8,192 tokens for this bounded task, is sent as `max_tokens`. The prompt is refused
+    locally if it exceeds the input ceiling. The
     callers trim toward this ceiling first, so the refusal is a backstop against a prompt
     that slipped past the budget, never the normal path. A reply the endpoint truncates at
     the ceiling is fatal, because a half-written JSON reply is not a smaller valid one.
@@ -1132,7 +1137,7 @@ def _call_json(
             messages,
             temperature=client.DETERMINISTIC_TEMPERATURE,
             schema=schema,
-            max_tokens=generation_reserve(config.context_window),
+            max_tokens=min(_STUDY_OUTPUT_TOKEN_CAP, generation_reserve(config.context_window)),
             request_timeout=client.BACKGROUND_TIMEOUT,
             fail_on_truncation=True,
         )

@@ -1857,3 +1857,22 @@ def test_covered_questions_are_bounded_and_count_toward_chunk_admission(
     assert study._trim_chunks(config, "topic", 2, [large, small], covered=covered) == [small]
     messages = study._flashcard_messages("topic", 2, [small], covered=covered)
     assert study._prompt_tokens(messages) <= ceiling
+
+
+def test_large_context_does_not_authorize_a_book_length_study_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 262144)
+    captured: dict[str, object] = {}
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        captured.update(kwargs)
+        return '{"cards": []}'
+
+    monkeypatch.setattr(study.client, "complete", complete)
+    study._call_json(
+        config, [{"role": "user", "content": "two cards"}], study.prompts.FLASHCARDS_SCHEMA
+    )
+    assert captured["max_tokens"] == 8192
+    assert captured["fail_on_truncation"] is True
+    assert "enable_thinking" not in captured
