@@ -825,6 +825,7 @@ def _copy_profile_into_stage() -> None:
     The staged copy must match the live profile exactly, so preserved files
     that no longer exist in the live installation are removed from the stage.
     """
+    private.secure_mkdir(_stage_data_path(), root=_stage_root_path())
     for directory in _PROFILE_PRESERVE_DIRECTORIES:
         source = settings.data_dir / directory
         destination = _stage_data_path() / directory
