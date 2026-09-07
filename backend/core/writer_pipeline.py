@@ -1206,6 +1206,19 @@ def _draft_live_blocks(
         artifacts.increment_problems_done(conn, job.artifact_id)
 
 
+def _continuation_delta(existing: str, addition: str) -> str:
+    """Remove only text demonstrably echoed from the saved continuation prefix."""
+    base, new = existing.rstrip(), addition.lstrip()
+    if not new.strip() or base.startswith(new.rstrip()):
+        return ""
+    if new.startswith(base):
+        return new[len(base) :]
+    for overlap in range(min(len(base), len(new), 2000), 15, -1):
+        if base[-overlap:] == new[:overlap]:
+            return new[overlap:]
+    return addition
+
+
 def _stream_live_paragraph(
     conn: sqlite3.Connection,
     job: PassJob,
@@ -1253,7 +1266,7 @@ def _stream_live_paragraph(
                     continue
                 written += len(delta.text)
                 buffer += delta.text
-                if len(buffer) >= LIVE_STREAM_FLUSH_CHARS:
+                if len(buffer) >= LIVE_STREAM_FLUSH_CHARS and not existing.strip():
                     live_drafts.append_block_text(
                         conn, suggestion_id, stable_key, buffer, status="drafting"
                     )
@@ -1262,9 +1275,11 @@ def _stream_live_paragraph(
             # Preserve the last useful batch on EOF/cutoff/timeout, but never publish
             # additional model effects after durable cancellation has been observed.
             if buffer and not writer_runs.cancel_requested(conn, job.run_id):
-                live_drafts.append_block_text(
-                    conn, suggestion_id, stable_key, buffer, status="drafting"
-                )
+                addition = _continuation_delta(existing, buffer) if existing.strip() else buffer
+                if addition:
+                    live_drafts.append_block_text(
+                        conn, suggestion_id, stable_key, addition, status="drafting"
+                    )
         return written
 
     call_messages = messages

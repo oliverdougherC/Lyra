@@ -187,3 +187,8 @@ A matching failed or cancelled full-pass retry retains the previous live blocks,
 and reviewed-work checkpoint in its current successor suggestion. This is conservative: changed
 request, depth, original body, plan, brief, provider configuration, or source state starts fresh
 instead of mixing incompatible work. Prior rows are retained; no terminal run is resurrected.
+
+`--retry-failures` retries an observed injected failure once in the same synthetic profile, so
+rate-limit, transient-error and incomplete-stream recovery can be compared without replacing the
+profile. Resumed paragraph calls retain saved text and remove demonstrable echoed prefixes before
+publication; a second incomplete stream still fails. Exact original receipts remain available.

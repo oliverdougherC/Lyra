@@ -261,3 +261,39 @@ def test_live_http_section_boundary_and_user_edit_survive_restart(scenario):
                 b["user_revision"] > 0 and b["content"] == result["user_edit"]["edited_content"]
                 for b in result["after"]["live_suggestion"]["blocks"]
             )
+
+
+@pytest.mark.parametrize("scenario", ["rate_limit", "transient", "partial_stream"])
+def test_injected_failure_retries_in_same_profile_without_repeating_partial(scenario):
+    corpus = json.loads((ROOT / "scripts/eval_corpora/writer_quality.v1.json").read_text())
+    case = next(c for c in corpus["cases"] if c["id"] == "full_live_draft_from_student_notes")
+    provider = FaultProvider(delay=0.01)
+    args = argparse.Namespace(
+        source_root=ROOT,
+        backend_executable=None,
+        dimensions=["student_voice"],
+        context_window=32768,
+        allow_remote=False,
+        api_key_env="UNUSED_EVAL_KEY",
+        timeout=30,
+        interrupt_after=0.1,
+        retry_failures=True,
+    )
+    try:
+        result = run_case(
+            args,
+            case,
+            scenario,
+            {"endpoint_url": provider.endpoint, "model": "synthetic-writer-v1"},
+            provider,
+        )
+    finally:
+        provider.close()
+    assert result["status"] == "recorded", result
+    assert result["after_interruption"]["status"]["run_status"] == "failed"
+    assert result["after"]["status"]["run_status"] == "completed", result
+    assert result["after"]["status"]["run_id"] != result["after_interruption"]["status"]["run_id"]
+    if scenario == "partial_stream":
+        original = result["after_interruption"]["live_suggestion"]["blocks"][0]["content"]
+        assert original
+        assert result["after"]["live_suggestion"]["blocks"][0]["content"] == original

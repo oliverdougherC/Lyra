@@ -520,6 +520,10 @@ def run_case(
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             status = backend.request("GET", f"/api/drafts/{aid}/status")
+            if provider and getattr(args, "retry_failures", False):
+                evidence["intervention_observed"] = evidence["intervention_observed"] or any(
+                    event.get("fault") == scenario for event in provider.requests[request_count:]
+                )
             if status != previous:
                 evidence["timeline"].append(
                     {"elapsed_seconds": round(time.monotonic() - started, 3), **status}
@@ -624,7 +628,10 @@ def run_case(
             if status.get("run_status") in TERMINAL:
                 if (
                     evidence["intervention_observed"]
-                    and scenario.startswith(("restart_", "cancel_", "edit_"))
+                    and (
+                        scenario.startswith(("restart_", "cancel_", "edit_"))
+                        or getattr(args, "retry_failures", False)
+                    )
                     and status.get("run_status") != "completed"
                     and not retry_started
                 ):
@@ -773,6 +780,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--case", action="append")
     parser.add_argument("--scenario", choices=SCENARIOS, action="append")
+    parser.add_argument(
+        "--retry-failures",
+        action="store_true",
+        help="Retry an observed injected failure once in the same profile",
+    )
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--interrupt-after", type=float, default=1.0)
     parser.add_argument("--context-window", type=int)
@@ -816,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
         "harness_sha256": digest(Path(__file__)),
         "backend_source_sha256": source_digest(args.source_root),
         "generate_plan": args.generate_plan,
+        "retry_failures": args.retry_failures,
         "model": config["model"],
         "locality": config["locality"],
         "context_window": args.context_window or config.get("context_window") or 32768,

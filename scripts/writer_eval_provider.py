@@ -115,7 +115,16 @@ class FaultProvider:
                     )
                 )
                 if not spec:
-                    prompt = str(payload.get("messages", [{}])[-1].get("content", ""))
+                    # A continuation adds a final user message; the stable paragraph
+                    # job remains earlier in the conversation and must not change identity.
+                    prompt = next(
+                        (
+                            str(message.get("content", ""))
+                            for message in payload.get("messages", [])
+                            if "Section plan:\n" in str(message.get("content", ""))
+                        ),
+                        str(payload.get("messages", [{}])[-1].get("content", "")),
+                    )
                     match = re.search(r"Write about ([0-9,]+) words", prompt)
                     target = int(match[1].replace(",", "")) if match else 100
                     section_context = prompt.split("Section plan:\n", 1)[-1].split("\n\n", 1)[0]

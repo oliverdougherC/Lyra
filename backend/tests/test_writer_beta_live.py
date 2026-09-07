@@ -423,3 +423,43 @@ def test_live_model_citations_are_resolvable_before_publication(live_run, db, cl
         assert status["run_status"] == "failed"
         assert client.get(f"/api/drafts/{job.artifact_id}/pending").json() is None
     assert client.get(f"/api/drafts/{job.artifact_id}").json()["body"] == body
+
+
+@pytest.mark.parametrize("cutoff", [False, True])
+def test_resumed_paragraph_does_not_append_an_echo_of_saved_prose(
+    live_run, db, monkeypatch, cutoff
+):
+    import time
+    from dataclasses import replace
+
+    from backend.core.app_settings import TutorConfig
+
+    _, job, sid, _ = live_run
+    block = live_drafts.get_live_suggestion(db, sid)["blocks"][0]
+    original = block["content"]
+
+    async def stream(*args, **kwargs):
+        text = original[: len(original) // 2] if cutoff else original
+        for offset in range(0, len(text), 32):
+            yield writer_pipeline.client.StreamDelta("answer", text[offset : offset + 32])
+        if cutoff:
+            raise writer_pipeline.client.StreamCompletionError("unknown")
+
+    monkeypatch.setattr(writer_pipeline.client, "stream_chat", stream)
+
+    def operation():
+        return writer_pipeline._stream_live_paragraph(
+            db,
+            replace(job, _deadline=time.monotonic() + 2),
+            TutorConfig("http://127.0.0.1:9/v1", None, "fixture", 8192),
+            sid,
+            block,
+            [{"role": "user", "content": "Continue only if needed."}],
+        )
+
+    if cutoff:
+        with pytest.raises(writer_pipeline.client.StreamCompletionError):
+            operation()
+    else:
+        operation()
+    assert live_drafts.get_live_suggestion(db, sid)["blocks"][0]["content"] == original
