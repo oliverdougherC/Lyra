@@ -60,6 +60,11 @@ Rust validates it before exposing only `protocolVersion`, `apiBase`, `sessionHea
 request. Retry gracefully stops the old backend, reclaims verified helper ownership, and launches
 a new child with a new secret.
 
+The main window allows 540×600 logical-pixel resizing and clamps its initial content size to
+the primary display work area, reserving room for window chrome. Browser responsive tests do
+not certify native focus, display scaling or usability at that minimum; candidate-specific
+native checks remain required.
+
 The main webview denies top-level navigation away from the packaged origin and denies new windows.
 All rendered anchors are intercepted centrally. One typed `open_external_url` command revalidates
 normalized public HTTP(S) destinations in Rust and uses Tauri's opener plugin; file paths, generic
