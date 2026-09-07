@@ -3159,6 +3159,7 @@ def _run_section(
     reply = source_ledger.normalize_model_citations(
         reply, [int(source["id"]) for source in source_ledger.list_sources(conn, class_id)]
     )
+
     # A section replacement must not smuggle neighboring sections into its span.
     # Use the editor's heading parser so fenced code is not mistaken for structure.
     def heading_signature(section: sections.Section) -> tuple[int, str]:
@@ -3168,9 +3169,7 @@ def _run_section(
         return section.level, section.title.casefold()
 
     allowed_headings = [
-        heading_signature(section)
-        for section in sections.parse(target.text)
-        if section.level > 0
+        heading_signature(section) for section in sections.parse(target.text) if section.level > 0
     ]
     for section in sections.parse(reply):
         if section.level == 0:
