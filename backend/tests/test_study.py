@@ -1952,3 +1952,29 @@ def test_deck_output_cap_preserves_other_study_call_reserves(
     assert captured["max_tokens"] == study.generation_reserve(262144) == 65536
     assert captured["fail_on_truncation"] is True
     assert "enable_thinking" not in captured
+
+
+def test_flashcard_wire_schema_matches_faces_consumed_by_production(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["Population estimates"]},
+        {
+            "cards": [
+                {"front": "What is density?", "back": "Count divided by sampled area."},
+                {"front": "What is a sampling assumption?", "back": "Representative samples."},
+            ]
+        },
+    ]
+    study.run_generation(_deck_job(artifact_id, document_id, cards_per_topic=2))
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+    assert {
+        json.loads(str(part["content"]))["topic"] for part in artifacts.list_parts(db, artifact_id)
+    } == {"Population estimates"}
+    sent_messages = llm.calls[1]["args"][3]
+    assert '{"cards": [{"front": "...", "back": "..."}]}' in sent_messages[0]["content"]
+    wire_schema = llm.calls[1]["kwargs"]["schema"].schema["properties"]["cards"]["items"]
+    assert set(wire_schema["required"]) == {"front", "back"}
+    assert set(wire_schema["properties"]) == {"front", "back"}

@@ -202,6 +202,32 @@ def judge(result: tools.ToolLoopResult) -> VerificationOutcome:
             checks,
         )
 
+    comparisons = [
+        call
+        for call in result.calls
+        if call.ok and call.name == "cas_evaluate" and call.result.get("equal") is False
+    ]
+    if word == AGREES and comparisons:
+        # A successful execution is not a successful comparison. An unrelated later
+        # calculation cannot establish that this discrepancy was resolved. A fresh,
+        # coherent check can verify corrected work; this transcript cannot.
+        certain_mismatch = any(call.result.get("certain") is True for call in comparisons)
+        reason = (
+            "A comparison reported unequal expressions"
+            if certain_mismatch
+            else "A comparison could not establish whether its expressions were equal"
+        )
+        explanation = (
+            f"{reason}, so this solution is not verified. The submitted notation or "
+            "working may need correction; the comparison alone does not establish "
+            "which. Later successful calculations do not resolve that evidence."
+        )
+        return VerificationOutcome(
+            artifacts.UNCHECKABLE,
+            f"{explanation} The checker said: {detail}" if detail else explanation,
+            checks,
+        )
+
     if not any(check.ok for check in checks):
         if checks:
             # Calls were made and every one of them failed. Something here was worth
