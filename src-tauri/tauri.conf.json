@@ -15,8 +15,8 @@
         "title": "Lyra",
         "width": 1400,
         "height": 960,
-        "minWidth": 1080,
-        "minHeight": 720,
+        "minWidth": 540,
+        "minHeight": 600,
         "resizable": true,
         "fullscreen": false
       }
