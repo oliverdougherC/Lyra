@@ -626,7 +626,8 @@
   /* One line means one line. A display equation inside a truncated row would otherwise
      break to its own block and take the row's ellipsis with it. */
   .math-text-inline .katex-display,
-  .math-text-inline .katex-display > .katex {
+  .math-text-inline .katex-display > .katex,
+  .math-text-inline .katex-display > .katex > .katex-html {
     display: inline;
     margin: 0;
   }

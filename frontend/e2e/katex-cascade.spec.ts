@@ -501,6 +501,9 @@ test.describe('KaTeX cascade in the chat surface', () => {
           const px = (v: string) => Number.parseFloat(v) || 0
           const preview = document.querySelector('.math-text-inline .katex-display')!
           const inner = document.querySelector('.math-text-inline .katex-display > .katex')
+          const html = document.querySelector(
+            '.math-text-inline .katex-display > .katex > .katex-html',
+          )
           const container = preview.closest('.math-text-inline')!
           const style = (el: Element | null) => {
             if (!el) return null
@@ -517,6 +520,7 @@ test.describe('KaTeX cascade in the chat surface', () => {
           return {
             preview: style(preview),
             inner: style(inner),
+            html: style(html),
             containerHeight: Number(container.getBoundingClientRect().height.toFixed(2)),
             lineHeight: getComputedStyle(container).lineHeight,
           }
@@ -527,6 +531,7 @@ test.describe('KaTeX cascade in the chat surface', () => {
           'the maths inside an inline preview took a block display',
         ).toBe('inline')
         expect(probe.preview!.marginTop).toBe(0)
+        expect(probe.html!.display, 'the inner HTML wrapper broke the preview line').toBe('inline')
         expect(probe.preview!.marginBottom).toBe(0)
         // One line means one line: the quoted passage never grew into its own block.
         expect(probe.containerHeight).toBeLessThan(40)
