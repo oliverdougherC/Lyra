@@ -1,0 +1,318 @@
+import { type Page, type Route } from '@playwright/test'
+
+/**
+ * Synthetic backend rows for the KaTeX cascade suite (PLA-504).
+ *
+ * One class, one conversation, one problem set and one draft, all with the mathematical
+ * shapes the cascade has to hold: inline maths inside prose, display fractions and radicals,
+ * a display equation inside a one-line preview, and a long equation that has to overflow its
+ * own box. Nothing here is a real student's material.
+ */
+
+export const CLASS_ID = 12
+export const SESSION_ID = 4
+export const SOLUTION_ID = 21
+export const DRAFT_ID = 31
+export const DRAFT_SESSION_ID = 5
+
+/** Synthetic teaching material: a signals-and-systems answer with the shapes that matter. */
+export const CHAT_ANSWER = [
+  'The impulse response is $h(t)=e^{-2t}u(t-3)$, so its transform is $H(s)=\\frac{1}{s+2}$',
+  'with one pole at $s=-2$.',
+  '',
+  'Partial fractions give',
+  '',
+  '$$G(s)=\\frac{s+1}{(s+2)(s+3)}=\\frac{1}{s+2}-\\frac{2}{s+3}.$$',
+  '',
+  'and the damping ratio is $\\zeta=\\frac{1}{\\sqrt{2}}$, which is $\\overline{0.707}$.',
+  '',
+  '$$\\zeta=\\frac{\\ln 2}{\\sqrt{\\pi^{2}+\\ln^{2} 2}}$$',
+  '',
+  '$$y(t)=\\int_{-\\infty}^{\\infty} h(\\tau)\\,x(t-\\tau)\\,d\\tau=\\int_{0}^{t} e^{-2\\tau}\\cos(3(t-\\tau))\\,d\\tau+\\frac{s+5}{s^{2}+6s+13}+\\frac{s+7}{s^{2}+8s+17}+\\frac{s+9}{s^{2}+10s+21}$$',
+].join('\n')
+
+export const CHAT_QUESTION = 'Where does the pole of $H(s)=\\frac{1}{s+2}$ sit, and is it stable?'
+
+export const CLASS_12 = {
+  id: CLASS_ID,
+  name: 'Continuous-Time Signals',
+  code: 'ECE 203',
+  semester: 'Fall 2026',
+  archived: false,
+  document_count: 1,
+  created_at: '2026-08-01T09:00:00Z',
+  last_active_at: '2026-08-30T18:15:00Z',
+}
+
+export const MESSAGES = [
+  {
+    id: 1,
+    session_id: SESSION_ID,
+    role: 'user',
+    content: CHAT_QUESTION,
+    thinking: '',
+    thinking_ms: 0,
+    retrieval_trimmed: false,
+    omitted_document_count: 0,
+    tool_activity: [],
+    created_at: '2026-08-20T10:01:00Z',
+  },
+  {
+    id: 2,
+    session_id: SESSION_ID,
+    role: 'assistant',
+    content: CHAT_ANSWER,
+    thinking: '',
+    thinking_ms: 0,
+    retrieval_trimmed: false,
+    omitted_document_count: 0,
+    tool_activity: [],
+    created_at: '2026-08-20T10:01:20Z',
+  },
+]
+
+export const SETTINGS = {
+  tutor_model: 'synthetic',
+  tutor_base_url: 'http://127.0.0.1:9000/v1',
+  has_api_key: true,
+  endpoint_is_local: true,
+  endpoint_host: '127.0.0.1',
+  allow_web_research: false,
+  parallel_requests: true,
+  parallel_concurrency: 2,
+  exa_api_key_set: false,
+  exa_api_key_storage: 'file',
+}
+
+export const STATUS = {
+  state: 'ready',
+  stage_detail: null,
+  error_message: null,
+  problems_total: null,
+  problems_done: 0,
+  run_id: null,
+  job_kind: null,
+  depth: null,
+  started_at: null,
+  run_status: null,
+  cancel_requested: false,
+  cancel_requested_at: null,
+  finished_at: null,
+  warnings: [],
+}
+
+export const DRAFT_DETAIL = {
+  id: DRAFT_ID,
+  class_id: CLASS_ID,
+  kind: 'draft',
+  title: 'Laplace transforms, first draft',
+  state: 'ready',
+  stage_detail: null,
+  problems_total: null,
+  problems_done: 0,
+  error_message: null,
+  created_at: '2026-08-21T00:00:00Z',
+  updated_at: '2026-08-21T00:00:00Z',
+  part_id: 40,
+  // The draft body carries its own display maths so the editor chunk is asked to typeset
+  // the same constructs the chat is.
+  body: 'We start from $x(t)=e^{-2t}u(t)$.\n\n$$X(s)=\\frac{1}{s+2}.$$\n',
+  body_version: 3,
+  pending: false,
+}
+
+/**
+ * A comment whose quoted passage is a display equation: the inline preview in the margin
+ * has to hold it on one line.
+ */
+export const DRAFT_COMMENTS = [
+  {
+    id: 71,
+    artifact_id: DRAFT_ID,
+    part_id: 40,
+    author: 'reviewer' as const,
+    body: 'This is the transform you quoted; check the region of convergence.',
+    quote: '$$X(s)=\\frac{1}{s+2}$$',
+    anchor_start: 0,
+    anchor_end: 0,
+    severity: 'minor' as const,
+    resolved: false,
+    created_at: '2026-08-21T00:00:00Z',
+    replies: [],
+  },
+]
+
+export const SOLUTION_DETAIL = {
+  id: SOLUTION_ID,
+  class_id: CLASS_ID,
+  kind: 'solution_set',
+  title: 'Homework 2',
+  state: 'awaiting_review',
+  stage_detail: null,
+  problems_total: 2,
+  problems_done: 0,
+  error_message: null,
+  created_at: '2026-08-05T08:00:00Z',
+  updated_at: '2026-08-05T09:30:00Z',
+  sources: [{ document_id: 101, role: 'problem_set', ordinal: 0, filename: 'Homework 2.pdf' }],
+  parts: [
+    {
+      id: 10,
+      artifact_id: SOLUTION_ID,
+      parent_part_id: null,
+      ordinal: 1,
+      label: 'Problem 1',
+      content: 'Find the Fourier transform of each signal.',
+      content_type: 'markdown',
+      kind: 'problem',
+      status: 'pending',
+      origin: 'generated',
+      verdict: 'unchecked',
+      verdict_detail: null,
+      solve_parts: 'together',
+      error_message: null,
+      checks: [],
+      provenance: [],
+    },
+    {
+      id: 11,
+      artifact_id: SOLUTION_ID,
+      parent_part_id: 10,
+      ordinal: 2,
+      label: '(a)',
+      // Block maths inside a review row: the row is a list row, and the equation is a
+      // display equation, which is exactly the pairing that used to print raw TeX.
+      content: '$$\nx(t)=e^{-2t}u(t-3)\n$$',
+      content_type: 'markdown',
+      kind: 'problem',
+      status: 'pending',
+      origin: 'generated',
+      verdict: 'unchecked',
+      verdict_detail: null,
+      solve_parts: 'together',
+      error_message: null,
+      checks: [],
+      provenance: [],
+    },
+    {
+      id: 12,
+      artifact_id: SOLUTION_ID,
+      parent_part_id: 10,
+      ordinal: 3,
+      label: '(b)',
+      content: '$x(t)=t e^{-2t}u(t)$',
+      content_type: 'markdown',
+      kind: 'problem',
+      status: 'pending',
+      origin: 'generated',
+      verdict: 'unchecked',
+      verdict_detail: null,
+      solve_parts: 'together',
+      error_message: null,
+      checks: [],
+      provenance: [],
+    },
+  ],
+}
+
+export type Responder = (route: Route) => Promise<void> | void
+
+/**
+ * The backend, at the network boundary, with synthetic rows only. Anything not named here
+ * answers as an empty list so a stray read cannot render an error state the cascade test is
+ * not measuring; `apiCalls` records what the running app actually asked for, so fixture
+ * drift stays visible.
+ */
+export async function installLyraApi(page: Page, extra: Record<string, unknown> = {}) {
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
+  const apiCalls: string[] = []
+  const handlers: Record<string, unknown> = {
+    '/api/classes': [CLASS_12],
+    [`/api/classes/${CLASS_ID}`]: CLASS_12,
+    [`/api/classes/${CLASS_ID}/documents`]: [],
+    [`/api/classes/${CLASS_ID}/sessions`]: [
+      {
+        id: SESSION_ID,
+        class_id: CLASS_ID,
+        title: 'Poles and stability',
+        mode: 'guide',
+        artifact_part_id: null,
+        created_at: '2026-08-20T10:00:00Z',
+      },
+    ],
+    [`/api/classes/${CLASS_ID}/solutions`]: [SOLUTION_DETAIL],
+    [`/api/classes/${CLASS_ID}/study`]: { decks: [], quizzes: [] },
+    [`/api/classes/${CLASS_ID}/drafts`]: [
+      {
+        id: DRAFT_ID,
+        class_id: CLASS_ID,
+        kind: 'draft',
+        title: DRAFT_DETAIL.title,
+        state: 'ready',
+        stage_detail: null,
+        problems_total: null,
+        problems_done: 0,
+        error_message: null,
+        created_at: DRAFT_DETAIL.created_at,
+        updated_at: DRAFT_DETAIL.updated_at,
+      },
+    ],
+    [`/api/classes/${CLASS_ID}/profile`]: { facts: [], extraction_skipped_reason: null },
+    [`/api/classes/${CLASS_ID}/workspace`]: null,
+    [`/api/sessions/${SESSION_ID}`]: {
+      id: SESSION_ID,
+      class_id: CLASS_ID,
+      title: 'Poles and stability',
+      mode: 'guide',
+      artifact_part_id: null,
+      created_at: '2026-08-20T10:00:00Z',
+    },
+    [`/api/sessions/${SESSION_ID}/messages`]: MESSAGES,
+    '/api/settings': SETTINGS,
+    '/api/desktop-import/status': { available: false, status: 'idle' },
+    '/api/export/availability': { available: false, message: 'Not on this machine.' },
+    '/api/solutions/1/segmentation': SOLUTION_DETAIL,
+    [`/api/solutions/${SOLUTION_ID}`]: SOLUTION_DETAIL,
+    [`/api/solutions/${SOLUTION_ID}/status`]: { parts: [] },
+    '/api/drafts': [],
+    [`/api/drafts/${DRAFT_ID}`]: DRAFT_DETAIL,
+    [`/api/drafts/${DRAFT_ID}/status`]: STATUS,
+    [`/api/drafts/${DRAFT_ID}/pending`]: null,
+    [`/api/drafts/${DRAFT_ID}/brief`]: null,
+    [`/api/drafts/${DRAFT_ID}/plan`]: null,
+    [`/api/drafts/${DRAFT_ID}/sessions`]: [
+      {
+        id: DRAFT_SESSION_ID,
+        class_id: CLASS_ID,
+        title: 'Draft questions',
+        mode: 'guide',
+        artifact_part_id: 40,
+        created_at: '2026-08-21T09:00:00Z',
+      },
+    ],
+    [`/api/drafts/${DRAFT_ID}/comments`]: DRAFT_COMMENTS,
+    [`/api/drafts/${DRAFT_ID}/live-suggestion`]: null,
+    ...extra,
+  }
+  const responders = new Map<string, Responder>()
+  for (const [path, body] of Object.entries(handlers)) {
+    responders.set(path, (route) => void json(route, body))
+  }
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    apiCalls.push(path)
+    const responder = responders.get(path)
+    if (responder) return responder(route)
+    if (path.endsWith('/messages')) {
+      return json(route, MESSAGES)
+    }
+    return json(route, [])
+  })
+  return { apiCalls }
+}
+
+export async function setTheme(page: Page, theme: 'light' | 'dark') {
+  await page.addInitScript((value) => localStorage.setItem('lyra-theme', value), theme)
+}

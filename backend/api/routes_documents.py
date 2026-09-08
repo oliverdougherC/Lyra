@@ -384,10 +384,20 @@ def read_document_text(document_id: int, conn: DbConn) -> dict[str, object]:
     anchor as a page image with a different surface. Truncated, because this is a reading
     pane rather than a download: a source the student wants in full is a file they already
     have.
+
+    The read is bounded - one character past the ceiling, and never the whole extraction -
+    so a textbook-long source costs the pane its ceiling, not its size. A missing extraction
+    keeps the empty-preview contract; an unsafe, unreadable, or undecodable one is a real
+    failure and stays one rather than answering as a blank pane.
     """
     document = _document_row(conn, document_id)
-    path = _text_path(document_id)
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    # The extra character is what distinguishes "exactly the ceiling" from "longer than
+    # it": truncation is observed from the stream instead of inferred from a length the
+    # preview never paid to read.
+    try:
+        text = private.read_private_text(_text_path(document_id), max_chars=MAX_TEXT_CHARS + 1)
+    except FileNotFoundError:
+        text = ""
     return {
         "filename": document["filename"],
         "text": text[:MAX_TEXT_CHARS],

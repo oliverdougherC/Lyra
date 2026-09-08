@@ -221,6 +221,15 @@ material: `.math-text` inherits the surrounding size for typeset problem stateme
 `.reasoning-body` settles a thought at 15px on 1.6 in muted ink so an expanded trace never
 competes with the reply. The loaded 500 weight exists for these reading-surface headings.
 
+KaTeX's vendor CSS enters once through `styles/katex.css`, in the `katex` layer between
+`base` and `components`. The layer order is declared before imports in both stylesheet
+entries. Vite's explicit vendor alias loads the pinned CSS and rebases its font URLs;
+transitive bare vendor imports (including the lazy Crepe theme) resolve to an empty entry
+because that CSS is already loaded. This uses [Vite's CSS import alias support](https://vite.dev/guide/features#import-inlining-and-rebasing).
+Do not add an unlayered vendor copy: it overrides prose sizing and single-line previews.
+`e2e/katex-cascade.spec.ts` verifies computed styles, painted bars, fonts, overflow, and
+editor entry/exit against the production build in both themes.
+
 ### The hand (Caveat)
 
 Caveat 500 is loaded and mapped to `--font-hand` (and the `font-hand` utility), but no

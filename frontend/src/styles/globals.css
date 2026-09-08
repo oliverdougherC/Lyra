@@ -1,8 +1,24 @@
+/**
+ * Lyra's cascade order, in one line. `katex` sits between `base` and `components`: it must
+ * beat Tailwind's preflight and lose to our own overrides.
+ *
+ * Ahead of `base` it lost to preflight's `*, ::before, ::after { border: 0 solid }`, which
+ * outranks `.katex .frac-line { border-bottom-width: .08em }` by layer order whatever its
+ * specificity - so every fraction bar, square-root overline and \hline vanished, in chat and
+ * in drafts alike. Behind `components` it beats the overrides at `.katex-display` below, which
+ * is what this ordering was written for in the first place. Between the two, both hold.
+ *
+ * Unlayered is worse than either: a normal unlayered declaration outranks every layer at once,
+ * which is what the vendor sheet was doing while it was imported as a module from the
+ * entrypoint. It is imported into this layer by `styles/katex.css` now, and that file carries
+ * this same statement - identical text, both ahead of their `@import`s - because the first
+ * statement the browser meets is the one that wins and either sheet may be bundled first.
+ */
+@layer properties, theme, base, katex, components, utilities;
+
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
-
-@layer theme, base, katex, components, utilities;
 
 @font-face {
   font-family: 'Cinzel';
@@ -60,16 +76,9 @@
   font-display: swap;
 }
 
-/* KaTeX sits between `base` and `components`: it must beat Tailwind's preflight and lose
-   to our own overrides. Naming the layers here, ahead of Tailwind's own layer statement,
-   is what pins that order; otherwise the bundled import lands last and wins everything.
-
-   Ahead of `base` it lost to preflight's `*, ::before, ::after { border: 0 solid }`,
-   which outranks `.katex .frac-line { border-bottom-width: .08em }` by layer order
-   whatever its specificity - so every fraction bar, square-root overline and \hline
-   vanished, in chat and in drafts alike. Behind `components` it would beat the overrides
-   at .katex-display below, which is what this ordering was written for in the first
-   place. Between the two, both hold. */
+/* KaTeX sits in the `katex` layer declared above, and is imported into it once, by
+   `styles/katex.css`. The math overrides live in `@layer components` below, where that order
+   puts them above the vendor sheet. */
 @custom-variant dark (&:is(.dark *));
 
 /* Lyra design tokens: the single source of truth, per docs/design-system.md (the canonical
@@ -617,7 +626,8 @@
   /* One line means one line. A display equation inside a truncated row would otherwise
      break to its own block and take the row's ellipsis with it. */
   .math-text-inline .katex-display,
-  .math-text-inline .katex-display > .katex {
+  .math-text-inline .katex-display > .katex,
+  .math-text-inline .katex-display > .katex > .katex-html {
     display: inline;
     margin: 0;
   }

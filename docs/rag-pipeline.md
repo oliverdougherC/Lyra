@@ -64,6 +64,13 @@ boundaries are described in [architecture](architecture.md) and [privacy](privac
 
 ## Durability and verification
 
+Text source previews read at most 200,001 decoded characters through the private-file reader,
+return the first 200,000, and use the extra character to report truncation. Large extractions
+therefore do not need to be read in full just to open a preview. Missing extractions retain the
+empty-preview response; corrupt, inaccessible, or unsafe entries (including final-component
+symlinks) fail rather than appearing as a successfully empty source. Previewing never truncates
+the stored extraction or original document.
+
 Document publication checks that the source still belongs to the active job. Deletion, reingestion,
 or interruption must not allow a stale worker to publish over newer state. See
 [storage consistency](storage-consistency.md) for filesystem/database reconciliation.

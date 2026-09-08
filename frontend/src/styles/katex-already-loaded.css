@@ -1,0 +1,2 @@
+/* KaTeX is loaded eagerly through styles/katex.css. Transitive vendor imports,
+   including Crepe's latex theme, resolve here to preserve a single layered copy. */

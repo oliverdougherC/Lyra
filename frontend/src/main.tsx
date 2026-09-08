@@ -1,4 +1,11 @@
-import 'katex/dist/katex.min.css'
+/**
+ * KaTeX's vendor stylesheet, imported once and into its own `katex` cascade layer. It comes
+ * first, ahead of `globals.css` (which arrives with `AppRoot` below), because the layer order
+ * is fixed by the first statement the browser meets and an earlier import could fix an order
+ * with no `katex` in it. See `styles/katex.css` for what the layering holds and why this is a
+ * stylesheet of its own rather than an import inside `globals.css`.
+ */
+import '@/styles/katex.css'
 
 import React from 'react'
 import { createRoot } from 'react-dom/client'

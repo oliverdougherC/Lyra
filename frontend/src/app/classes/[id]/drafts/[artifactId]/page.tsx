@@ -755,6 +755,9 @@ export default function DraftWorkspacePage() {
             if (routeAnchor === target) router.replaceAnchor(target)
             else router.pushAnchor(target)
           }}
+          // If the editor itself cannot open, the way out leads to the class workspace,
+          // which lists this draft - a real destination, not a history guess.
+          onExit={() => router.push(`/classes/${classId}`)}
           onChange={(markdown) => {
             latestMarkdownRef.current = markdown
             setLatestMarkdown(markdown)
