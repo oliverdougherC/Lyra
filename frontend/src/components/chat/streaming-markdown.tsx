@@ -39,7 +39,12 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
   streaming?: boolean
   /** True once the stream finished; completion is only reported after this. */
   turnEnded?: boolean
-  onRevealComplete?: () => void
+  /**
+   * Drains of the reveal queue, with the generation the drain belongs to. The caller
+   * checks it: a drain from a replaced generation (a reset that cleared the answer, a
+   * retry) is stale and must not finalize the turn the new generation is running.
+   */
+  onRevealComplete?: (generation?: string) => void
   /**
    * Identity of the current generation of this message. When it changes the reveal
    * schedule is cleared, so a regenerated answer does not inherit the slots of the

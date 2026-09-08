@@ -349,9 +349,30 @@ reply is the page's main content, so it gets the page.
   the range's past moment instead of the queue tail, and a pending unit that sits ahead of a held
   past moment moves earlier to keep reading order, because a visible span never re-hides. The
   cascade lives in `components/chat/reveal.ts` and is shared by every surface that shows written
-  work; a regenerated message arrives with a new `generation` identity that clears the schedule,
-  so a retry's words do not inherit the slots of the answer they replace (the lifecycle that owns
-  retries, PLA-501, hands the identity down)
+  work
+- **An answer is regenerated under a generation identity, and the pane owns the identity.** The
+  chat pane hands every turn its own `generation`, bumps it when the agent reports a `reset`,
+  and again when a new turn starts — a reset and the first token of the replacement can land in
+  the same batch, with no empty frame committed between them, and the replacement still starts
+  life with its own slots: the schedule is cleared on the generation change, so a replacement
+  answer never inherits the reveal times of the answer it replaces, and any drain the old
+  cascade still owes is reported under the old identity and ignored. The pane settles a turn
+  only when the drain arrives under the generation it is running and under the outcome that ended
+  the turn — an empty answer has nothing to drain and settles at once
+- **The streaming row is the row that persists.** When a turn settles, the pane maps the tail
+  rows of the refetched conversation back onto the placeholder keys the optimistic rows used, so
+  the row the reader has been watching — the same DOM node, the same mounted renderer — is the
+  row that now carries the saved message's ID. The handoff names the turn's conversation and
+  clears with it, so a navigation or a new conversation retires it before the tail could claim
+  another pane's rows
+- **Completion is a drain, not a frame.** The cascade reports done from a settle-grace timer
+  (220ms after the last word's reveal is scheduled), which in a hidden tab simply waits until
+  the reader looks again: no timer chain, no requestAnimationFrame the terminal flush depends
+  on. Under `prefers-reduced-motion` there is nothing to wait for — the drain is immediate.
+  Finished units also go quiet: once a unit has revealed with an unchanged delay, later commits
+  do not rewrite it, so a long finished answer costs no schedule work while a new tail streams
+  (measured: roughly ten style writes per commit at 183 units; the inheritance pass is linear in
+  the visible unit count, not in source length, so no stable-prefix cache is kept)
 - There is no stream caret. Markdown blocks are block-level, so a trailing marker cannot sit
   at the end of the last word: it lands at the start of the line below, reading as stray
   punctuation. The word reveal is already the evidence that text is arriving

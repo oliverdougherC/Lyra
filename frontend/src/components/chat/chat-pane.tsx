@@ -241,6 +241,18 @@ export function ChatPane({
   const [turnKind, setTurnKind] = useState<TurnKind>('send')
   const [revealDrained, setRevealDrained] = useState(false)
   /**
+   * The generation of the answer the streaming row is currently rendering.
+   *
+   * A new turn and an agent `reset` each start a new one — a reset and the first token of
+   * its replacement can land in the same network read and the same React batch, with no
+   * empty render between them, so "the text went away" is not evidence the reader saw
+   * anything go away. Handing the renderer a changed `generation` is what clears the old
+   * schedule instead, and the drain callback checks it, so a completion from the replaced
+   * answer cannot finalize the turn the replacement is running.
+   */
+  const revealGenRef = useRef('g0')
+  const [revealGen, setRevealGen] = useState('g0')
+  /**
    * The pane has been pointed at a different conversation than the turn in flight.
    *
    * The turn keeps streaming; it just has nowhere to show. Set from a change in which
@@ -400,12 +412,30 @@ export function ChatPane({
     }
   }, [])
 
+  /**
+   * The rows a just-settled turn handed off, kept on their optimistic keys so the row the
+   * reader has been watching is not unmounted and re-laid-out under a new identity once
+   * its persisted IDs arrive. Expiring them is `runTurn`'s job: the next turn reuses the
+   * placeholder keys for its own rows, so the handoff cannot outlive the turn it belongs to.
+   */
+  const [settledHandoff, setSettledHandoff] = useState<{
+    sessionId: number
+    turnId: number
+    rows: number
+  } | null>(null)
+
+  const bumpRevealGeneration = useCallback(() => {
+    revealGenRef.current = `g${Number(revealGenRef.current.slice(1)) + 1}`
+    setRevealGen(revealGenRef.current)
+  }, [])
+
   const clearOptimisticTurn = useCallback(() => {
     // Nothing on screen belongs to a particular conversation any more, so leaving one is
     // no longer something that puts anything away.
     turnSessionRef.current = null
     setDetached(false)
     setPendingTurn(null)
+    setSettledHandoff(null)
     setTurnBase(null)
     setStreamText('')
     setStreamThinking('')
@@ -482,13 +512,23 @@ export function ChatPane({
       // now would leave the answer's own transcript holding a stale copy of itself.
       const turnSessionId = turnSessionRef.current
       const owner = turnIdRef.current
+      // The rows the turn just created, in the order the transcript grows: a `send` is a
+      // question row and its answer, a retry is the answer standing where the old one did.
+      // Keeping them on their optimistic keys through the handoff is what makes the
+      // settled row the same row the reader has been watching, not a remount of it.
+      const handoffRows = pendingTurn?.length ?? 0
       if (immediate) clearOptimisticTurn()
       if (turnSessionId !== null) {
         await queryClient.invalidateQueries({ queryKey: chatKeys.messages(turnSessionId) })
       }
-      if (!immediate && turnIdRef.current === owner) clearOptimisticTurn()
+      if (!immediate && turnIdRef.current === owner) {
+        clearOptimisticTurn()
+        if (handoffRows > 0 && turnSessionId !== null) {
+          setSettledHandoff({ sessionId: turnSessionId, turnId: owner, rows: handoffRows })
+        }
+      }
     },
-    [clearOptimisticTurn, queryClient],
+    [clearOptimisticTurn, pendingTurn, queryClient],
   )
 
   useEffect(() => {
@@ -546,6 +586,10 @@ export function ChatPane({
       abortRef.current = controller
       turnSessionRef.current = turnSessionId
       setDetached(false)
+      // A new answer generation: the previous answer's reveal slots, timers, and drain
+      // callbacks are not this turn's, whatever state the row is in.
+      setSettledHandoff(null)
+      bumpRevealGeneration()
       settledRef.current = false
       agentTurnRef.current = Boolean(agent)
       outcomeRef.current = 'active'
@@ -648,8 +692,12 @@ export function ChatPane({
           const onAgentEvent = (event: import('@/lib/api').AgentStreamEvent) => {
             if (!owns()) return
             if (event.type === 'reset') {
+              // A fresh answer generation even when the first replacement token lands in
+              // the same read: the old answer's reveal schedule dies with the reset, and
+              // the replacement must not start life with slots it never earned.
               assistantText = ''
               streamTextRef.current = ''
+              bumpRevealGeneration()
               setStreamText('')
             } else {
               onEvent(event)
@@ -1162,11 +1210,18 @@ export function ChatPane({
   }, [classId, pollStopStatus])
 
   /**
-   * Called by the streaming renderer whenever its reveal queue drains. Mid-stream
-   * drains (between chunks) must not count: `revealDrained` only matters once the turn
-   * has ended, so the settle waits for the final words to finish fading in.
+   * Called by the streaming renderer whenever its reveal queue drains, with the
+   * generation the drain belongs to. Mid-stream drains (between chunks) must not
+   * count: `revealDrained` only matters once the turn has ended, so the settle waits
+   * for the final words to finish fading in. And a drain from a replaced generation —
+   * the cascade of an answer a reset just cleared — is stale: it cannot settle the
+   * turn the new generation is running, whatever outcome the pane shows. Only a
+   * string argument carries a generation to check; a manual finish calls this bare
+   * (or with whatever a control forwards it) and speaks for the surface the reader
+   * just watched, which is the current generation by construction.
    */
-  const handleRevealComplete = useCallback(() => {
+  const handleRevealComplete = useCallback((generation?: string) => {
+    if (typeof generation === 'string' && generation !== revealGenRef.current) return
     if (outcomeRef.current !== 'completed' && outcomeRef.current !== 'stopped') return
     revealDrainedRef.current = true
     setRevealDrained(true)
@@ -1183,6 +1238,33 @@ export function ChatPane({
         message.id === -2 ? { ...message, content: streamText, thinking: streamThinking } : message,
       )
     : messages
+
+  /**
+   * Which React identity a row renders under.
+   *
+   * The optimistic rows are keyed `-1` (question) and `-2` (answer) while they stream.
+   * Once the turn settles, the same rows come back from the server under their real IDs
+   * — and a change of key is a remount: the answer the reader has been watching, with its
+   * selection, its scroll position, and its settled layout, is thrown away and re-built.
+   * The handoff keeps the keys: for one render after settling, the rows the turn created
+   * (the tail of the transcript) still render as `-1`/`-2`, so React preserves the
+   * subtree and only the `streaming` prop flips. The handoff belongs to one turn, lives on
+   * the session its turn was sent to, and expires the moment the next turn takes the
+   * placeholder keys back.
+   */
+  const rowKey = (message: ChatMessage, index: number): string => {
+    if (optimisticTurn) return String(message.id)
+    const handoff = settledHandoff
+    if (
+      handoff !== null &&
+      activeSessionId !== null &&
+      handoff.sessionId === activeSessionId &&
+      index >= rendered.length - handoff.rows
+    ) {
+      return message.role === 'user' ? '-1' : '-2'
+    }
+    return String(message.id)
+  }
   const lastAssistantIndex = rendered.reduce(
     (found, message, index) => (message.role === 'assistant' ? index : found),
     -1,
@@ -1418,7 +1500,7 @@ export function ChatPane({
           const isStreamingReply = optimisticTurn && message.id === -2
           return (
             <MessageRow
-              key={message.id}
+              key={rowKey(message, index)}
               message={message}
               // A question and the answer under it are one turn, so they sit close; the
               // next question opens at a wider interval. Even spacing throughout is what
@@ -1435,6 +1517,7 @@ export function ChatPane({
                   : undefined
               }
               onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
+              generation={isStreamingReply ? revealGen : undefined}
               canRetry={
                 !historyError &&
                 !messagesPending &&

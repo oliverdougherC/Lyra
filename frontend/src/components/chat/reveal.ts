@@ -293,8 +293,24 @@ type RevealOptions = {
    * a regenerated answer does not inherit the slots of the one it replaces.
    */
   generation?: string
-  /** Called once the last scheduled unit has finished fading in. */
-  onDrained?: () => void
+  /**
+   * Called once the last scheduled unit has finished fading in, with the generation the
+   * drain belongs to. The caller must check it: a drain from a replaced generation (a
+   * reset, a retry) is stale and must not settle the turn the new one is running.
+   */
+  onDrained?: (generation: string | undefined) => void
+}
+
+/**
+ * Update-work counts, read by the performance gate that keeps a commit from doing
+ * unbounded work on a long answer. Zeroed per commit, not per message: a number is only
+ * meaningful against the commit that produced it.
+ */
+export const revealWork = {
+  /** `reveal()` style writes this commit (the rest of the schedule work is reads). */
+  styleWrites: 0,
+  /** Containment checks the deadline inheritance ran this commit. */
+  inheritanceScans: 0,
 }
 
 /**
@@ -339,17 +355,20 @@ export function useRevealCascade({
   useEffect(() => {
     if (!settled) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      onDrainedRef.current?.()
+      onDrainedRef.current?.(generationRef.current)
       return
     }
     const remaining = Math.max(0, nextRevealAtRef.current + SETTLE_GRACE_MS - performance.now())
-    const timer = window.setTimeout(() => onDrainedRef.current?.(), remaining)
+    const timer = window.setTimeout(() => onDrainedRef.current?.(generationRef.current), remaining)
     return () => window.clearTimeout(timer)
-  }, [settled])
+    // A generation change re-arms the report: the replacement answer has its own queue
+    // to finish, and a drain of the old one has already fired (or been cancelled) —
+    // settling must wait for the new generation's tail, reported under its identity.
+  }, [settled, generation])
 
   useLayoutEffect(() => {
     if (!enabled) {
-      onDrainedRef.current?.()
+      onDrainedRef.current?.(generationRef.current)
       return
     }
 
@@ -358,7 +377,7 @@ export function useRevealCascade({
       rangesRef.current.clear()
       lastDeadlineRef.current.clear()
       nextRevealAtRef.current = 0
-      onDrainedRef.current?.()
+      onDrainedRef.current?.(generationRef.current)
       return
     }
 
@@ -372,6 +391,8 @@ export function useRevealCascade({
     }
     if (generation !== undefined) generationRef.current = generation
 
+    revealWork.styleWrites = 0
+    revealWork.inheritanceScans = 0
     const now = performance.now()
     const nodes = Array.from(
       rootRef.current?.querySelectorAll<HTMLElement>(`[${REVEAL_ATTRIBUTE}]`) ?? [],
@@ -390,6 +411,11 @@ export function useRevealCascade({
       MAX_REVEAL_BACKLOG_MS / Math.max(1, pending),
     )
 
+    // A per-commit snapshot of the historical ranges: the pass reads it many times
+    // (once per unremembered unit) and writes to `rangesRef` as it goes, so the snapshot
+    // is what keeps the inheritance reading the state this commit started from.
+    const historicalRanges: [string, [number, number]][] = [...rangesRef.current]
+
     /**
      * The moment the unit's source range already holds: the deadline of the smallest
      * previously-seen range that contains it. A range on screen carries a past deadline,
@@ -398,8 +424,9 @@ export function useRevealCascade({
      */
     const inheritedDeadline = (range: [number, number], selfKey: string): number | undefined => {
       let best: { span: number; deadline: number | undefined } | null = null
-      for (const [otherKey, other] of rangesRef.current) {
+      for (const [otherKey, other] of historicalRanges) {
         if (otherKey === selfKey) continue
+        revealWork.inheritanceScans += 1
         if (other[0] <= range[0] && range[1] <= other[1]) {
           const span = other[1] - other[0]
           if (best === null || span < best.span) {
@@ -525,7 +552,18 @@ function reveal(node: HTMLElement, scheduledAt: number, now: number): void {
   }
   // A negative delay resumes a replacement node at the elapsed position, so old
   // list text cannot repeatedly fade from invisible as Markdown is reconstructed.
-  node.style.setProperty('--stream-word-delay', `${scheduledAt - start}ms`)
+  const delay = `${scheduledAt - start}ms`
+  // A unit whose animation already ran carries a fixed delay: every later commit
+  // computes the same value, and rewriting it is pure write traffic — the schedule
+  // of a long, finished answer must stay quiet while a new tail arrives.
+  if (
+    node.classList.contains(REVEAL_VISIBLE_CLASS) &&
+    node.style.getPropertyValue('--stream-word-delay') === delay
+  ) {
+    return
+  }
+  revealWork.styleWrites += 1
+  node.style.setProperty('--stream-word-delay', delay)
   node.dataset.streamRevealAt = String(scheduledAt)
   node.classList.add(REVEAL_VISIBLE_CLASS)
 }

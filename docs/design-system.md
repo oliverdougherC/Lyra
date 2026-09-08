@@ -328,7 +328,7 @@ parallax, no shimmer on content, no gold in motion.
 | Effect | Where | Timing |
 | --- | --- | --- |
 | Arrival reveal (`.lyra-reveal`, `Reveal`) | List rows: the class ledger, the segmentation review | 250ms, 8px rise with fade, `--ease-gentle`, `both` fill; delay capped at 200ms; at most once per session per `once` id |
-| Word streaming (`[data-stream-word]`) | Assistant replies as they arrive | 180ms per word, 2px rise, `--ease-gentle` |
+| Word streaming (`[data-stream-word]`) | Assistant replies as they arrive | 180ms per word, opacity only (list markers color only), `--ease-gentle`; finished units stay static, a generation change re-clears the schedule |
 | Label enter plus shimmer (`.lyra-label-enter`) | The thinking label | 240ms enter plus a 2.6s gradient sweep clipped to the glyphs |
 | The mark thinking (`.lyra-mark-thinking`) | `LyraMark thinking` | Orbit 7s linear, breathe 2.4s, twinkle 1.9s and 2.7s |
 | The hand underlines (`.hand-underline`) | `HandUnderline` | 280ms draw-in, `--ease-draw` |

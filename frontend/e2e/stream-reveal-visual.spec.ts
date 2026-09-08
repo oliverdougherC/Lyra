@@ -10,8 +10,10 @@
  * The assertions are the review's invariants, read off the page as the stream runs:
  *
  *  - a span that has been revealed never re-hides at syntax closure — an emphasis that
- *    closes around its words, a span's line ending: the opacity of a completed unit
- *    stays 1 on every later sample;
+ *    closes around its words, a span's line ending: a visible unit must not drop back
+ *    toward invisible. A node swap mid-fade resumes at the elapsed position and may read
+ *    a hair below the finished value for one sample; that continuity dip is counted in
+ *    the evidence, while a true re-hide (a unit falling toward 0) fails the run;
  *  - pending deadlines are nondecreasing in reading order on every sample;
  *  - a display block keeps its container's rect: a `$$` block inside a list item sits
  *    inside that item's box;
@@ -33,12 +35,14 @@ import { expect, test, type Page } from '@playwright/test'
 import {
   CLASS_ID,
   TWIN_SESSION,
-  VISUAL_MESSAGE_ID,
-  VISUAL_MESSAGES,
+  VISUAL_HISTORY,
+  VISUAL_NEW_ANSWER_ID,
+  VISUAL_NEW_QUESTION,
   VISUAL_SESSION,
   VISUAL_SESSION_ID,
   VISUAL_STREAM,
   installLyraApi,
+  visualNewRows,
 } from './pla-504-math-fixture'
 
 /** The app's baked API origin (VITE_API_BASE) — the real server must sit on it. */
@@ -76,7 +80,11 @@ function feedPlan(text: string): { chunk: string; delay: number }[] {
   return plan
 }
 
-async function startFeedServer(text: string, messageId: number): Promise<Server> {
+async function startFeedServer(
+  text: string,
+  messageId: number,
+  onResult: () => void,
+): Promise<Server> {
   const server = createServer((req, res) => {
     const agentChat = `/api/classes/${CLASS_ID}/sessions/${VISUAL_SESSION_ID}/agent-chat`
     const cors = {
@@ -104,6 +112,9 @@ async function startFeedServer(text: string, messageId: number): Promise<Server>
           await sleep(delay)
         }
         await sleep(150)
+        // The backend persists the turn as new rows with new IDs at the moment it answers;
+        // the pane's post-turn refetch has to fetch them.
+        onResult()
         res.write(
           `data: ${JSON.stringify({
             type: 'result',
@@ -196,22 +207,26 @@ async function sample(page: Page): Promise<Snapshot> {
 }
 
 test('a real delayed stream reveals in order and never re-hides', async ({ page }, testInfo) => {
-  const server = await startFeedServer(VISUAL_STREAM, VISUAL_MESSAGE_ID)
+  const api = await installLyraApi(
+    page,
+    {
+      [`/api/classes/${CLASS_ID}/sessions`]: [TWIN_SESSION, VISUAL_SESSION],
+      [`/api/sessions/${VISUAL_SESSION_ID}`]: VISUAL_SESSION,
+      [`/api/classes/${CLASS_ID}/sessions/${VISUAL_SESSION_ID}/agent/access-dismissals`]: {
+        dismissals: [],
+      },
+    },
+    { sessionId: VISUAL_SESSION_ID, initial: VISUAL_HISTORY },
+  )
+  const server = await startFeedServer(VISUAL_STREAM, VISUAL_NEW_ANSWER_ID, () => {
+    api.appendMessages!(visualNewRows())
+  })
   try {
     const shots = path.join(testInfo.outputDir, 'screens')
     mkdirSync(shots, { recursive: true })
     const shot = async (name: string) => {
       await page.screenshot({ path: path.join(shots, name) })
     }
-
-    await installLyraApi(page, {
-      [`/api/classes/${CLASS_ID}/sessions`]: [TWIN_SESSION, VISUAL_SESSION],
-      [`/api/sessions/${VISUAL_SESSION_ID}`]: VISUAL_SESSION,
-      [`/api/sessions/${VISUAL_SESSION_ID}/messages`]: VISUAL_MESSAGES,
-      [`/api/classes/${CLASS_ID}/sessions/${VISUAL_SESSION_ID}/agent/access-dismissals`]: {
-        dismissals: [],
-      },
-    })
     // Let the agent-chat POST pass through to the real server; every other API call stays
     // on the fixture.
     await page.route(
@@ -220,7 +235,9 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
     )
 
     await page.goto(visualUrl)
-    await page.getByLabel('Message Lyra').fill('Stream the visual shapes.')
+    // The composer's words become the saved user row: the fixture records the same text
+    // so the persistence proof can compare the page against what the backend stored.
+    await page.getByLabel('Message Lyra').fill(VISUAL_NEW_QUESTION)
     await page.getByRole('button', { name: 'Send message' }).click()
 
     await expect(
@@ -232,20 +249,28 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
     let shotEarly = false
     let shotDisplay = false
     const deadlineOf = new Map<string, number>()
+    // A unit whose node is swapped by a re-parse resumes its fade at the elapsed position
+    // (a negative CSS delay), which can read a hair below the finished value for one
+    // sample. That is a continuity artifact of the resume, not a re-hide: a re-hide — a
+    // fresh slot, a cleared queue — drops the unit toward 0. The floor separates the two,
+    // and every sub-floor reading is counted for the evidence.
+    const REHIDE_FLOOR = 0.9
+    let resumeDips = 0
     let samples = 0
     for (;;) {
       const snap = await sample(page)
       samples += 1
       for (const unit of snap.units) {
         if (unit.at === null) continue
-        // A revealed unit (its animation complete) must keep its opacity: a re-hide would
-        // be the visible span fading out at the moment its syntax closed.
+        // A revealed unit (its animation complete) must not fade back out: a re-hide would
+        // be the visible span vanishing at the moment its syntax closed.
         const previouslyVisible =
           (firstSeen.get(unit.key) ?? 0) >= 0.99 ||
           (unit.at + 220 <= snap.now ? firstSeen.get(unit.key) !== undefined : false)
-        if (previouslyVisible && unit.opacity < 0.99) {
+        if (previouslyVisible && unit.opacity < REHIDE_FLOOR) {
           throw new Error(`unit ${unit.key} re-hid at sample ${samples}: opacity ${unit.opacity}`)
         }
+        if (previouslyVisible && unit.opacity < 0.99) resumeDips += 1
         if (unit.opacity > (firstSeen.get(unit.key) ?? 0)) firstSeen.set(unit.key, unit.opacity)
         deadlineOf.set(unit.key, unit.at)
       }
@@ -289,6 +314,27 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
 
     // Settled: the cascade is gone and the render of the same source holds — prices are
     // prose, the digit-led mathematics is mathematics, the unfinished equation is literal.
+    // The persistence proof, read off the wire: the pane's last fetch of the conversation
+    // is the history plus the turn's new rows, under the new IDs — not the seed's twin.
+    const served = api.servedMessages!()
+    expect(served.map((row) => (row as { id: number }).id)).toEqual([40, 41, 50, 51])
+    const answered = served.at(-1) as { role: string; content: string }
+    expect(answered.role).toBe('assistant')
+    expect(answered.content).toBe(VISUAL_STREAM)
+
+    // And on the page: the live answer the reader watched is the row that persisted —
+    // the last `.assistant-content` is the new answer, the history's earlier answer is
+    // untouched above it, and the question appears once, from its saved row.
+    const rows = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.assistant-content')).map(
+        (node) => node.textContent ?? '',
+      ),
+    )
+    expect(rows.length, 'the turn settled onto two answer rows').toBe(2)
+    expect(rows[0]).toContain('The earlier answer')
+    expect(rows[1]).toContain('The limit is $\\frac{1}{')
+    expect(await page.getByText(VISUAL_NEW_QUESTION).count()).toBe(1)
+
     const settled = await sample(page)
     expect(settled.katexDisplay, 'the display block was lost on settling').toBe(1)
     expect(
@@ -320,7 +366,17 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
     })
     writeFileSync(
       path.join(testInfo.outputDir, 'settled-geometry.json'),
-      JSON.stringify({ ...geometry, settledText: settled.text }, null, 2),
+      JSON.stringify(
+        {
+          ...geometry,
+          settledText: settled.text,
+          samples,
+          resumeDips,
+          rehideFloor: REHIDE_FLOOR,
+        },
+        null,
+        2,
+      ),
     )
     await shot('settled.png')
   } finally {

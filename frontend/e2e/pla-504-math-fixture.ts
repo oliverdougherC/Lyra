@@ -16,6 +16,8 @@ export const DRAFT_ID = 31
 export const DRAFT_SESSION_ID = 5
 export const TWIN_SESSION_ID = 6
 export const TWIN_MESSAGE_ID = 31
+export const TWIN_NEW_QUESTION_ID = 60
+export const TWIN_NEW_ANSWER_ID = 61
 
 /** Synthetic teaching material: a signals-and-systems answer with the shapes that matter. */
 export const CHAT_ANSWER = [
@@ -75,6 +77,36 @@ export const STREAM_TWIN = [
 
 export const TWIN_QUESTION = 'Show the full shape set: lists, quotes, code, a table, and the rest.'
 
+/** The streamed replay lands below the seeded twin as a new message with new IDs. */
+export function twinNewRows(question: string): Record<string, unknown>[] {
+  return [
+    {
+      id: TWIN_NEW_QUESTION_ID,
+      session_id: TWIN_SESSION_ID,
+      role: 'user',
+      content: question,
+      thinking: '',
+      thinking_ms: 0,
+      retrieval_trimmed: false,
+      omitted_document_count: 0,
+      tool_activity: [],
+      created_at: '2026-08-22T09:01:00Z',
+    },
+    {
+      id: TWIN_NEW_ANSWER_ID,
+      session_id: TWIN_SESSION_ID,
+      role: 'assistant',
+      content: STREAM_TWIN,
+      thinking: '',
+      thinking_ms: 0,
+      retrieval_trimmed: false,
+      omitted_document_count: 0,
+      tool_activity: [],
+      created_at: '2026-08-22T09:01:30Z',
+    },
+  ]
+}
+
 /**
  * The real-incremental streaming fixture (review round 2): the content the real SSE server
  * feeds the page in delayed chunks. It carries the cases the review asks the live renderer
@@ -83,7 +115,10 @@ export const TWIN_QUESTION = 'Show the full shape set: lists, quotes, code, a ta
  * stays mathematics, an atomic code block, and an unfinished equation at the tail.
  */
 export const VISUAL_SESSION_ID = 7
-export const VISUAL_MESSAGE_ID = 41
+export const VISUAL_HISTORY_QUESTION_ID = 40
+export const VISUAL_HISTORY_ANSWER_ID = 41
+export const VISUAL_NEW_QUESTION_ID = 50
+export const VISUAL_NEW_ANSWER_ID = 51
 export const VISUAL_STREAM = [
   'The cost line: It costs $5 and $10 today.',
   '',
@@ -109,12 +144,22 @@ export const VISUAL_SESSION = {
   created_at: '2026-09-08T09:00:00Z',
 }
 
-export const VISUAL_MESSAGES = [
+export const VISUAL_HISTORY_QUESTION = 'Walk through the costs and the limit.'
+export const VISUAL_HISTORY_ANSWER =
+  'The earlier answer: it costs $5 today, and the limit stays finite.'
+
+/**
+ * The session's history before the live turn: an earlier question and an earlier, shorter
+ * answer. The streamed turn must land below it as new rows with new IDs — the persistence
+ * proof is that the list gains rows, not that it already held the streamed answer under a
+ * name the seed chose.
+ */
+export const VISUAL_HISTORY = [
   {
-    id: 40,
+    id: VISUAL_HISTORY_QUESTION_ID,
     session_id: VISUAL_SESSION_ID,
     role: 'user',
-    content: 'Walk through the costs and the limit.',
+    content: VISUAL_HISTORY_QUESTION,
     thinking: '',
     thinking_ms: 0,
     retrieval_trimmed: false,
@@ -123,10 +168,10 @@ export const VISUAL_MESSAGES = [
     created_at: '2026-09-08T09:00:00Z',
   },
   {
-    id: VISUAL_MESSAGE_ID,
+    id: VISUAL_HISTORY_ANSWER_ID,
     session_id: VISUAL_SESSION_ID,
     role: 'assistant',
-    content: VISUAL_STREAM,
+    content: VISUAL_HISTORY_ANSWER,
     thinking: '',
     thinking_ms: 0,
     retrieval_trimmed: false,
@@ -135,6 +180,37 @@ export const VISUAL_MESSAGES = [
     created_at: '2026-09-08T09:00:30Z',
   },
 ]
+
+/** The rows the live turn saves: new IDs, the question the composer sent, the streamed answer. */
+export const VISUAL_NEW_QUESTION = 'Stream the visual shapes.'
+export function visualNewRows(): Record<string, unknown>[] {
+  return [
+    {
+      id: VISUAL_NEW_QUESTION_ID,
+      session_id: VISUAL_SESSION_ID,
+      role: 'user',
+      content: VISUAL_NEW_QUESTION,
+      thinking: '',
+      thinking_ms: 0,
+      retrieval_trimmed: false,
+      omitted_document_count: 0,
+      tool_activity: [],
+      created_at: '2026-09-08T09:01:00Z',
+    },
+    {
+      id: VISUAL_NEW_ANSWER_ID,
+      session_id: VISUAL_SESSION_ID,
+      role: 'assistant',
+      content: VISUAL_STREAM,
+      thinking: '',
+      thinking_ms: 0,
+      retrieval_trimmed: false,
+      omitted_document_count: 0,
+      tool_activity: [],
+      created_at: '2026-09-08T09:01:30Z',
+    },
+  ]
+}
 
 export const TWIN_MESSAGES = [
   {
@@ -370,15 +446,35 @@ export const SOLUTION_DETAIL = {
 export type Responder = (route: Route) => Promise<void> | void
 
 /**
+ * A session whose message list grows while the test runs: the turn's result is persisted
+ * as new rows with new IDs, and the pane's post-turn refetch has to see them. `initial` is
+ * what the session holds before the turn; `append` is what the feed server calls when it
+ * saves the turn. `served` is the exact list the pane last fetched — the persistence proof
+ * is read off the wire, not off a seed.
+ */
+export type LiveMessages = {
+  sessionId: number
+  append: (rows: unknown[]) => void
+  served: () => unknown[]
+  rows: () => unknown[]
+}
+
+/**
  * The backend, at the network boundary, with synthetic rows only. Anything not named here
  * answers as an empty list so a stray read cannot render an error state the cascade test is
  * not measuring; `apiCalls` records what the running app actually asked for, so fixture
  * drift stays visible.
  */
-export async function installLyraApi(page: Page, extra: Record<string, unknown> = {}) {
+export async function installLyraApi(
+  page: Page,
+  extra: Record<string, unknown> = {},
+  live?: { sessionId: number; initial: unknown[] },
+) {
   const json = (route: Route, body: unknown) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
   const apiCalls: string[] = []
+  let liveRows: unknown[] | null = live ? [...live.initial] : null
+  let liveServed: unknown[] | null = null
   const handlers: Record<string, unknown> = {
     '/api/classes': [CLASS_12],
     [`/api/classes/${CLASS_ID}`]: CLASS_12,
@@ -458,6 +554,11 @@ export async function installLyraApi(page: Page, extra: Record<string, unknown> 
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     apiCalls.push(path)
+    // The live store wins for its session: the pane reads the conversation as it grows.
+    if (live && liveRows !== null && path === `/api/sessions/${live.sessionId}/messages`) {
+      liveServed = [...liveRows]
+      return json(route, liveRows)
+    }
     const responder = responders.get(path)
     if (responder) return responder(route)
     if (path.endsWith('/messages')) {
@@ -465,7 +566,12 @@ export async function installLyraApi(page: Page, extra: Record<string, unknown> 
     }
     return json(route, [])
   })
-  return { apiCalls }
+  return {
+    apiCalls,
+    appendMessages:
+      liveRows === null ? undefined : (rows: unknown[]) => void liveRows.push(...rows),
+    servedMessages: liveRows === null ? undefined : () => liveServed ?? [],
+  }
 }
 
 export async function setTheme(page: Page, theme: 'light' | 'dark') {

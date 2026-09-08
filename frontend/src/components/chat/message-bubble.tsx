@@ -52,7 +52,13 @@ type MessageRowProps = {
   /** When the turn started, so the wait can report how long it has run. */
   turnStartedAt?: number | null
   turnEnded?: boolean
-  onRevealComplete?: () => void
+  onRevealComplete?: (generation?: string) => void
+  /**
+   * The generation of the answer streaming into this row. A change clears the reveal
+   * schedule, so a reset's replacement answer does not start life with the slots the
+   * answer it replaces had. The pane's turn lifecycle (PLA-501) owns the identity.
+   */
+  generation?: string
   canRetry?: boolean
   onRetry?: () => void
 }
@@ -67,6 +73,7 @@ export function MessageRow({
   turnStartedAt,
   turnEnded,
   onRevealComplete,
+  generation,
   canRetry,
   onRetry,
 }: MessageRowProps) {
@@ -142,6 +149,7 @@ export function MessageRow({
             streaming={streaming}
             turnEnded={turnEnded}
             onRevealComplete={onRevealComplete}
+            generation={generation}
           />
         ) : null}
 

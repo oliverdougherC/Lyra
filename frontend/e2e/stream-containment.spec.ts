@@ -17,9 +17,11 @@ import { expect, test } from '@playwright/test'
 import {
   CLASS_ID,
   STREAM_TWIN,
-  TWIN_MESSAGE_ID,
+  TWIN_NEW_ANSWER_ID,
   TWIN_SESSION_ID,
+  TWIN_MESSAGES,
   installLyraApi,
+  twinNewRows,
 } from './pla-504-math-fixture'
 
 const twinUrl = `/#/classes/${CLASS_ID}/chat?session=${TWIN_SESSION_ID}`
@@ -167,16 +169,27 @@ test.describe('renderer containment and ordered reveal', () => {
   test('streamed: ordered reveal with a bounded backlog, settling onto the static twin', async ({
     page,
   }) => {
-    await installLyraApi(page)
+    const api = await installLyraApi(
+      page,
+      {},
+      {
+        sessionId: TWIN_SESSION_ID,
+        initial: TWIN_MESSAGES,
+      },
+    )
     // The class chat page speaks to the contextual agent, so the turn rides its endpoint,
-    // not the tutor's: register after installLyraApi so it wins over the catch-all.
+    // not the tutor's: register after installLyraApi so it wins over the catch-all. The
+    // answer replays the twin's source as a new message with new IDs, so settling onto the
+    // twin's text is a render-equivalence claim, and the saved rows are a persistence one.
     await page.route(
       `**/api/classes/${CLASS_ID}/sessions/${TWIN_SESSION_ID}/agent-chat`,
-      (route) =>
+      (route) => {
         void route.fulfill({
           contentType: 'text/event-stream',
-          body: sseStream(STREAM_TWIN, TWIN_MESSAGE_ID),
-        }),
+          body: sseStream(STREAM_TWIN, TWIN_NEW_ANSWER_ID),
+        })
+        api.appendMessages!(twinNewRows('Stream the shape set.'))
+      },
     )
     await page.goto(twinUrl)
     const staticTwin = page.locator('.assistant-content').last()
@@ -246,11 +259,28 @@ test.describe('renderer containment and ordered reveal', () => {
     // static twin's text — the stream's final answer and the settled render agree.
     await page.waitForFunction(
       () => document.querySelectorAll('.assistant-content [data-stream-word]').length === 0,
-      undefined,
       { timeout: 15000 },
     )
     const settledText =
       (await page.locator('.assistant-content').last().textContent())?.trim() ?? ''
     expect(settledText).toBe(staticText)
+
+    // The persistence proof, read off the wire: the pane's last fetch holds the seeded
+    // history plus the turn's new rows — the replayed answer is a saved message, not a
+    // renderer twin the seed happened to carry.
+    const served = api.servedMessages!()
+    const ids = served.map((row) => (row as { id: number }).id)
+    expect(ids).toContain(TWIN_NEW_ANSWER_ID)
+    expect(served.at(-1)).toMatchObject({ id: TWIN_NEW_ANSWER_ID, role: 'assistant' })
+    expect((served.at(-1) as { content: string }).content).toBe(STREAM_TWIN)
+    // The twin itself is still the page's first answer, untouched above the new one.
+    const answerTexts = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.assistant-content')).map((node) =>
+        (node.textContent ?? '').trim(),
+      ),
+    )
+    expect(answerTexts.length).toBe(2)
+    expect(answerTexts[0]).toBe(staticText)
+    expect(answerTexts[1]).toBe(staticText)
   })
 })
