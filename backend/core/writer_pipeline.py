@@ -141,6 +141,13 @@ LIVE_REVIEW_CHUNK_BLOCKS = 6
 LIVE_STREAM_FLUSH_CHARS = 64
 LIVE_PARAGRAPH_ATTEMPTS = 2
 
+# An explicit student length is a review condition for the assembled proposal, not a
+# delivery gate: an over-length draft is still a complete, reviewable proposal. Beyond
+# the band the finished run carries a durable warning with the actual and requested
+# words; the band absorbs word-count drift around a target the plan already normalizes
+# to the student's number.
+LIVE_TOTAL_LENGTH_TOLERANCE = 1.10
+
 
 @dataclass(frozen=True)
 class PassJob:
@@ -876,6 +883,31 @@ def _run_live_pipeline(
             + ", ".join(short)
             + ". The partial suggestion was kept for revision."
         )
+    # The short check guards each paragraph's floor; this measures the whole assembled
+    # draft - every block, student edits included - against the student's explicit
+    # total. An approximate length target is not permission to withhold a usable
+    # proposal: the draft still finalizes as a reviewable edit, and only a draft over
+    # the band keeps a durable warning with the actual and requested words. Fitting
+    # (or having no explicit target) clears any stale warning from an earlier pass.
+    if job.run_id is not None:
+        requested = _target_words(conn, job)
+        if requested:
+            assembled = sum(_word_count(str(block["content"])) for block in final["blocks"])
+            if assembled > int(requested * LIVE_TOTAL_LENGTH_TOLERANCE):
+                writer_runs.add_warning(
+                    conn,
+                    job.run_id,
+                    code=writer_runs.LIVE_LENGTH_WARNING,
+                    message=(
+                        f"The assembled draft runs {assembled} words against a requested "
+                        f"{requested}. Review or shorten it before accepting."
+                    ),
+                    replace=True,
+                )
+            else:
+                writer_runs.clear_warning(conn, job.run_id, writer_runs.LIVE_LENGTH_WARNING)
+        else:
+            writer_runs.clear_warning(conn, job.run_id, writer_runs.LIVE_LENGTH_WARNING)
     live_drafts.finalize_to_pending_edit(
         conn,
         suggestion_id,

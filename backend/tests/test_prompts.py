@@ -165,6 +165,49 @@ def test_paragraph_prompt_receives_global_map_neighbours_and_local_evidence() ->
     assert "/no_think" in messages[-1]["content"]
 
 
+def test_paragraph_prompt_binds_the_budget_and_scope_to_the_sources() -> None:
+    """PLA-153: the drafting call must bound the budget and police claim scope.
+
+    Full drafts previously came back well over the requested length and with
+    population claims extended beyond what the sources measured. The review prompts
+    carry that discipline; the drafting prompt must state it too - but only for
+    historical/factual claims. Clearly labeled proposals and the student's own stated
+    experience are legitimate drafting material and must stay permitted.
+    """
+    messages = prompts.build_paragraph_draft_prompt(
+        "Essay",
+        document_map="Thesis: T. Sections: context, evidence, conclusion.",
+        section_plan="Evidence section proves C.",
+        paragraph_plan="P2 compares the two results.",
+        research_block="Source 7 reports the result.",
+        ledger_block="Source ledger: id 7",
+        previous_paragraph="P1 establishes the baseline.",
+        next_paragraph_summary="P3 explains the consequence.",
+        target_words=180,
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+    system = messages[0]["content"]
+
+    # The word budget is a bound: the target number rides into the bound sentence.
+    assert "about 180 words" in rendered
+    assert "staying within 10 percent of that budget" in rendered
+    # Historical/factual claims stay inside the supplied sources: no population
+    # extension, no unmeasured-as-measured, no absence-read-as-proof.
+    assert (
+        "State historical or factual claims only where the supplied sources establish them"
+        in system
+    )
+    assert "broader population than the source describes" in system
+    assert "do not present an unmeasured effect or population as already measured" in system
+    assert "A missing measurement is not evidence that an effect or population is absent" in system
+    # Legitimate material stays permitted: proposals as proposals, and the student's
+    # own stated experience from the notes.
+    assert "are the student's own recommendations and may be stated" in system
+    assert "no personal experience may be invented" in system
+    # The ledger block itself is carried through unchanged for the citation contract.
+    assert "Source ledger: id 7" in rendered
+
+
 def test_transition_prompt_knows_the_document_map_and_only_revises_the_next_paragraph() -> None:
     messages = prompts.build_transition_review_prompt(
         "Essay",

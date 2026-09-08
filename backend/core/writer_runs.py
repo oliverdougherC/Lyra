@@ -28,6 +28,7 @@ ACTIVE_STATUSES: tuple[str, ...] = (QUEUED, RUNNING, CANCEL_REQUESTED)
 RESTART_WARNING = "resumed_after_restart"
 CHECKPOINT_MISMATCH_WARNING = "checkpoint_mismatch"
 WEB_RESEARCH_DEGRADED_WARNING = "web_research_degraded"
+LIVE_LENGTH_WARNING = "length_overshoot"
 
 ALREADY_RUNNING_MESSAGE = "This draft already has a run in flight."
 
