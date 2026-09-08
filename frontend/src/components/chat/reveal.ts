@@ -493,18 +493,10 @@ export function useRevealCascade({
                 scheduleRef.current.get(other.key) ?? lastDeadlineRef.current.get(other.key),
             }
             // Anything starting before this floor cannot hold a smaller span than `best`
-            // over the same end: its span would exceed `best`'s, so it is skipped. The
-            // jump only ever moves down the walk — a refined floor that sits ahead of the
-            // current position excludes nothing that was not already examined.
+            // over the same end: its span would exceed `best`'s, so it is skipped. Earlier ranges above that floor must still be examined;
+            // jumping below it would skip potentially smaller containing ranges.
             const floorStart = range[1] - best.span
-            let k = 0
-            let m = j - 1
-            while (k <= m) {
-              const mid = (k + m) >> 1
-              if (historicalRanges[mid]!.start < floorStart) k = mid + 1
-              else m = mid - 1
-            }
-            if (k - 1 < j) j = k - 1
+            if (j > 0 && historicalRanges[j - 1]!.start < floorStart) break
           }
         }
         // The whole earlier history ends before the unit's end: no range among it can

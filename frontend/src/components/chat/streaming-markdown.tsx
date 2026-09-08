@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useEffect, useMemo, useRef, type ComponentProps } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef, type ComponentProps } from 'react'
 import Markdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 
@@ -98,7 +98,7 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
   // are gone, and the static markdown's are fresh. Restore once, after that render has
   // laid out — a layout effect, so no frame shows the answer without its selection.
   const restoredRef = useRef(false)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (streaming || selectionRestore === null || restoredRef.current) return
     const root = rootRef.current
     if (!root) return

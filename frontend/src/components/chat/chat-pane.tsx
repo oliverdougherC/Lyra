@@ -551,7 +551,14 @@ export function ChatPane({
   )
 
   /** Unmounted panes carry no frames: the pending publication dies with the pane. */
-  useEffect(() => invalidatePublication, [invalidatePublication])
+  useEffect(
+    () => () => {
+      invalidatePublication()
+      turnIdRef.current += 1
+      if (recheckTimerRef.current !== null) window.clearTimeout(recheckTimerRef.current)
+    },
+    [invalidatePublication],
+  )
 
   const clearOptimisticTurn = useCallback(() => {
     // Nothing on screen belongs to a particular conversation any more, so leaving one is
@@ -676,7 +683,7 @@ export function ChatPane({
         const acceptedId = acceptedMessageIdRef.current
         if (turnSessionId === null || acceptedId === null) return null
         const answerIndex = data.findIndex((row) => row.id === acceptedId)
-        if (answerIndex === -1) return null
+        if (answerIndex === -1 || data[answerIndex].role !== 'assistant') return null
         const handoff: SettledHandoff = {
           turnId: owner,
           sessionId: turnSessionId,
@@ -827,6 +834,7 @@ export function ChatPane({
       // The question this turn stands for: the handoff verifies the persisted user row
       // against it, and the frame queue starts publishing this answer from empty.
       turnContentRef.current = content
+      acceptedMessageIdRef.current = null
       lastPublishedTextRef.current = ''
       if (recheckTimerRef.current !== null) {
         window.clearTimeout(recheckTimerRef.current)
@@ -951,6 +959,7 @@ export function ChatPane({
               // the same read: the old answer's reveal schedule dies with the reset, and
               // the replacement must not start life with slots it never earned.
               assistantText = ''
+              acceptedMessageIdRef.current = null
               streamTextRef.current = ''
               bumpRevealGeneration()
               // A pending publication is the answer being replaced: it dies with the

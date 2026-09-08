@@ -2080,6 +2080,27 @@ describe('ChatPane answer lifecycle (PLA-501)', () => {
     expect(nodes[0]).toBe(settledNode)
     expect(nodes[0]!.textContent).toBe('The first answer.')
     expect(nodes[1]!.textContent).toBe('The second answer.')
+
+    // A stopped follow-up has no accepted assistant ID. It must not reuse the
+    // preceding turn's ID and remount that older answer under the follow-up's key.
+    transcript.push(message({ id: 102, role: 'user', content: 'And now this?' }))
+    await act(async () => {
+      resolveTurn({
+        message_id: 102,
+        content: '',
+        stopped: 'stopped',
+        detail: '',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+    await waitFor(() => {
+      expect(container.querySelectorAll('.assistant-content')).toHaveLength(1)
+      expect(container.querySelector('.assistant-content')).toBe(settledNode)
+    })
   })
 
   it('hands identity by ID, not by position, when the transcript grows around the answer', async () => {
