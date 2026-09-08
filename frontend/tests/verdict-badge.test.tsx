@@ -81,7 +81,7 @@ it('opens verdict details from the keyboard and exposes the settings link', asyn
   expect(screen.getByText('Lyra did not check this solution.')).toBeVisible()
   expect(screen.getByRole('link', { name: 'Check your endpoint settings' })).toHaveAttribute(
     'href',
-    '/#/settings',
+    '/#/settings?lyra-anchor=endpoint-url',
   )
   await userEvent.keyboard('{Escape}')
   expect(screen.queryByText('Lyra did not check this solution.')).not.toBeInTheDocument()

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
+import { parseTimestamp } from '@/lib/format'
 import type { DocumentRead, DocumentState } from '@/types'
 
 export const documentKeys = {
@@ -29,6 +30,19 @@ const ATTENTION_STATES: readonly DocumentState[] = ['failed', 'unsupported']
 
 export function needsAttention(state: DocumentState): boolean {
   return ATTENTION_STATES.includes(state)
+}
+
+/**
+ * The order document lists are shown in: newest first.
+ *
+ * Every surface that orders the same list must use this - the Files tab's rows and the
+ * class overview's attention destination both name a "first" document, and if one sorted
+ * a different way the deep link would stand on a different row than the list's top.
+ */
+export function documentsInListOrder(documents: DocumentRead[]): DocumentRead[] {
+  return [...documents].sort(
+    (a, b) => parseTimestamp(b.created_at).getTime() - parseTimestamp(a.created_at).getTime(),
+  )
 }
 
 /**

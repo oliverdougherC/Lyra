@@ -1,11 +1,21 @@
 'use client'
 
 import { useQueryClient } from '@tanstack/react-query'
-import { FileText, FolderInput, PanelRightClose, Search, Trash2 } from 'lucide-react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  FolderInput,
+  PanelRightClose,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import { useRouter } from '@/router/hooks'
 import { toast } from 'sonner'
 
+import { useDocumentAttention } from '@/components/documents/attention-reveal'
 import { BatchLoader } from '@/components/documents/batch-loader'
 import {
   ACCEPTED_EXTENSIONS,
@@ -32,11 +42,12 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
-import { formatCount, parseTimestamp } from '@/lib/format'
+import { formatCount } from '@/lib/format'
 import { documentStudyTitle } from '@/lib/handoff'
 import {
   batchSummaryTitle,
   classifyBatch,
+  documentsInListOrder,
   isTerminal,
   documentKeys,
   useDeleteDocument,
@@ -326,11 +337,11 @@ function ClassDocumentsPane({
     [classId, queryClient],
   )
 
-  const allDocuments = data
-    ? [...data].sort(
-        (a, b) => parseTimestamp(b.created_at).getTime() - parseTimestamp(a.created_at).getTime(),
-      )
-    : []
+  const allDocuments = data ? documentsInListOrder(data) : []
+  // The "needs attention" half of the shared navigation contract: a `lyra-anchor=document-N`
+  // arrival stands on the exact row (filter borrowed and restored, focus, scroll, announce,
+  // transient emphasis) and steps through the rest of the affected documents.
+  const attention = useDocumentAttention(allDocuments, data !== undefined, filter, setFilter)
   const query = filter.trim().toLowerCase()
   const documents = query
     ? allDocuments.filter((document) => document.filename.toLowerCase().includes(query))
@@ -378,6 +389,11 @@ function ClassDocumentsPane({
         })
       }}
     >
+      {/* The arrival announcement, kept mounted so a screen reader is listening when it
+          fires; the key re-arms the region on each navigation so Back re-announces. */}
+      <p key={`attention-${attention.navigationVersion}`} className="sr-only" aria-live="polite">
+        {attention.announcement ?? ''}
+      </p>
       <input
         ref={fileInputRef}
         type="file"
@@ -483,6 +499,54 @@ function ClassDocumentsPane({
         </div>
       ) : null}
 
+      {attention.active && attention.attention.length >= 2 && attention.target ? (
+        // A multi-item visit, one line tall: where the student is and how to walk the rest.
+        // It exists only while an attention anchor is in the URL - Dismiss, Back, or the
+        // items resolving all retire it, so the list never grows a permanent fixture. A
+        // single affected item gets its row's emphasis and the announcement instead.
+        <div
+          role="group"
+          aria-label={`Documents that need attention, ${attention.position} of ${attention.attention.length}`}
+          className="border-border bg-danger-fill/40 flex shrink-0 items-center gap-2 border-b px-3 py-2"
+        >
+          <span className="text-danger-text shrink-0 text-xs font-medium tabular-nums">
+            {attention.attention.length} need attention
+          </span>
+          <span className="text-text-tertiary min-w-0 truncate text-xs">
+            {attention.position} of {attention.attention.length} · {attention.target.filename}
+          </span>
+          <span className="ml-auto flex shrink-0 items-center">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={() => attention.step(-1)}
+              aria-label="Previous document that needs attention"
+            >
+              <ChevronLeft aria-hidden className="size-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={() => attention.step(1)}
+              aria-label="Next document that needs attention"
+            >
+              <ChevronRight aria-hidden className="size-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={attention.dismiss}
+              aria-label="Dismiss documents that need attention"
+            >
+              <X aria-hidden className="size-4" />
+            </Button>
+          </span>
+        </div>
+      ) : null}
+
       <ScrollArea id="documents-pane-body" className="min-h-0 flex-1 overflow-hidden">
         <div className="p-3">
           {isPending ? (
@@ -550,6 +614,7 @@ function ClassDocumentsPane({
                     onStatus={onStatus}
                     onMove={managing ? (picked) => setMoving([picked]) : undefined}
                     onPractice={onPractice}
+                    highlighted={document.id === attention.highlightedId}
                   />
                 </li>
               ))}

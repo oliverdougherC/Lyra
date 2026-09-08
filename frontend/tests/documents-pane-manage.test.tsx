@@ -9,7 +9,15 @@ import { api } from '@/lib/api'
 import type { ClassRead, DocumentRead } from '@/types'
 
 vi.mock('@/router/hooks', () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  useRouter: () => ({
+    replace: vi.fn(),
+    push: vi.fn(),
+    pushAnchor: vi.fn(),
+    replaceAnchor: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  useRouteAnchor: () => null,
+  useNavigationVersion: () => 0,
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => '/classes/1',

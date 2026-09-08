@@ -331,13 +331,20 @@ export function RouterProvider({ children }: { children: React.ReactNode }) {
       navigationVersion: state.navigationVersion,
       navigate: (href, mode, options) => {
         const { pathname, search, anchor } = splitHref(href)
-        const nextSearch = anchor ? withRouteAnchor(search, anchor) : withRouteAnchor(search, null)
+        // An href can carry the anchor in either form: a fragment (the editor's source-jump
+        // idiom) or the reserved query parameter (the form attention destinations are built
+        // in). Both arrive as `lyra-anchor`; a navigation that names no anchor at all
+        // clears the previous one rather than letting it leak into the next route.
+        const carried = anchor ?? routeAnchorFromSearch(search)
+        const nextSearch = carried
+          ? withRouteAnchor(search, carried)
+          : withRouteAnchor(search, null)
         const method = mode === 'replace' ? 'replaceState' : 'pushState'
         positions.record(currentEntry.current, readScrollPositions())
         positions.flush()
         rememberClassReturn(state.pathname, state.search)
         const scrollPositions =
-          options?.scroll === false || anchor !== null
+          options?.scroll === false || carried !== null
             ? readScrollPositions()
             : (classReturnPositions(pathname, nextSearch) ?? { main: 0 })
         const id = mode === 'push' ? crypto.randomUUID() : currentEntry.current

@@ -245,9 +245,11 @@ describe('DocumentRow, text recognition', () => {
     // for a frame first and a synchronous assertion here would be racing that frame.
     expect(await screen.findByText(/needs a model that can see images/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Read this document' })).not.toBeInTheDocument()
+    // The fix is a vision-capable model (or the endpoint behind it), so the link lands on
+    // the model field rather than the top of the Settings page.
     expect(screen.getByRole('link', { name: /endpoint settings/ })).toHaveAttribute(
       'href',
-      '/#/settings',
+      '/#/settings?lyra-anchor=model',
     )
   })
 
