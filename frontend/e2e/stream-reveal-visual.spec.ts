@@ -156,28 +156,24 @@ type Snapshot = {
 
 async function sample(page: Page): Promise<Snapshot> {
   return page.evaluate(() => {
-    const units = Array.from(
-      document.querySelectorAll<HTMLElement>('.assistant-content [data-stream-word]'),
-    ).map((u) => ({
+    const root = Array.from(document.querySelectorAll<HTMLElement>('.assistant-content')).at(-1)!
+    const units = Array.from(root.querySelectorAll<HTMLElement>('[data-stream-word]')).map((u) => ({
       key: u.dataset.streamWord ?? '',
       at: u.dataset.streamRevealAt ? Number(u.dataset.streamRevealAt) : null,
       opacity: Number(getComputedStyle(u).opacity),
       tag: u.tagName.toLowerCase(),
     }))
-    const fadedAncestors = Array.from(
-      document.querySelectorAll(
-        '.assistant-content li, .assistant-content ul, .assistant-content ol, .assistant-content blockquote, .assistant-content p',
-      ),
-    ).filter((el) => Number(getComputedStyle(el).opacity) < 0.999).length
+    const fadedAncestors = Array.from(root.querySelectorAll('li, ul, ol, blockquote, p')).filter(
+      (el) => Number(getComputedStyle(el).opacity) < 0.999,
+    ).length
     let displayInLi: boolean | null = null
-    for (const display of document.querySelectorAll('.assistant-content .katex-display')) {
+    for (const display of root.querySelectorAll('.katex-display')) {
       const li = display.closest('li')
       if (!li) continue
       const a = li.getBoundingClientRect()
       const b = display.getBoundingClientRect()
       displayInLi = b.left >= a.left - 8 && b.right <= a.right + 8
     }
-    const root = document.querySelector('.assistant-content')
     return {
       now: performance.now(),
       units,
@@ -190,9 +186,7 @@ async function sample(page: Page): Promise<Snapshot> {
         : 0,
       katexDisplay: root ? root.querySelectorAll('.katex-display').length : 0,
       codeUnits: units.filter((u) => u.key.startsWith('code-')).length,
-      codeNested: Array.from(
-        document.querySelectorAll<HTMLElement>('.assistant-content [data-stream-word]'),
-      ).filter(
+      codeNested: Array.from(root.querySelectorAll<HTMLElement>('[data-stream-word]')).filter(
         (u) => u.dataset.streamWord?.startsWith('code-') && u.querySelector('[data-stream-word]'),
       ).length,
       text: root ? (root.textContent ?? '') : '',
@@ -214,6 +208,9 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
       [`/api/classes/${CLASS_ID}/sessions`]: [TWIN_SESSION, VISUAL_SESSION],
       [`/api/sessions/${VISUAL_SESSION_ID}`]: VISUAL_SESSION,
       [`/api/sessions/${VISUAL_SESSION_ID}/messages`]: VISUAL_MESSAGES,
+      [`/api/classes/${CLASS_ID}/sessions/${VISUAL_SESSION_ID}/agent/access-dismissals`]: {
+        dismissals: [],
+      },
     })
     // Let the agent-chat POST pass through to the real server; every other API call stays
     // on the fixture.
@@ -225,6 +222,10 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
     await page.goto(visualUrl)
     await page.getByLabel('Message Lyra').fill('Stream the visual shapes.')
     await page.getByRole('button', { name: 'Send message' }).click()
+
+    await expect(
+      page.locator('.assistant-content').last().locator('[data-stream-word]').first(),
+    ).toBeAttached()
 
     // While the stream runs: the in-flight invariants, sampled as the source grows.
     const firstSeen = new Map<string, number>()
@@ -283,6 +284,8 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
       await page.waitForTimeout(35)
     }
     expect(samples, 'the sampler ran no samples').toBeGreaterThan(3)
+    expect(shotEarly).toBe(true)
+    expect(shotDisplay).toBe(true)
 
     // Settled: the cascade is gone and the render of the same source holds — prices are
     // prose, the digit-led mathematics is mathematics, the unfinished equation is literal.
@@ -307,7 +310,8 @@ test('a real delayed stream reveals in order and never re-hides', async ({ page 
           h: Math.round(r.height),
         }
       }
-      const display = document.querySelector('.assistant-content .katex-display')
+      const root = Array.from(document.querySelectorAll('.assistant-content')).at(-1)!
+      const display = root.querySelector('.katex-display')
       const li = display?.closest('li') ?? null
       return {
         display: display ? rect(display) : null,
