@@ -317,19 +317,36 @@ reply is the page's main content, so it gets the page.
   highlighting themed per mode, table/pre/code overflow contained in its surface, and KaTeX math
 - Equations use `$$...$$` on their own blank-line-separated display rows; `$...$` is reserved for
   short inline quantities, and wide display math scrolls horizontally rather than overlapping prose
-- Newly arriving prose words fade in in source order with a 180ms opacity/2px-rise reveal; code and
-  math remain intact and are never split into visual-only layers. A typeset equation is one unit of
-  the cascade, revealed whole in its own place
+- Newly arriving prose words fade in in reading order with an opacity-only 180ms reveal, at a
+  pace that tracks arrival — 26ms per word in a burst, 38ms at a steady drip, 55ms in a trickle,
+  with no more than 500ms of unread text ever queued behind the stream. Code blocks, tables,
+  rules, and checkboxes are each one unit of the cascade, revealed whole; a list marker arrives
+  with the first word of its item
 - **Math that has not finished arriving is withheld rather than typeset.** Code and prose grow a
   character at a time and read fine doing it; an equation does not. Closing `$\frac{1}{2` on the
   reader's behalf draws a fraction with one arm, and a fragment long enough to look like display
-  math is centred on its own line only to snap back inline when the closing delimiter lands. That is
-  what made equations look like they populated ahead of the sentences holding them: they were being
-  drawn out of the text flow before the text existed
+  math is centred on its own line only to snap back inline when the closing delimiter lands. That
+  is what made equations look like they populated ahead of the sentences holding them: they were
+  being drawn out of the text flow before the text existed. The rule is drawn at the line, not the
+  buffer: the unclosed tail of an *open* line is withheld; a line that *ends* with an equation
+  that never closes is repaired into a display block; and a closed equation is promoted to display
+  only when its line actually ends, so a finished equation at the tail of the stream stays inline,
+  in its sentence, until the newline proves otherwise
+- **A promoted display equation keeps the containment it was written in.** It is indented to the
+  content column of its line, so a fraction inside a list item or a blockquote stays on that
+  line's layer; a bare `$` that reads as currency (a digit, a space, or a line end behind it) is
+  never treated as math; and the settled render of a finished answer is the same text the stream
+  ends with
 - A unit's place in the cascade survives a re-render. Markdown is re-parsed on every frame, so the
   node holding a word can be replaced while its reveal is still pending, and re-applying the reveal
-  without its delay would jump it ahead of every word queued in front of it. The cascade lives in
-  `components/chat/reveal.ts` and is shared by every surface that shows written work
+  without its delay would jump it ahead of every word queued in front of it. A word's identity is
+  the offset of its core in the source it was read from — stable while the stream grows at the end
+  and across the delimiters that open and close around it — and a pending deadline may move
+  earlier but never later, so the cascade reads in order no matter how the parse reshuffles. The
+  cascade lives in `components/chat/reveal.ts` and is shared by every surface that shows written
+  work; a regenerated message arrives with a new `generation` identity that clears the schedule,
+  so a retry's words do not inherit the slots of the answer they replace (the lifecycle that owns
+  retries, PLA-501, hands the identity down)
 - There is no stream caret. Markdown blocks are block-level, so a trailing marker cannot sit
   at the end of the last word: it lands at the start of the line below, reading as stray
   punctuation. The word reveal is already the evidence that text is arriving
@@ -494,7 +511,7 @@ Every animation in Phase 1, so nothing is improvised:
 | Document list entry | staggered fade plus 8px rise, capped at five steps, with layout reordering | 250ms, gentle |
 | Batch loader | two counter-rotating token rings; rotation stops under reduced motion | motion-safe, linear |
 | Dialog, sheet, menu, popover, select, tooltip | fade plus at most 8px vertical movement | 200ms, never side-slide or zoom |
-| Streaming word reveal | New prose words fade in source order with a 24ms stagger capped at 160ms | 180ms, gentle |
+| Streaming word reveal | New prose words fade in in reading order, opacity only, at 26–55ms per word by arrival rate with no more than 500ms of text queued; equations, code, tables, rules, and checkboxes reveal whole, and list markers ride in with their first word | 180ms, gentle |
 | Thinking loader | `breathe` braille cell, one character wide at every frame so the label never shifts; holds at full brightness under reduced motion | 100ms per frame |
 | Thinking label | Light sweep clipped to the glyphs; removed outright under reduced motion, never frozen, because a paused clip leaves the text transparent | 2.6s, linear |
 | Mark at work | Orbit turns; the primary star breathes and its companions twinkle off-phase | 7s linear, 2.4s gentle |

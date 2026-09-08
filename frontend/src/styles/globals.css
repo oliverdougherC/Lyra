@@ -793,40 +793,71 @@
   animation: lyra-reveal-enter 250ms var(--ease-gentle) both;
 }
 
+/* The reveal cascade (streaming). Every glyph belongs to exactly one reveal layer: a prose
+   word is a span, a typeset equation is one unit, a code block, a table, a rule, and a
+   checkbox are each one unit, and a list item is a *marker* unit whose words keep their own
+   layer — its bullet or number animates via `::marker` rather than fading the item, which
+   would fade its words in twice. The fade is opacity-only, so a word never shifts its
+   line's neighbours in and out of flow while the answer is read. */
 @keyframes lyra-stream-word-reveal {
   from {
     opacity: 0;
-    transform: translateY(2px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
-[data-stream-word] {
-  display: inline-block;
-  opacity: 0;
-  transform: translateY(2px);
+@keyframes lyra-stream-marker-reveal {
+  from {
+    color: transparent;
+  }
+  to {
+    color: inherit;
+  }
 }
 
-/* A display equation reveals as one unit like any other, but it is a block in its own right:
+span[data-stream-word] {
+  opacity: 0;
+}
+
+/* A typeset equation reveals as one unit, and a display one is a block in its own right:
    `inline-block` would drop it back into the paragraph flow it was pulled out of. */
+.katex[data-stream-word] {
+  opacity: 0;
+}
 .katex-display[data-stream-word] {
   display: block;
 }
 
-/* A list item is a unit so that its marker fades with it — the bullet or the number is
-   painted from `list-item`, not from any text node, so it is the one glyph on the line the
-   word splitter cannot reach and it was landing complete before the words beside it.
-   `list-item` explicitly, because the blanket `inline-block` above would take the marker
-   away altogether. */
+/* Atomic visuals: one unit each, never split. Code is copied byte-for-byte, a table is
+   read in one pass, and a checkbox is the visible head of its task-list item. */
+pre[data-stream-word],
+code[data-stream-word],
+table[data-stream-word],
+hr[data-stream-word],
+input[data-stream-word] {
+  opacity: 0;
+}
+
+/* A list item is a marker unit, not an opacity ancestor: its words reveal on their own
+   layer, and the marker — painted from `list-item`, not from any text the splitter can
+   reach — rides in with the first word it labels. `list-item` explicitly, because the
+   element must keep its marker at all. */
 li[data-stream-word] {
   display: list-item;
 }
+li[data-stream-word]::marker {
+  /* On an engine without `::marker` this rule is ignored and the bullet is simply visible
+     from the start: the words still cascade, and nothing breaks. */
+  color: transparent;
+}
 
-[data-stream-word].stream-word-visible {
+[data-stream-word].stream-word-visible:not(li) {
   animation: lyra-stream-word-reveal 180ms var(--ease-gentle) var(--stream-word-delay, 0ms) both;
+}
+li[data-stream-word].stream-word-visible::marker {
+  animation: lyra-stream-marker-reveal 180ms var(--ease-gentle) var(--stream-word-delay, 0ms) both;
 }
 
 /* ---- Draft workspace (Milkdown Crepe) --------------------------------------
@@ -1354,6 +1385,12 @@ li[data-stream-word] {
   [data-stream-word] {
     opacity: 1;
     transform: none;
+    animation: none !important;
+  }
+
+  /* The marker never fades; under reduced motion it is simply there from the start. */
+  li[data-stream-word]::marker {
+    color: inherit;
     animation: none !important;
   }
 

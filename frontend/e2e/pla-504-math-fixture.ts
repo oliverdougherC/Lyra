@@ -14,6 +14,8 @@ export const SESSION_ID = 4
 export const SOLUTION_ID = 21
 export const DRAFT_ID = 31
 export const DRAFT_SESSION_ID = 5
+export const TWIN_SESSION_ID = 6
+export const TWIN_MESSAGE_ID = 31
 
 /** Synthetic teaching material: a signals-and-systems answer with the shapes that matter. */
 export const CHAT_ANSWER = [
@@ -32,6 +34,81 @@ export const CHAT_ANSWER = [
 ].join('\n')
 
 export const CHAT_QUESTION = 'Where does the pole of $H(s)=\\frac{1}{s+2}$ sit, and is it stable?'
+
+/**
+ * The renderer twin (PLA-499/PLA-500): one answer carrying every container a lifted display
+ * equation can sit in — a list item, a nested item, a blockquote list, an ordered list — plus
+ * the visuals the reveal cascade treats as single units: code, a table, a rule, and checkboxes.
+ *
+ * It serves two roles. Settled, it is the static render the streaming twin must end on.
+ * Streamed, it is the live answer the cascade schedules: the same string, word by word.
+ */
+export const STREAM_TWIN = [
+  'Here is the full shape set.',
+  '',
+  '- First item with $x(t)=t e^{-t}$ inline',
+  '- Second item with a display fraction',
+  '  $$\\frac{1}{s+2}$$',
+  '  still inside the item',
+  '- Third',
+  '  - inner with $y=2$',
+  '> - Quoted item with $\\zeta=\\frac{1}{2}$',
+  '1. Ordered first with $\\alpha_1$',
+  '2. Ordered second',
+  '',
+  '```js',
+  'const rate = 1 / (s + 2)',
+  '```',
+  '',
+  '| Signal | Decay |',
+  '| - | - |',
+  '| $e^{-2t}$ | $2$ |',
+  '',
+  '- [ ] verify the residue',
+  '- [x] check the poles',
+  '',
+  '---',
+  '',
+  'Done.',
+].join('\n')
+
+export const TWIN_QUESTION = 'Show the full shape set: lists, quotes, code, a table, and the rest.'
+
+export const TWIN_MESSAGES = [
+  {
+    id: 30,
+    session_id: TWIN_SESSION_ID,
+    role: 'user',
+    content: TWIN_QUESTION,
+    thinking: '',
+    thinking_ms: 0,
+    retrieval_trimmed: false,
+    omitted_document_count: 0,
+    tool_activity: [],
+    created_at: '2026-08-22T09:00:00Z',
+  },
+  {
+    id: TWIN_MESSAGE_ID,
+    session_id: TWIN_SESSION_ID,
+    role: 'assistant',
+    content: STREAM_TWIN,
+    thinking: '',
+    thinking_ms: 0,
+    retrieval_trimmed: false,
+    omitted_document_count: 0,
+    tool_activity: [],
+    created_at: '2026-08-22T09:00:30Z',
+  },
+]
+
+export const TWIN_SESSION = {
+  id: TWIN_SESSION_ID,
+  class_id: CLASS_ID,
+  title: 'Renderer shapes',
+  mode: 'guide',
+  artifact_part_id: null,
+  created_at: '2026-08-22T08:59:00Z',
+}
 
 export const CLASS_12 = {
   id: CLASS_ID,
@@ -71,17 +148,30 @@ export const MESSAGES = [
   },
 ]
 
+// The pane disables the composer without `endpoint_url`, so the settings carry the real
+// SettingsRead shape (backend/api/routes_settings.py): a configured local tutor endpoint.
 export const SETTINGS = {
-  tutor_model: 'synthetic',
-  tutor_base_url: 'http://127.0.0.1:9000/v1',
-  has_api_key: true,
+  endpoint_url: 'http://127.0.0.1:9000/v1',
+  model: 'synthetic',
+  context_window: 8192,
+  extraction_enabled: false,
+  remote_ack: true,
+  api_key_set: true,
+  api_key_storage: 'file',
   endpoint_is_local: true,
   endpoint_host: '127.0.0.1',
+  embedding_model: null,
+  embedding_dim: null,
+  tools_supported: null,
+  tools_message: null,
+  vision_supported: null,
+  vision_message: null,
   allow_web_research: false,
   parallel_requests: true,
   parallel_concurrency: 2,
   exa_api_key_set: false,
   exa_api_key_storage: 'file',
+  local_model_setup: '',
 }
 
 export const STATUS = {
@@ -240,6 +330,7 @@ export async function installLyraApi(page: Page, extra: Record<string, unknown> 
         artifact_part_id: null,
         created_at: '2026-08-20T10:00:00Z',
       },
+      TWIN_SESSION,
     ],
     [`/api/classes/${CLASS_ID}/solutions`]: [SOLUTION_DETAIL],
     [`/api/classes/${CLASS_ID}/study`]: { decks: [], quizzes: [] },
@@ -269,6 +360,8 @@ export async function installLyraApi(page: Page, extra: Record<string, unknown> 
       created_at: '2026-08-20T10:00:00Z',
     },
     [`/api/sessions/${SESSION_ID}/messages`]: MESSAGES,
+    [`/api/sessions/${TWIN_SESSION_ID}`]: TWIN_SESSION,
+    [`/api/sessions/${TWIN_SESSION_ID}/messages`]: TWIN_MESSAGES,
     '/api/settings': SETTINGS,
     '/api/desktop-import/status': { available: false, status: 'idle' },
     '/api/export/availability': { available: false, message: 'Not on this machine.' },

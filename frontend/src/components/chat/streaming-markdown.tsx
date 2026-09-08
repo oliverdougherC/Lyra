@@ -13,11 +13,6 @@ const REHYPE_PLUGINS: NonNullable<MarkdownProps['rehypePlugins']> = [
   ...KATEX_REHYPE_PLUGINS,
   rehypeHighlight,
 ]
-// The reveal plugin runs last, so the equations it protects have already been typeset.
-const STREAMING_REHYPE_PLUGINS: NonNullable<MarkdownProps['rehypePlugins']> = [
-  ...REHYPE_PLUGINS,
-  rehypeRevealUnits,
-]
 
 type TableComponentProps = ComponentProps<'table'>
 
@@ -38,12 +33,20 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
   streaming = false,
   turnEnded = false,
   onRevealComplete,
+  generation,
 }: {
   content: string
   streaming?: boolean
   /** True once the stream finished; completion is only reported after this. */
   turnEnded?: boolean
   onRevealComplete?: () => void
+  /**
+   * Identity of the current generation of this message. When it changes the reveal
+   * schedule is cleared, so a regenerated answer does not inherit the slots of the
+   * answer it replaces. The message lifecycle that owns regeneration (PLA-501) supplies
+   * it — stable per message generation, e.g. the message id plus its attempt.
+   */
+  generation?: string
 }) {
   const renderContent = normalizeMarkdownForRender(content, streaming)
   const rootRef = useRevealCascade({
@@ -51,14 +54,24 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
     enabled: streaming,
     settled: turnEnded,
     onDrained: onRevealComplete,
+    generation,
   })
   const components = useMemo(() => ({ table: tableComponent }), [])
+  // The reveal plugin reads the raw source (as plugin options) to anchor word identity,
+  // and runs last: the equations it marks are already typeset.
+  const rehypePlugins = useMemo(
+    () =>
+      (streaming
+        ? [...REHYPE_PLUGINS, [rehypeRevealUnits, { rawSource: content }]]
+        : REHYPE_PLUGINS) as NonNullable<MarkdownProps['rehypePlugins']>,
+    [content, streaming],
+  )
 
   return (
     <div ref={rootRef} className="assistant-content font-ai-response">
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={streaming ? STREAMING_REHYPE_PLUGINS : REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={components}
       >
         {renderContent}
