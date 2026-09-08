@@ -327,6 +327,133 @@ def test_a_small_mismatch_cannot_bypass_the_predicate_through_alternatives() -> 
 
 
 # ---------------------------------------------------------------------------
+# Inclusive tolerance boundary (PLA-496 R2)
+#
+# The comparison must hold the tolerance the question sets, inclusive: an answer
+# exactly `rel_tol` away in these representable cases receives credit, in
+# either operand order and on the negative side - and one step past the boundary
+# is still a settled mismatch. The version-3 normalized difference rounded an
+# exact boundary just outside itself, so these answers came back wrong.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("canonical", "response", "rel_tol"),
+    [
+        # Exactly 1% away, at an ordinary and at a scaled magnitude.
+        ("100", "99", 0.01),
+        ("1000", "990", 0.01),
+        # Exactly 5% away, at an ordinary and at a scaled magnitude.
+        ("100", "95", 0.05),
+        ("10000", "9500", 0.05),
+        # Exactly 0.1% away, at an ordinary and at a scaled magnitude.
+        ("1000", "999", 0.001),
+        ("100000", "99900", 0.001),
+        # Reversed operands sit on the same boundary, not a different one.
+        ("99", "100", 0.01),
+        ("95", "100", 0.05),
+        ("999", "1000", 0.001),
+        # And so does the negative of a boundary answer.
+        ("-100", "-99", 0.01),
+        ("-100", "-95", 0.05),
+        ("-1000", "-999", 0.001),
+    ],
+)
+def test_an_answer_exactly_at_the_relative_boundary_is_correct(
+    canonical: str, response: str, rel_tol: float
+) -> None:
+    assert grading._numeric_verdict(canonical, response, rel_tol) == grading.VERDICT_CORRECT
+
+
+@pytest.mark.parametrize(
+    ("canonical", "response", "rel_tol"),
+    [
+        # One step inside the boundary: credit at every tolerance, the repair's
+        # job being to hold the limit, not to sit comfortably within it.
+        ("100", "99.001", 0.01),
+        ("100", "95.001", 0.05),
+        ("1000", "999.001", 0.001),
+    ],
+)
+def test_a_step_inside_the_relative_boundary_is_correct(
+    canonical: str, response: str, rel_tol: float
+) -> None:
+    assert grading._numeric_verdict(canonical, response, rel_tol) == grading.VERDICT_CORRECT
+
+
+@pytest.mark.parametrize(
+    ("canonical", "response", "rel_tol"),
+    [
+        # One step past the boundary, in both operand orders: the repair must hold
+        # the inclusive limit, not enlarge it.
+        ("100", "98.999", 0.01),
+        ("98.999", "100", 0.01),
+        ("100", "94.999", 0.05),
+        ("1000", "998.999", 0.001),
+    ],
+)
+def test_a_step_past_the_relative_boundary_is_still_incorrect(
+    canonical: str, response: str, rel_tol: float
+) -> None:
+    assert grading._numeric_verdict(canonical, response, rel_tol) == grading.VERDICT_INCORRECT
+
+
+def test_the_boundary_holds_on_the_full_grader_pass() -> None:
+    # The numeric layer settles an exactly-on-boundary answer as correct - and one step
+    # past the boundary as wrong - before any other layer can abstain.
+    on = _grade("100", "99", grading={"answer_kind": "numeric"})
+    assert on.verdict == grading.VERDICT_CORRECT
+    assert on.detail["grader"] == "numeric"
+    off = _grade("100", "98.999", grading={"answer_kind": "numeric"})
+    assert off.verdict == grading.VERDICT_INCORRECT
+    assert off.detail["grader"] == "numeric"
+
+
+def test_a_same_unit_physical_quantity_holds_the_boundary_too() -> None:
+    # The boundary is about the comparison, not the dimension: a same-unit physical
+    # quantity exactly `rel_tol` away receives credit through the numeric layer, and
+    # one step past it settles wrong there too.
+    on = _grade("100 Hz", "99 Hz", grading={"answer_kind": "numeric"})
+    assert on.verdict == grading.VERDICT_CORRECT
+    assert on.detail["grader"] == "numeric"
+    off = _grade("100 Hz", "98.999 Hz", grading={"answer_kind": "numeric"})
+    assert off.verdict == grading.VERDICT_INCORRECT
+    assert off.detail["grader"] == "numeric"
+
+
+def test_a_numeric_set_member_exactly_at_the_boundary_still_matches() -> None:
+    # Set membership runs through the same numeric comparison: a member exactly on the
+    # boundary finds its equivalent partner, and a member one step past it does not.
+    question = _question("100 Hz, 200 Hz", grading={"answer_kind": "set"})
+    on = grading.grade_free_response(question, "99 Hz, 200 Hz", judge=None)
+    assert on.verdict == grading.VERDICT_CORRECT
+    assert on.detail["grader"] == "set"
+    off = grading.grade_free_response(question, "98.999 Hz, 200 Hz", judge=None)
+    assert off.verdict == grading.VERDICT_INCORRECT
+    assert off.detail["grader"] == "set"
+
+
+def test_an_acceptable_alternative_carries_the_boundary_too() -> None:
+    # An alternative is an equivalent *form* of the reference, compared with the same
+    # numeric comparison: an answer exactly on the boundary earns credit through the
+    # alternative path, and one step past it still settles wrong in the numeric layer.
+    question = _question(
+        "100 Hz",
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 0.01,
+            "acceptable_alternatives": ["0.1 kHz"],
+        },
+    )
+    on = grading.grade_free_response(question, "99 Hz", judge=None)
+    assert on.verdict == grading.VERDICT_CORRECT
+    assert on.detail["grader"] == "alternative"
+    off = grading.grade_free_response(question, "98.999 Hz", judge=None)
+    assert off.verdict == grading.VERDICT_INCORRECT
+    assert off.detail["grader"] == "numeric"
+
+
+# ---------------------------------------------------------------------------
 # Set and list layer
 # ---------------------------------------------------------------------------
 

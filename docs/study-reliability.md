@@ -231,8 +231,12 @@ conservative about what it accepts:
    grading contract, compared by the same equivalence.
 3. Numeric (numeric/symbolic/set kinds): magnitudes in base units (units, percentages,
    scientific notation) with a relative tolerance — 1% by default, up to 5% when the rubric
-   says so. There is no universal absolute allowance in base units: tiny nonzero quantities
-   use the same relative-accuracy requirement as ordinary ones, and zero only matches zero.
+   says so. The standard-library `math.isclose` comparison uses an absolute tolerance of zero
+   and an inclusive relative boundary: `100` and `99` match at 1%, while `98.999` is outside.
+   There is no universal base-unit allowance; tiny nonzero values use the same relative
+   accuracy requirement as ordinary ones, and zero only matches zero. Parsing and unit
+   conversion retain floating-point precision: `100 pF` versus `99 pF` at exactly 1% can
+   still land just outside the boundary after conversion; no extra epsilon is applied.
    A unit-scale mismatch is a settled wrong (`1 mW` against `1 MW`), not an abstention;
    a bare value against a unit-bearing one still abstains to the judge.
 4. Sets and lists (set kind, or untyped): a declared unordered set may accept exact/trivial
@@ -275,9 +279,10 @@ The raw response survives reload, retry, and attempt history: a re-posted identi
 replays its stored result instead of charging for another judgment, a different response
 regrades and updates the row, and legacy pre-grading rows (`grading_version` 0, null response)
 always regrade — a legacy `-1` is never read as a recoverable original response. Stored results
-from an older grading contract also regrade on resubmission. Version 3 removes the absolute
-numeric allowance, so a version-2 false positive can be corrected when submitted again;
-historical attempts are not automatically bulk-regraded. Replay is locked to the question it graded: the stored digest of the question content must still match,
+from an older grading contract also regrade on resubmission. Version 3 removed the absolute
+numeric allowance; version 4 preserves the inclusive relative-tolerance boundary. Older false
+positives or boundary false negatives can be corrected when submitted again; historical
+attempts are not automatically bulk-regraded. Replay is locked to the question it graded: the stored digest of the question content must still match,
 so a regenerated question regrades even an identical submission rather than reviving a
 judgment about different words. An `uncertain` verdict never replays — retrying an unsettled
 answer is exactly how a failed provider judgment recovers, and it re-grades in place without a

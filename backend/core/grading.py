@@ -75,7 +75,13 @@ logger = logging.getLogger(__name__)
 # exact zero is an exact match, and one side zero is a full-scale relative mismatch
 # against the other; version-2 verdicts regrade on resubmission instead of replaying a
 # credit the current layers would not have made.
-GRADING_VERSION = 3
+# Version 4: the numeric comparison holds the question's tolerance inclusively
+# (PLA-496 R2) - an answer exactly `rel_tol` away from the reference receives credit,
+# in either operand order, where the version-3 normalized difference rounded an exact
+# boundary just outside itself (100 versus 99 at one percent); version-3 verdicts
+# regrade on resubmission instead of replaying a boundary false negative the current
+# comparison would not make.
+GRADING_VERSION = 4
 
 VERDICT_CORRECT = "correct"
 VERDICT_INCORRECT = "incorrect"
@@ -541,11 +547,11 @@ def _numeric_verdict(canonical: str, response: str, rel_tol: float) -> str | Non
     The check is relative to the larger magnitude, at the tolerance the question sets:
     a small answer is held to the same relative standard as a large one, so `1 pF` is
     not within one percent of `500 pF` although the two differ by less than any fixed
-    base-unit allowance would suggest. Exact zero is explicit - two exact zeros match
-    with nothing left for a tolerance to cover, and one side zero is a full-scale
-    relative mismatch against the other. Each side is normalized by the larger
-    magnitude before the difference is taken, so the comparison itself cannot overflow
-    at the largest finite scales or underflow at the smallest.
+    base-unit allowance would suggest. The check is `math.isclose` at exactly that
+    tolerance and no absolute allowance. This avoids the additional rounding introduced
+    by separately normalizing the operands; the comparison is symmetric and two exact
+    zeros match. Parsing and base-unit conversion still use floating point, so quantities
+    extremely close to a boundary retain those representation limits.
     """
     left = _numeric_value(canonical)
     right = _numeric_value(response)
@@ -555,11 +561,11 @@ def _numeric_verdict(canonical: str, response: str, rel_tol: float) -> str | Non
     right_value, right_dimension = right
     if left_dimension != right_dimension:
         return None
-    scale = max(abs(left_value), abs(right_value))
-    if scale == 0.0:
-        # Both sides are exactly zero: an exact match, and nothing left for a tolerance.
-        return VERDICT_CORRECT
-    if abs(left_value / scale - right_value / scale) <= rel_tol:
+    # The tolerance is evaluated against the larger magnitude by the standard
+    # relative check itself: a separate normalization step (divide both sides, then
+    # difference) can round an exact boundary just outside itself, so the boundary
+    # the question set is the boundary the comparison holds.
+    if math.isclose(left_value, right_value, rel_tol=rel_tol, abs_tol=0.0):
         return VERDICT_CORRECT
     return VERDICT_INCORRECT
 
