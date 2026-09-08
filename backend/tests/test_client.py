@@ -1286,7 +1286,15 @@ _SPLIT_CASES = [
         "",
     ),
     (
-        _T_OPEN + "A" + _T_CLOSE + "First. " + _T_OPEN + "B" + _T_CLOSE + "C" + _T_CLOSE
+        _T_OPEN
+        + "A"
+        + _T_CLOSE
+        + "First. "
+        + _T_OPEN
+        + "B"
+        + _T_CLOSE
+        + "C"
+        + _T_CLOSE
         + "Second.",
         "First. " + _T_OPEN + "B" + _T_CLOSE + "C" + _T_CLOSE + "Second.",
         "A",
