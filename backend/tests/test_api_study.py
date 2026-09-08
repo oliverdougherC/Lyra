@@ -777,26 +777,33 @@ def test_finish_is_idempotent_and_uses_the_full_question_count(
 
 
 def _fill_question(
-    db: sqlite3.Connection, artifact_id: int, ordinal: int, reference: str, topic: str
+    db: sqlite3.Connection,
+    artifact_id: int,
+    ordinal: int,
+    reference: str,
+    topic: str,
+    grading: dict[str, object] | None = None,
 ) -> int:
-    """A fill-blank question whose one option is the reference free response."""
+    """A fill-blank question whose one option is the reference free response, optionally
+    carrying the hidden grading contract the generator would have written."""
+    payload: dict[str, object] = {
+        "type": "fill_blank",
+        "question": "Express the angular sampling frequency as ___ .",
+        "options": [reference],
+        "correct_index": 0,
+        "explanation": "The angular sampling frequency.",
+        "topic": topic,
+        "difficulty": "intermediate",
+    }
+    if grading is not None:
+        payload["grading"] = grading
     return artifacts.create_part(
         db,
         artifact_id,
         artifacts.QUIZ_QUESTION,
         ordinal,
         label=topic,
-        content=json.dumps(
-            {
-                "type": "fill_blank",
-                "question": "Express the angular sampling frequency as ___ .",
-                "options": [reference],
-                "correct_index": 0,
-                "explanation": "The angular sampling frequency.",
-                "topic": topic,
-                "difficulty": "intermediate",
-            }
-        ),
+        content=json.dumps(payload),
         content_type=artifacts.JSON,
         status=artifacts.PART_COMPLETE,
     )
@@ -971,6 +978,228 @@ def test_a_restart_while_a_judgment_is_in_flight_cannot_write_to_the_new_attempt
         assert row["attempt_id"] == attempt_id
         assert row["verdict"] is None
         assert row["grading_version"] == grading.GRADING_VERSION
+
+
+def test_a_judged_semantic_set_match_persists_across_reload_and_replay(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declared set the deterministic layers cannot decide is judged, and the settled
+    judgment persists: the row carries the student's raw words beside the verdict, a
+    reload (resuming the attempt) shows the settled answer, and a replay of the same
+    submission shares the stored result without charging the judge a second time."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        return grading.GradingResult(
+            grading.VERDICT_CORRECT,
+            {"grader": "judge", "judge_verdict": "correct", "confidence": 0.9},
+        )
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(
+        db, quiz_id, 1, "cell membrane, nucleus", "cell biology", grading={"answer_kind": "set"}
+    )
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "plasma membrane, nucleus"}
+
+    first = client.post(endpoint, json=body)
+
+    assert first.status_code == 200
+    assert first.json()["correct"] is True
+    assert first.json()["uncertain"] is False
+    # The raw submitted text persists beside the settled verdict, graded by the judge:
+    # the set layer abstained on the synonym member instead of settling wrong.
+    row = db.execute(
+        "select response_text, verdict, correct, grade_detail from quiz_answers "
+        "where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["response_text"] == "plasma membrane, nucleus"
+    assert row["verdict"] == "correct"
+    assert row["correct"] == 1
+    assert json.loads(str(row["grade_detail"]))["grader"] == "judge"
+    # A reload (resume) reports the settled answer with the student's words intact.
+    current = client.get(f"/api/quizzes/{quiz_id}/attempts/current").json()["attempt"]
+    assert current["answers"] == [
+        {
+            "part_id": part_id,
+            "selected_index": -1,
+            "correct": True,
+            "uncertain": False,
+            "response_text": "plasma membrane, nucleus",
+        }
+    ]
+    # A replay of the same submission shares the stored result: no second judgment.
+    replay = client.post(endpoint, json=body)
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert calls == ["plasma membrane, nucleus"]
+
+
+def test_an_unsettled_declared_set_is_persisted_uncertain_and_retryable(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the judge unavailable, an unmatched declared-set prose member persists as
+    `uncertain` - the student's words stored, never a confident wrong - and the row
+    stays retryable: a resubmission of the same answer regrades rather than replaying
+    the stored uncertainty, and a judge that then answers settles the row."""
+    state: dict[str, object] = {"judge": None}
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult | None:
+        calls.append(response)
+        usable = state["judge"]
+        if usable is None:
+            return None
+        return usable(question=question, rubric=rubric, reference=reference, response=response)
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(
+        db, quiz_id, 1, "cell membrane, nucleus", "cell biology", grading={"answer_kind": "set"}
+    )
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "plasma membrane, nucleus"}
+
+    first = client.post(endpoint, json=body)
+
+    assert first.status_code == 200
+    assert first.json()["correct"] is False
+    assert first.json()["uncertain"] is True
+    # The uncertainty is durable with the raw words, never a confident wrong.
+    row = db.execute(
+        "select response_text, verdict, correct from quiz_answers "
+        "where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["response_text"] == "plasma membrane, nucleus"
+    assert row["verdict"] == "uncertain"
+    assert row["correct"] == 0
+    # A reload shows the unsettled judgment as a neutral retry, words intact.
+    current = client.get(f"/api/quizzes/{quiz_id}/attempts/current").json()["attempt"]
+    assert current["answers"][0]["uncertain"] is True
+    assert current["answers"][0]["response_text"] == "plasma membrane, nucleus"
+    # A stored `uncertain` never replays: the retry regrades the same submission, and a
+    # judge that now answers settles the row.
+    state["judge"] = lambda **kwargs: grading.GradingResult(
+        grading.VERDICT_CORRECT,
+        {"grader": "judge", "judge_verdict": "correct", "confidence": 0.9},
+    )
+    retry = client.post(endpoint, json=body)
+    assert retry.status_code == 200
+    assert retry.json()["correct"] is True
+    assert retry.json()["uncertain"] is False
+    row = db.execute(
+        "select response_text, verdict, correct from quiz_answers "
+        "where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["response_text"] == "plasma membrane, nucleus"
+    assert row["verdict"] == "correct"
+    assert row["correct"] == 1
+    # One judgment per grading pass; a third identical submission replays, not regrades.
+    assert calls == ["plasma membrane, nucleus", "plasma membrane, nucleus"]
+    replay = client.post(endpoint, json=body)
+    assert replay.status_code == 200
+    assert replay.json() == retry.json()
+    assert calls == ["plasma membrane, nucleus", "plasma membrane, nucleus"]
+
+
+def test_a_version_one_verdict_regrades_under_the_current_contract(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Version 1 of the grading contract settled declared prose sets that the current
+    layers abstain on. A stored version-1 verdict never replays: a resubmission regrades
+    the same submission under the current contract, so a wrong the new layers would not
+    have made is revisited, and the row is stamped with the current version."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        return grading.GradingResult(
+            grading.VERDICT_CORRECT,
+            {"grader": "judge", "judge_verdict": "correct", "confidence": 0.9},
+        )
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(
+        db, quiz_id, 1, "cell membrane, nucleus", "cell biology", grading={"answer_kind": "set"}
+    )
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    # A version-1 row: the confident wrong the old set layer made before the contract
+    # changed, stored against this question's current content.
+    content = str(
+        db.execute("select content from artifact_parts where id = ?", (part_id,)).fetchone()[0]
+    )
+    db.execute(
+        "insert into quiz_answers (attempt_id, part_id, selected_index, correct, "
+        "response_text, verdict, grade_detail, grading_version) "
+        "values (?, ?, -1, 0, ?, 'incorrect', ?, 1)",
+        (
+            attempt_id,
+            part_id,
+            "plasma membrane, nucleus",
+            json.dumps({"question_digest": grading.question_digest(content)}),
+        ),
+    )
+    db.commit()
+
+    response = client.post(
+        f"/api/attempts/{attempt_id}/answers",
+        json={
+            "part_id": part_id,
+            "selected_index": -1,
+            "response_text": "plasma membrane, nucleus",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["correct"] is True
+    assert response.json()["uncertain"] is False
+    # The judgment ran under the current contract; the row carries its new verdict.
+    assert calls == ["plasma membrane, nucleus"]
+    row = db.execute(
+        "select verdict, correct, grading_version from quiz_answers "
+        "where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["verdict"] == "correct"
+    assert row["correct"] == 1
+    assert row["grading_version"] == grading.GRADING_VERSION
+    # And the fresh settled verdict replays from here on: no third judgment.
+    replay = client.post(
+        f"/api/attempts/{attempt_id}/answers",
+        json={
+            "part_id": part_id,
+            "selected_index": -1,
+            "response_text": "plasma membrane, nucleus",
+        },
+    )
+    assert replay.json()["correct"] is True
+    assert calls == ["plasma membrane, nucleus"]
 
 
 def test_a_legacy_fill_blank_answer_stays_readable(

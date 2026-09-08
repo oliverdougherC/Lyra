@@ -232,14 +232,197 @@ def test_a_legacy_prose_list_reorder_is_the_judges_call() -> None:
     )
 
 
-def test_a_set_contract_permits_reordering_and_decides_membership() -> None:
+def test_a_set_contract_permits_reordering_and_defers_a_prose_swap_to_the_judge() -> None:
     question = _question("oxygen, carbon dioxide", grading={"answer_kind": "set"})
     reordered = grading.grade_free_response(question, "carbon dioxide, oxygen", judge=None)
     assert reordered.verdict == grading.VERDICT_CORRECT
     assert reordered.detail["grader"] == "set"
+    # A swapped-out prose member is not a membership the deterministic layers can
+    # settle: `nitrogen` is neither `oxygen` nor `carbon dioxide` in any layer that
+    # decides, so the set layer abstains - and with no judge to take the call, the
+    # honest outcome is `uncertain`, never a confident wrong.
     swapped_out = grading.grade_free_response(question, "oxygen, nitrogen", judge=None)
-    assert swapped_out.verdict == grading.VERDICT_INCORRECT
-    assert swapped_out.detail["grader"] == "set"
+    assert swapped_out.verdict == grading.VERDICT_UNCERTAIN
+    assert swapped_out.detail["grader"] == "fallback"
+    # The judge has the call: a confident rejection is a confident wrong, and the
+    # rejection is the judge's, not the set layer's.
+    rejected = grading.grade_free_response(
+        question,
+        "oxygen, nitrogen",
+        judge=lambda **_: grading.GradingResult(
+            grading.VERDICT_INCORRECT,
+            {"grader": "judge", "judge_verdict": "incorrect", "confidence": 0.9},
+        ),
+    )
+    assert rejected.verdict == grading.VERDICT_INCORRECT
+    assert rejected.detail["grader"] == "judge"
+
+
+def test_a_declared_prose_set_with_a_synonym_member_is_the_judges_call() -> None:
+    # F1: `plasma membrane` is not `cell membrane` under any deterministic layer - not
+    # string-equivalent, not math-equivalent, not numeric-equivalent - yet it is the same
+    # idea. The set layer must abstain and hand the answer to the constrained judge,
+    # which decides against the question's contract. A set-layer `incorrect` that lands
+    # before the judge ever sees the answer is a confident false negative the whole
+    # layered design exists to avoid.
+    question = _question("cell membrane, nucleus", grading={"answer_kind": "set"})
+    judged = grading.grade_free_response(
+        question,
+        "plasma membrane, nucleus",
+        judge=lambda **_: grading.GradingResult(
+            grading.VERDICT_CORRECT,
+            {"grader": "judge", "judge_verdict": "correct", "confidence": 0.9},
+        ),
+    )
+    assert judged.verdict == grading.VERDICT_CORRECT
+    assert judged.detail["grader"] == "judge"
+
+
+def test_a_declared_prose_set_reorder_still_passes_deterministically() -> None:
+    # The abstention cuts one way only: an exact or trivial match of every member under a
+    # declared set contract is still decided by the set layer - no judge round trip for
+    # a plain reordering.
+    question = _question("cell membrane, nucleus", grading={"answer_kind": "set"})
+    result = grading.grade_free_response(question, "nucleus, cell membrane", judge=None)
+    assert result.verdict == grading.VERDICT_CORRECT
+    assert result.detail["grader"] == "set"
+
+
+def test_a_declared_numeric_set_with_a_wrong_member_is_still_settled() -> None:
+    # Numeric members keep the old decisiveness: a required item whose value is a
+    # settled mismatch against every item offered is a wrong answer, decided by the set
+    # layer without a judge.
+    question = _question("1, 2, 3", grading={"answer_kind": "set"})
+    result = grading.grade_free_response(question, "1, 2, 4", judge=None)
+    assert result.verdict == grading.VERDICT_INCORRECT
+    assert result.detail["grader"] == "set"
+    reordered = grading.grade_free_response(question, "3, 1, 2", judge=None)
+    assert reordered.verdict == grading.VERDICT_CORRECT
+    assert reordered.detail["grader"] == "set"
+
+
+def test_a_declared_numeric_set_with_a_missing_item_is_still_settled() -> None:
+    # Cardinality is mathematics for an all-numeric set: an extra or a missing member
+    # settles wrong, not a judgment call.
+    question = _question("1, 2, 3", grading={"answer_kind": "set"})
+    extra = grading.grade_free_response(question, "1, 2, 3, 999", judge=None)
+    assert extra.verdict == grading.VERDICT_INCORRECT
+    assert extra.detail["grader"] == "set"
+    missing = grading.grade_free_response(question, "1, 2", judge=None)
+    assert missing.verdict == grading.VERDICT_INCORRECT
+    assert missing.detail["grader"] == "set"
+
+
+def test_a_greedy_order_cannot_settle_a_tolerance_match_wrong() -> None:
+    # Counterexample: every member of `100, 101` lies within one percent of a member of
+    # `100.5, 99.5`, and a valid complete matching exists (100 -> 99.5, 101 -> 100.5).
+    # A greedy first choice hands 100 to 100.5 and leaves 101 against a 99.5 that is
+    # 1.5 percent away - the set layer must not let that order settle the answer wrong.
+    # The assignment settles correct in both directions, without a judge.
+    question = _question("100, 101", grading={"answer_kind": "set"})
+    forward = grading.grade_free_response(question, "100.5, 99.5", judge=None)
+    assert forward.verdict == grading.VERDICT_CORRECT
+    assert forward.detail["grader"] == "set"
+    reversed_question = _question("101, 100", grading={"answer_kind": "set"})
+    reversed_result = grading.grade_free_response(reversed_question, "99.5, 100.5", judge=None)
+    assert reversed_result.verdict == grading.VERDICT_CORRECT
+    assert reversed_result.detail["grader"] == "set"
+
+
+def test_a_numeric_set_that_cannot_be_matched_still_settles_wrong() -> None:
+    # The matching refines credit, not doubt: a numeric set whose members cannot be
+    # assigned to distinct offered equivalents still settles wrong - here both
+    # required ~100s compete for the single ~100 offered, and 250 is decisively off.
+    question = _question("100, 100", grading={"answer_kind": "set"})
+    result = grading.grade_free_response(question, "100, 250", judge=None)
+    assert result.verdict == grading.VERDICT_INCORRECT
+    assert result.detail["grader"] == "set"
+
+
+def test_a_set_beyond_the_matching_cap_abstains_instead_of_settling() -> None:
+    # Beyond the matching cap the layer refuses to settle either way: a response that
+    # cannot be fully matched - and whose equivalent partners the greedy pass
+    # consumed - lands with the judge (uncertain without one), never a confident wrong
+    # from a bounded search the layer did not run.
+    reference = ", ".join(["1"] * 33)
+    response_text = ", ".join(["1"] * 32 + ["50"])
+    question = _question(reference, grading={"answer_kind": "set"})
+    result = grading.grade_free_response(question, response_text, judge=None)
+    assert result.verdict == grading.VERDICT_UNCERTAIN
+    assert result.detail["grader"] == "fallback"
+
+
+def test_a_declared_prose_set_with_a_contradiction_is_rejected_by_the_judge() -> None:
+    # Members the set layer cannot decide all go to the judge together; where the
+    # response contradicts the contract, a confident rejection is a confident wrong -
+    # but it is the judge's rejection, carried by the judge's detail, not a set-layer
+    # verdict.
+    question = _question("cell membrane, nucleus", grading={"answer_kind": "set"})
+    result = grading.grade_free_response(
+        question,
+        "plasma membrane, mitochondria",
+        judge=lambda **_: grading.GradingResult(
+            grading.VERDICT_INCORRECT,
+            {"grader": "judge", "judge_verdict": "incorrect", "confidence": 0.9},
+        ),
+    )
+    assert result.verdict == grading.VERDICT_INCORRECT
+    assert result.detail["grader"] == "judge"
+    assert result.detail["judge_verdict"] == "incorrect"
+
+
+def test_an_unmatched_prose_member_without_a_usable_judge_is_uncertain() -> None:
+    # An unmatched ambiguous member abstains to the judge; a judge that is absent,
+    # unavailable, or failing leaves the answer `uncertain` - the recorded "not
+    # confidently wrong" - and never the set layer's confident wrong.
+    question = _question("cell membrane, nucleus", grading={"answer_kind": "set"})
+    absent = grading.grade_free_response(question, "plasma membrane, nucleus", judge=None)
+    assert absent.verdict == grading.VERDICT_UNCERTAIN
+    assert absent.detail["grader"] == "fallback"
+    unavailable = grading.grade_free_response(
+        question, "plasma membrane, nucleus", judge=lambda **_: None
+    )
+    assert unavailable.verdict == grading.VERDICT_UNCERTAIN
+    assert unavailable.detail["grader"] == "fallback"
+
+    def failing_judge(**_kwargs: object) -> grading.GradingResult:
+        raise RuntimeError("endpoint refused")
+
+    failing = grading.grade_free_response(question, "plasma membrane, nucleus", judge=failing_judge)
+    assert failing.verdict == grading.VERDICT_UNCERTAIN
+    assert failing.detail["grader"] == "fallback"
+
+
+def test_a_declared_prose_set_with_an_extra_item_is_the_judges_call() -> None:
+    # An extra prose item is not membership the deterministic layers can settle: the
+    # student may carry the idea in a different form, or split one idea across two.
+    # The judge weighs the count against the contract.
+    question = _question("cell membrane, nucleus", grading={"answer_kind": "set"})
+    judged = grading.grade_free_response(
+        question,
+        "cell membrane, nucleus, cytoplasm",
+        judge=lambda **_: grading.GradingResult(
+            grading.VERDICT_CORRECT,
+            {"grader": "judge", "judge_verdict": "mostly_correct", "confidence": 0.8},
+        ),
+    )
+    assert judged.verdict == grading.VERDICT_CORRECT
+    assert judged.detail["grader"] == "judge"
+    without_judge = grading.grade_free_response(
+        question, "cell membrane, nucleus, cytoplasm", judge=None
+    )
+    assert without_judge.verdict == grading.VERDICT_UNCERTAIN
+    assert without_judge.detail["grader"] == "fallback"
+
+
+def test_an_undecidable_unit_in_a_declared_set_is_the_judges_call() -> None:
+    # `4.2` against `4.2 Hz` is a dimensionality mismatch: the numeric layer
+    # deliberately will not decide whether an omitted unit counts, so a declared set
+    # whose members only differ by such a unit abstains instead of settling wrong.
+    question = _question("4.2 Hz, 0.42", grading={"answer_kind": "set"})
+    result = grading.grade_free_response(question, "4.2, 0.42", judge=None)
+    assert result.verdict == grading.VERDICT_UNCERTAIN
+    assert result.detail["grader"] == "fallback"
 
 
 def test_a_text_kind_answer_is_never_settled_by_a_typed_layer() -> None:

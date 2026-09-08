@@ -233,9 +233,12 @@ conservative about what it accepts:
    scientific notation) with a relative tolerance — 1% by default, up to 5% when the rubric
    says so. A unit mismatch is a settled wrong (`1 mW` against `1 MW`), not an abstention; a
    bare value against a unit-bearing one still abstains to the judge.
-4. Sets and lists (set kind, or untyped): item membership decides — an extra or missing item
-   is a settled mismatch under any contract, while reordering is permitted only by a genuine
-   unordered set contract; a legacy prose list that merely reorders abstains to the judge.
+4. Sets and lists (set kind, or untyped): a declared unordered set may accept exact/trivial
+   prose matches in any order. An unmatched prose member abstains to the semantic judge so
+   synonyms such as “cell membrane” and “plasma membrane” cannot become a confident false
+   negative. Deterministically decidable numeric membership can still settle a mismatch;
+   unavailable or malformed semantic judgment remains uncertain and retryable. A legacy
+   prose list that merely reorders also abstains to the judge.
 5. Symbolic (symbolic kind, or untyped): both sides normalized to plain notation and compared
    in the bounded algebra subprocess. The runner's `certain` is the contract: equal-and-settled
    is correct, different-and-shown is incorrect, not shown abstains. Only forms that carry a

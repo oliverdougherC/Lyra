@@ -14,7 +14,11 @@ a confident "wrong" where the evidence is thin. The layers, cheapest first:
    `4.2 Hz`, `42%` equals `0.42`, and three-significant-figure rounding counts. Pint
    runs in-process because its parser whitelists every node before it evaluates, the
    same reasoning `backend/tools/units.py` already recorded.
-4. Sets and lists. Order-insensitive item comparison for answers that are lists.
+4. Sets and lists. Order-insensitive item comparison for answers that are lists,
+   settled only where membership is mathematics: a complete deterministic assignment
+   settles right, a settled numeric mismatch settles wrong - an unmatched prose item,
+   or a unit the numeric layer will not decide, is the judge's call, never a confident
+   wrong from this layer.
 5. Symbolic. The two sides normalized into plain mathematical notation and compared for
    equality in the bounded SymPy subprocess (`backend/tools/cas.py`). SymPy is never
    imported here; the subprocess is the boundary that keeps an evaluating parser out of
@@ -62,7 +66,11 @@ logger = logging.getLogger(__name__)
 # The version of the grading contract this code applies. Bump it when a verdict-semantics
 # change makes stored results no longer comparable to fresh ones: a resubmitted answer is
 # then regraded against the new contract instead of replaying the old result.
-GRADING_VERSION = 1
+# Version 2: the set layer no longer settles an unmatched declared-set prose member as
+# incorrect (PLA-496 F1), and it no longer lets a greedy item order settle a tolerance
+# match that a different assignment satisfies; version-1 verdicts regrade on
+# resubmission instead of replaying a wrong the new layers would not have made.
+GRADING_VERSION = 2
 
 VERDICT_CORRECT = "correct"
 VERDICT_INCORRECT = "incorrect"
@@ -569,33 +577,90 @@ def _split_items(text: str) -> list[str] | None:
     return items or None
 
 
-def _item_equivalent(left: str, right: str, rel_tol: float) -> bool:
-    """Whether one listed item is the other, in any of the layers below it.
+_RELATION_EQUIVALENT = "equivalent"
+_RELATION_DIFFERENT = "different"
+_RELATION_UNKNOWN = "unknown"
+
+
+def _item_relation(left: str, right: str, rel_tol: float) -> str:
+    """How one listed item stands against the other.
+
+    `equivalent` - settled by a deterministic layer: trivially the same text, the same
+    mathematics in another notation, or numerically the same value within the tolerance.
+    `different` - the numeric layer has settled the values as decisively not the same
+    (a mismatch beyond the tolerance, in the same dimensionality). `unknown` - nothing
+    deterministic can tell them apart: a paraphrase, a domain synonym, or a value whose
+    units the numeric layer deliberately will not decide. Unknown is an abstention, not
+    a guess: that comparison belongs to the judge.
 
     The trivial comparison is the math-aware one: item text that carries units, digits,
     or symbols is never case-folded into equivalence.
     """
     if _trivially_equivalent(left, right):
-        return True
+        return _RELATION_EQUIVALENT
     left_math, right_math = normalize_math(left), normalize_math(right)
     if left_math is not None and left_math == right_math:
-        return True
-    return _numeric_verdict(left, right, rel_tol) == VERDICT_CORRECT
+        return _RELATION_EQUIVALENT
+    verdict = _numeric_verdict(left, right, rel_tol)
+    if verdict == VERDICT_CORRECT:
+        return _RELATION_EQUIVALENT
+    if verdict == VERDICT_INCORRECT:
+        return _RELATION_DIFFERENT
+    return _RELATION_UNKNOWN
+
+
+def _item_equivalent(left: str, right: str, rel_tol: float) -> bool:
+    """Whether one listed item is the other, in any of the deterministic layers."""
+    return _item_relation(left, right, rel_tol) == _RELATION_EQUIVALENT
 
 
 def _all_numeric(items: list[str]) -> bool:
     return all(_numeric_value(item) is not None for item in items)
 
 
+# The assignment search runs on lists up to this many items; beyond it the layer
+# abstains rather than pay for a search its bounds no longer keep honest.
+_COMPLETE_MATCHING_CAP = 32
+
+
+def _complete_equivalent_matching(relations: list[list[str]]) -> bool:
+    """Whether every required item can take a distinct equivalent response item.
+
+    One augmenting-path search (Kuhn's algorithm) over the equivalence edges: a greedy
+    first pass can steal a partner that a later item is the only equivalent of, so the
+    question is the assignment, not any single item's neighbors. The caller bounds the
+    input - this runs only on lists of at most `_COMPLETE_MATCHING_CAP` items, where the
+    edge count stays trivial.
+    """
+    taken: dict[int, int] = {}  # response index -> required index
+
+    def augment(index: int, seen: set[int]) -> bool:
+        for partner, relation in enumerate(relations[index]):
+            if relation != _RELATION_EQUIVALENT or partner in seen:
+                continue
+            seen.add(partner)
+            if partner not in taken or augment(taken[partner], seen):
+                taken[partner] = index
+                return True
+        return False
+
+    return all(augment(index, set()) for index in range(len(relations)))
+
+
 def _set_verdict(canonical: str, response: str, rel_tol: float, *, unordered: bool) -> str | None:
     """Comparison of two listed answers, complete membership only.
 
-    A list is decisive only where every item settles numerically: there, membership and
-    cardinality are mathematics, so an extra or a missing item is a wrong answer, not a
-    judgment call. A list with prose items is not decided by this layer - whether order
-    matters, or one paraphrased item counts, is the judge's call against the contract.
-    The one exception is a genuine unordered-set contract, where membership *is* the
-    idea: reordering is accepted, and a missing item settles wrong.
+    A complete deterministic match - every required item equivalent to a distinct
+    offered item - settles right for an all-numeric list or under a genuine
+    unordered-set contract, where membership *is* the idea and reordering is accepted;
+    the match is an assignment, so a greedy order that steals a later item's only
+    partner cannot settle the answer wrong. A list settles wrong only where the
+    mismatch is settled mathematics: a cardinality difference in an all-numeric list,
+    or an all-numeric list whose members cannot be assigned to distinct offered
+    equivalents - and even there a pair the numeric layer will not decide (an omitted
+    unit, say) leaves the call to the judge. Everything else - a paraphrase, a
+    synonym, an extra or missing idea in a different form - abstains against the
+    contract, never a confident wrong from this layer.
     """
     canonical_items = _split_items(canonical)
     response_items = _split_items(response)
@@ -604,8 +669,9 @@ def _set_verdict(canonical: str, response: str, rel_tol: float, *, unordered: bo
     all_numeric = _all_numeric(canonical_items) and _all_numeric(response_items)
     decisive = all_numeric or unordered
     if len(canonical_items) != len(response_items):
-        # An extra or a missing listed item.
-        return VERDICT_INCORRECT if decisive else None
+        # An extra or a missing listed item: mathematics where every item is a number,
+        # the judge's call where a prose idea may travel in a different form or count.
+        return VERDICT_INCORRECT if all_numeric else None
     used: set[int] = set()
     for canonical_item in canonical_items:
         for index, response_item in enumerate(response_items):
@@ -615,9 +681,40 @@ def _set_verdict(canonical: str, response: str, rel_tol: float, *, unordered: bo
                 used.add(index)
                 break
         else:
-            # A required item has no equivalent in the response.
-            return VERDICT_INCORRECT if decisive else None
-    # Every required item matched, with none left over. For a numeric list or a
+            # A required item has no equivalent among the *unused* response items. The
+            # failure may be the greedy order's own doing, so the assignment is asked.
+            if len(canonical_items) <= _COMPLETE_MATCHING_CAP:
+                matrix = [
+                    [_item_relation(required, offered, rel_tol) for offered in response_items]
+                    for required in canonical_items
+                ]
+                if _complete_equivalent_matching(matrix):
+                    # A different assignment satisfies the whole set: the greedy
+                    # order just stole this item's partner. Complete membership is
+                    # shown, so the answer settles as the all-matched case does.
+                    return VERDICT_CORRECT if decisive else None
+                # No assignment satisfies the set. It settles wrong only where the
+                # mismatch is settled mathematics: every item a number and no pair the
+                # numeric layer will not decide - an omitted unit is the judge's call,
+                # as is any paraphrase or synonym.
+                if all_numeric and all(
+                    relation != _RELATION_UNKNOWN for row in matrix for relation in row
+                ):
+                    return VERDICT_INCORRECT
+                return None
+            # Beyond the cap the search is not worth it: if an equivalent partner
+            # exists at all (a used one), a different order might satisfy the set, so
+            # abstain; only a decisive mismatch against every offered item settles.
+            item_relations = [
+                _item_relation(canonical_item, response_item, rel_tol)
+                for response_item in response_items
+            ]
+            if _RELATION_EQUIVALENT in item_relations:
+                return None
+            if all_numeric and all(relation == _RELATION_DIFFERENT for relation in item_relations):
+                return VERDICT_INCORRECT
+            return None
+    # Every required item matched, with none left over. For an all-numeric list or a
     # declared set that is the answer; for a prose list with no set contract, whether
     # the order and the exact wording matter is the judge's call.
     return VERDICT_CORRECT if decisive else None
