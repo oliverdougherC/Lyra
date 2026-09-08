@@ -991,6 +991,14 @@ async def test_a_background_caller_gets_a_longer_deadline_than_a_chat_turn() -> 
 
 
 async def test_tool_stream_emits_live_reasoning_and_reassembles_interleaved_calls() -> None:
+    """An explicit reasoning field makes the content literal (PLA-505).
+
+    This fixture once asserted that an inline `think` block *and* a `reasoning_content`
+    field both feed the reasoning channel. The endpoint already carries the thought in
+    its own field, so its content is answer text byte for byte: the inline tag here is
+    part of the answer, and the old expectation is exactly the double-encoding the fix
+    removes. The interleaved tool-call assembly it exists to prove is unchanged.
+    """
     seen: list[client.StreamDelta] = []
     chunks = [
         {"reasoning_content": "Checking"},
@@ -1033,12 +1041,13 @@ async def test_tool_stream_emits_live_reasoning_and_reassembles_interleaved_call
         transport=_transport(handler),
         on_delta=seen.append,
     )
-    assert result.content == "One moment"
+    # The field already carried the thought, so the inline tag stayed in the answer.
+    assert result.content == _T_OPEN + "math" + _T_CLOSE + "One moment"
     assert result.tool_calls == (
         client.ToolCall("a", "first", '{"a":1}'),
         client.ToolCall("b", "second", '{"b":2}'),
     )
-    assert "".join(item.text for item in seen if item.channel == "reasoning") == "Checkingmath"
+    assert "".join(item.text for item in seen if item.channel == "reasoning") == "Checking"
     assert "".join(item.text for item in seen if item.channel == "answer") == result.content
     assert not result.truncated
 
@@ -1192,3 +1201,362 @@ async def test_malformed_stream_choices_raise_bounded_upstream_error(choices, to
                 )
             ]
     assert caught.value.message == client._ERROR_UNREADABLE
+
+
+# --------------------------------------------------------------------------------------
+# PLA-505: legacy tags are recognized only at the head of the stream; a stream that
+# carries the provider's own reasoning field keeps its content literal.
+#
+# Every tag below is assembled from code points (chr(60) is the angle bracket): a tag
+# written literally into this file is rewritten by the reasoning-delimiter parser before
+# it reaches disk, so the real ASCII tags exist only at runtime.
+
+
+_T_OPEN = chr(60) + "think" + chr(62)
+_T_CLOSE = chr(60) + "/" + "think" + chr(62)
+_TT_OPEN = chr(60) + "thinking" + chr(62)
+_TT_CLOSE = chr(60) + "/" + "thinking" + chr(62)
+
+
+def _split(text: str, chunk: int = 1) -> tuple[str, str]:
+    """Feed one production splitter `chunk` characters at a time and join each channel."""
+    splitter = client._ReasoningTagSplitter()
+    answer: list[str] = []
+    reasoning: list[str] = []
+    for start in range(0, len(text), chunk):
+        for delta in splitter.feed(text[start : start + chunk]):
+            (answer if delta.channel == "answer" else reasoning).append(delta.text)
+    for delta in splitter.flush():
+        (answer if delta.channel == "answer" else reasoning).append(delta.text)
+    return "".join(answer), "".join(reasoning)
+
+
+def _content_frame(text: str) -> str:
+    return json.dumps({"choices": [{"delta": {"content": text}}]})
+
+
+def _reasoning_frame(text: str) -> str:
+    return json.dumps({"choices": [{"delta": {"reasoning_content": text}}]})
+
+
+def _tool_frame(call_id: str, name: str, arguments: str, finish: str | None = None) -> str:
+    choice: dict[str, object] = {
+        "delta": {
+            "tool_calls": [
+                {"index": 0, "id": call_id, "function": {"name": name, "arguments": arguments}}
+            ]
+        }
+    }
+    if finish is not None:
+        choice["finish_reason"] = finish
+    return json.dumps({"choices": [choice]})
+
+
+# (content, expected answer bytes, expected reasoning bytes)
+_SPLIT_CASES = [
+    (
+        _T_OPEN + "Weigh the cases." + _T_CLOSE + "The answer is 2x.",
+        "The answer is 2x.",
+        "Weigh the cases.",
+    ),
+    (
+        _TT_OPEN + "Long form." + _TT_CLOSE + "The answer is 2x.",
+        "The answer is 2x.",
+        "Long form.",
+    ),
+    ("\n  " + _T_OPEN + "Weigh." + _T_CLOSE + "Answer", "\n  Answer", "Weigh."),
+    (
+        "The XML tag " + _T_OPEN + " is literal text, not a reasoning channel.",
+        "The XML tag " + _T_OPEN + " is literal text, not a reasoning channel.",
+        "",
+    ),
+    (
+        "I will show the tag " + _T_OPEN + " but never close it.",
+        "I will show the tag " + _T_OPEN + " but never close it.",
+        "",
+    ),
+    (
+        "Here is the example:\n```\n" + _T_OPEN + "hello\n```\nDone.",
+        "Here is the example:\n```\n" + _T_OPEN + "hello\n```\nDone.",
+        "",
+    ),
+    (
+        'Say "' + _T_OPEN + '" out loud.',
+        'Say "' + _T_OPEN + '" out loud.',
+        "",
+    ),
+    (
+        _T_OPEN + "A" + _T_CLOSE + "First. " + _T_OPEN + "B" + _T_CLOSE + "C" + _T_CLOSE
+        + "Second.",
+        "First. " + _T_OPEN + "B" + _T_CLOSE + "C" + _T_CLOSE + "Second.",
+        "A",
+    ),
+    (_T_OPEN + "Cut off here", "", "Cut off here"),
+    (_T_OPEN + "partial" + _T_CLOSE[:6], "", "partial" + _T_CLOSE[:6]),
+]
+
+
+@pytest.mark.parametrize("chunk", [1, 2, 3, 5, 7, 13])
+@pytest.mark.parametrize(("text", "answer", "reasoning"), _SPLIT_CASES)
+def test_tag_policy_is_independent_of_where_the_chunks_break(
+    text: str, answer: str, reasoning: str, chunk: int
+) -> None:
+    # Character-by-character already covers every split around a delimiter; the larger
+    # chunk sizes repeat the exact-bytes assertion at other boundaries.
+    assert _split(text, chunk) == (answer, reasoning)
+
+
+async def test_a_literal_tag_late_in_the_answer_stays_in_the_answer() -> None:
+    """The reported corruption, reproduced one character at a time through the stream."""
+    sentence = "The XML tag " + _T_OPEN + " is literal text, not a reasoning channel."
+    frames = [_content_frame(ch) for ch in sentence]
+    deltas = await _collect(_body(*frames))
+
+    assert _text(deltas, "answer") == sentence
+    assert _text(deltas, "reasoning") == ""
+
+
+async def test_a_fenced_example_with_a_tag_is_preserved() -> None:
+    fenced = "Here is the example:\n```\n" + _T_OPEN + "hello\n```\nDone."
+    deltas = await _collect(
+        _body(
+            _content_frame("Here is the example:\n"),
+            _content_frame("```\n" + _T_OPEN + "hello\n```\n"),
+            _content_frame("Done."),
+        )
+    )
+
+    assert _text(deltas, "answer") == fenced
+    assert _text(deltas, "reasoning") == ""
+
+
+async def test_explicit_reasoning_makes_content_literal_even_with_a_leading_tag() -> None:
+    sentence = "The tag " + _T_OPEN + " stays in the answer."
+    deltas = await _collect(
+        _body(
+            _reasoning_frame("Explicit thought."),
+            _content_frame(sentence),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Explicit thought."
+    assert _text(deltas, "answer") == sentence
+
+
+async def test_content_beginning_with_a_literal_tag_stays_answer_when_a_field_is_present() -> None:
+    # The field is present, so a tag that opens the content is literal text, not a
+    # leading reasoning block.
+    sentence = _T_OPEN + "Draft." + _T_CLOSE + "Final."
+    deltas = await _collect(
+        _body(
+            _reasoning_frame("Explicit thought."),
+            _content_frame(sentence),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Explicit thought."
+    assert _text(deltas, "answer") == sentence
+
+
+async def test_a_late_explicit_field_does_not_reclassify_emitted_content() -> None:
+    sentence = "Opening words. Now " + _T_OPEN + " is literal."
+    deltas = await _collect(
+        _body(
+            _content_frame("Opening words. "),
+            _reasoning_frame("Late thought."),
+            _content_frame("Now " + _T_OPEN + " is literal."),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Late thought."
+    assert _text(deltas, "answer") == sentence
+
+
+async def test_a_leading_block_opened_before_a_late_explicit_field_closes_normally() -> None:
+    # The block was committed to reasoning before the field arrived, so it is not
+    # reclassified; the field still arrives, and text after the close is literal.
+    deltas = await _collect(
+        _body(
+            _content_frame(_T_OPEN + "Commi"),
+            _content_frame("tted." + _T_CLOSE),
+            _reasoning_frame("Late"),
+            _content_frame("More answer."),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Committed.Late"
+    assert _text(deltas, "answer") == "More answer."
+
+
+async def test_an_explicit_field_releases_a_held_tag_prefix_as_answer_text() -> None:
+    sentence = _T_OPEN + " is literal."
+    deltas = await _collect(
+        _body(
+            _content_frame(_T_OPEN[:4]),
+            _reasoning_frame("Late."),
+            _content_frame(_T_OPEN[4:] + " is literal."),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Late."
+    assert _text(deltas, "answer") == sentence
+
+
+async def test_a_leading_block_with_leading_whitespace_keeps_the_whitespace() -> None:
+    deltas = await _collect(
+        _body(
+            _content_frame("\n  " + _T_OPEN + "Draft." + _T_CLOSE),
+            _content_frame("Answer."),
+        )
+    )
+
+    assert deltas == [
+        client.StreamDelta("answer", "\n  "),
+        client.StreamDelta("reasoning", "Draft."),
+        client.StreamDelta("answer", "Answer."),
+    ]
+
+
+async def test_tool_rounds_split_only_a_leading_block_and_keep_explicit_content_literal() -> None:
+    # Three consecutive verification-loop rounds, each with its own endpoint reply.
+    # Round one has no explicit field, so a leading inline block is split; rounds two
+    # and three carry the thought in a field, so their content is literal byte for byte.
+    async def run_round(body: str) -> tuple[client.AssistantMessage, list[client.StreamDelta]]:
+        seen: list[client.StreamDelta] = []
+        result = await client.complete_with_tools(
+            _ENDPOINT,
+            None,
+            None,
+            [],
+            [_SCHEMA_TOOL],
+            transport=_transport(lambda request: httpx.Response(200, text=body)),
+            on_delta=seen.append,
+        )
+        return result, seen
+
+    first, seen1 = await run_round(
+        _body(
+            _content_frame(_T_OPEN + "Check 2+3." + _T_CLOSE + "Let me verify "),
+            _content_frame("with the tool."),
+            _tool_frame("c1", "add", '{"a": 2, "b": 3}', finish="tool_calls"),
+        )
+    )
+    assert first.content == "Let me verify with the tool."
+    assert first.tool_calls == (client.ToolCall("c1", "add", '{"a": 2, "b": 3}'),)
+    assert _text(seen1, "reasoning") == "Check 2+3."
+    assert _text(seen1, "answer") == first.content
+
+    second_sentence = "The tag " + _T_OPEN + " is literal."
+    second, seen2 = await run_round(
+        _body(
+            _reasoning_frame("Explicit round two."),
+            _content_frame(second_sentence),
+            _tool_frame("c2", "add", '{"a": 5}', finish="tool_calls"),
+        )
+    )
+    assert second.content == second_sentence
+    assert second.tool_calls == (client.ToolCall("c2", "add", '{"a": 5}'),)
+    assert _text(seen2, "reasoning") == "Explicit round two."
+    assert _text(seen2, "answer") == second.content
+
+    third, seen3 = await run_round(
+        _body(
+            _reasoning_frame("Explicit final."),
+            _content_frame("Final: 5."),
+            '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        )
+    )
+    assert third.content == "Final: 5."
+    assert third.tool_calls == ()
+    assert not third.truncated
+    assert _text(seen3, "reasoning") == "Explicit final."
+    assert _text(seen3, "answer") == third.content
+
+
+def test_strip_reasoning_keeps_tags_that_are_not_at_the_head() -> None:
+    # Mid-message tags are answer text, in prose, in inline code, and inside fences.
+    prose = "Answer is 2. (" + _T_OPEN + " is literal.)"
+    assert client.strip_reasoning(prose) == prose
+    fenced = "```\n" + _T_OPEN + "hello\n```"
+    assert client.strip_reasoning(fenced) == fenced
+    unclosed = "Unclosed " + _T_OPEN + " at the end."
+    assert client.strip_reasoning(unclosed) == unclosed
+
+
+def test_strip_reasoning_preserves_content_verbatim_when_literal() -> None:
+    # The message already carried the provider's reasoning field, so the content stands.
+    content = "  " + _T_OPEN + "Deliberating." + _T_CLOSE + "JSON"
+    stripped = client.strip_reasoning(content, literal=True)
+    assert stripped == _T_OPEN + "Deliberating." + _T_CLOSE + "JSON"
+
+
+def test_strip_reasoning_still_drops_an_unclosed_leading_block() -> None:
+    assert client.strip_reasoning(_T_OPEN + "deliberation") == ""
+
+
+async def test_complete_keeps_content_literal_when_the_message_carries_a_reasoning_field() -> None:
+    content = "The tag " + _T_OPEN + " stays literal."
+    message = {"content": content, "reasoning_content": "The thinking."}
+    payload = {"choices": [{"message": message}]}
+    transport = _transport(lambda request: httpx.Response(200, json=payload))
+
+    result = await client.complete(
+        _ENDPOINT, None, "local-model", [{"role": "user", "content": "hi"}], transport=transport
+    )
+
+    assert result == content
+
+
+async def test_complete_still_strips_a_leading_block_when_no_field_is_present() -> None:
+    content = _T_OPEN + "Deliberating." + _T_CLOSE + '\n{"topics": []}'
+    payload = {"choices": [{"message": {"content": content}}]}
+    transport = _transport(lambda request: httpx.Response(200, json=payload))
+
+    result = await client.complete(
+        _ENDPOINT, None, "local-model", [{"role": "user", "content": "hi"}], transport=transport
+    )
+
+    assert result == '{"topics": []}'
+
+
+async def test_non_streaming_tool_turn_applies_the_same_field_policy() -> None:
+    # With the field, the content is literal; without it, a leading block is still dropped.
+    literal_content = "Use " + _T_OPEN + " verbatim."
+    leading_block = _T_OPEN + "Deliberating." + _T_CLOSE + '\n{"topics": []}'
+    with_field = {
+        "choices": [
+            {
+                "message": {"content": literal_content, "thinking": "Thought."},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    transport = _transport(lambda request: httpx.Response(200, json=with_field))
+    answer = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        "m",
+        [{"role": "user", "content": "hi"}],
+        [_SCHEMA_TOOL],
+        transport=transport,
+    )
+    assert answer.content == literal_content
+
+    without_field = {
+        "choices": [
+            {
+                "message": {"content": leading_block},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    transport = _transport(lambda request: httpx.Response(200, json=without_field))
+    answer = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        "m",
+        [{"role": "user", "content": "hi"}],
+        [_SCHEMA_TOOL],
+        transport=transport,
+    )
+    assert answer.content == '{"topics": []}'

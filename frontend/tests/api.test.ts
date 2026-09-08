@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { AgentChatError, ApiError, api, streamChat, streamRegenerate } from '@/lib/api'
-import type { ChatEvent } from '@/types'
+import {
+  AgentChatError,
+  ApiError,
+  api,
+  streamChat,
+  streamRegenerate,
+  streamWrite,
+  streamWriterChat,
+} from '@/lib/api'
+import { SseStreamError } from '@/lib/sse'
+import type { ChatEvent, WriteEvent } from '@/types'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -11,7 +20,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 /** An SSE body delivered as caller-chosen byte chunks, so frame splitting can be exercised. */
-function sseResponse(chunks: string[]): Response {
+function sseResponse(chunks: string[], hooks?: { onCancel?: () => void }): Response {
   const encoder = new TextEncoder()
   return new Response(
     new ReadableStream({
@@ -19,8 +28,34 @@ function sseResponse(chunks: string[]): Response {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
         controller.close()
       },
+      cancel: hooks?.onCancel,
     }),
   )
+}
+
+/** The raw bytes of a stream cut at a caller-chosen offset, so multibyte splits can be exercised. */
+function sseBytesResponse(chunks: Uint8Array[]): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk)
+        controller.close()
+      },
+    }),
+  )
+}
+
+/** Slice `bytes` at the caller-chosen offsets; -1 means the whole payload in one chunk. */
+function inChunks(bytes: Uint8Array, sizes: number[]): Uint8Array[] {
+  if (sizes.length === 1 && sizes[0] === -1) return [bytes]
+  const out: Uint8Array[] = []
+  let offset = 0
+  for (const size of sizes) {
+    out.push(bytes.subarray(offset, offset + size))
+    offset += size
+  }
+  if (offset < bytes.length) out.push(bytes.subarray(offset))
+  return out
 }
 
 /**
@@ -367,12 +402,16 @@ describe('abort handling', () => {
 })
 
 describe('SSE frame parsing', () => {
+  /** One real wire-protocol frame: a JSON object on a `data:` line, then the blank line. */
+  const frame = (value: object) => `data: ${JSON.stringify(value)}\n\n`
+
   it('emits one event per data frame', async () => {
     mockFetch(
       sseResponse([
-        'data: {"type":"token","value":"He"}\n',
-        'data: {"type":"token","value":"llo"}\n',
-        'data: {"type":"done"}\n',
+        frame({ type: 'start', message_id: 11 }),
+        frame({ type: 'token', text: 'He' }),
+        frame({ type: 'token', text: 'llo' }),
+        frame({ type: 'done', message_id: 11 }),
       ]),
     )
 
@@ -380,70 +419,201 @@ describe('SSE frame parsing', () => {
     await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => events.push(e))
 
     expect(events).toEqual([
-      { type: 'token', value: 'He' },
-      { type: 'token', value: 'llo' },
-      { type: 'done' },
+      { type: 'start', message_id: 11 },
+      { type: 'token', text: 'He' },
+      { type: 'token', text: 'llo' },
+      { type: 'done', message_id: 11 },
     ])
   })
 
   it('buffers a frame split across chunk boundaries', async () => {
     // The reader hands back arbitrary byte runs, so a frame can arrive in pieces.
-    mockFetch(sseResponse(['data: {"type":"tok', 'en","value":"split"}\n']))
-
-    const events: ChatEvent[] = []
-    await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => events.push(e))
-
-    expect(events).toEqual([{ type: 'token', value: 'split' }])
-  })
-
-  it('handles several frames arriving in one chunk', async () => {
     mockFetch(
-      sseResponse(['data: {"type":"token","value":"a"}\ndata: {"type":"token","value":"b"}\n']),
+      sseResponse([
+        'data: {"type":"tok',
+        `en","text":"split"}\n\n${frame({ type: 'done', message_id: 1 })}`,
+      ]),
     )
 
     const events: ChatEvent[] = []
     await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => events.push(e))
 
-    expect(events).toHaveLength(2)
+    expect(events).toEqual([
+      { type: 'token', text: 'split' },
+      { type: 'done', message_id: 1 },
+    ])
+  })
+
+  it('handles several frames arriving in one chunk', async () => {
+    mockFetch(
+      sseResponse([
+        frame({ type: 'token', text: 'a' }) + frame({ type: 'token', text: 'b' }),
+        frame({ type: 'done', message_id: 1 }),
+      ]),
+    )
+
+    const events: ChatEvent[] = []
+    await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => events.push(e))
+
+    expect(events).toHaveLength(3)
   })
 
   it('keeps reasoning frames distinct from answer frames', async () => {
     // A thought must never be mixed into the tokens that carry the reply.
     mockFetch(
       sseResponse([
-        'data: {"type":"reasoning","value":"thinking"}\n',
-        'data: {"type":"token","value":"answer"}\n',
+        frame({ type: 'reasoning', text: 'thinking' }),
+        frame({ type: 'token', text: 'answer' }),
+        frame({ type: 'done', message_id: 1 }),
       ]),
     )
 
     const events: ChatEvent[] = []
     await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => events.push(e))
 
-    expect(events.map((event) => event.type)).toEqual(['reasoning', 'token'])
+    expect(events.map((event) => event.type)).toEqual(['reasoning', 'token', 'done'])
   })
 
-  it('drops an unparseable frame instead of killing the stream', async () => {
+  it('ignores SSE comments, metadata fields, and empty data lines', async () => {
     mockFetch(
       sseResponse([
-        'data: {"type":"token","value":"one"}\n',
-        'data: not json at all\n',
-        'data: {"type":"token","value":"two"}\n',
+        ': keep-alive\n',
+        'event: message\nid: 7\nretry: 3000\nnote: hello\n',
+        'data:\n\n',
+        frame({ type: 'done', message_id: 1 }),
       ]),
     )
 
     const events: ChatEvent[] = []
     await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => events.push(e))
 
-    expect(events).toHaveLength(2)
+    expect(events).toEqual([{ type: 'done', message_id: 1 }])
   })
 
-  it('ignores SSE comments and non-data lines', async () => {
-    mockFetch(sseResponse([': keep-alive\n', 'event: message\n', 'data: {"type":"done"}\n']))
+  it('delivers a final frame missing only its blank-line terminator', async () => {
+    // The legacy readers consumed a complete final payload whose terminator was never
+    // flushed; the framing layer keeps that leniency (only a CUT payload fails).
+    mockFetch(sseResponse([frame({ type: 'token', text: 'He' }), 'data: {"type":"done"}']))
 
     const events: ChatEvent[] = []
     await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => events.push(e))
 
-    expect(events).toEqual([{ type: 'done' }])
+    expect(events).toEqual([{ type: 'token', text: 'He' }, { type: 'done' }])
+  })
+
+  it('rejects a malformed frame instead of dropping it', async () => {
+    mockFetch(
+      sseResponse([
+        frame({ type: 'token', text: 'one' }),
+        'data: not json at all\n\n',
+        frame({ type: 'done', message_id: 1 }),
+      ]),
+    )
+
+    const events: ChatEvent[] = []
+    const pending = streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) =>
+      events.push(e),
+    )
+    const error = await pending.catch((caught: unknown) => caught)
+
+    // The frame fails deliberately with a bounded message - no raw payload echoed.
+    expect(error).toBeInstanceOf(SseStreamError)
+    expect((error as Error).message).not.toContain('not json')
+    expect(events).toEqual([{ type: 'token', text: 'one' }])
+  })
+
+  it('rejects a frame whose type is not in the endpoint contract', async () => {
+    mockFetch(sseResponse([frame({ type: 'teleport' })]))
+    await expect(
+      streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, () => {}),
+    ).rejects.toThrowError(SseStreamError)
+  })
+
+  it('rejects a token frame whose text is not a string', async () => {
+    // The consumers append `text`; a non-string would have corrupted the answer.
+    mockFetch(sseResponse([frame({ type: 'token', text: 7 })]))
+    await expect(
+      streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, () => {}),
+    ).rejects.toThrowError(SseStreamError)
+  })
+
+  it('rejects a stream cut inside the final frame, keeping earlier events', async () => {
+    mockFetch(
+      sseResponse([frame({ type: 'start', message_id: 11 }), 'data: {"type":"token","text":"Hel']),
+    )
+
+    const events: ChatEvent[] = []
+    const pending = streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) =>
+      events.push(e),
+    )
+    const error = await pending.catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(SseStreamError)
+    expect(events).toEqual([{ type: 'start', message_id: 11 }])
+  })
+
+  it('rejects when the stream ends without a terminal frame', async () => {
+    // Every turn route ends with `done` or an in-band `error`; EOF alone never
+    // certifies completion, so a stream that stops short fails honestly.
+    mockFetch(
+      sseResponse([
+        frame({ type: 'start', message_id: 11 }),
+        frame({ type: 'token', text: 'Partial' }),
+      ]),
+    )
+
+    const events: ChatEvent[] = []
+    const pending = streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) =>
+      events.push(e),
+    )
+    const error = await pending.catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).message).toBe('The answer stopped early. Try again.')
+    expect(events).toEqual([
+      { type: 'start', message_id: 11 },
+      { type: 'token', text: 'Partial' },
+    ])
+  })
+
+  it('surfaces a throwing consumer and stops delivery', async () => {
+    const frames = [
+      frame({ type: 'start', message_id: 11 }),
+      frame({ type: 'token', text: 'a' }),
+      frame({ type: 'done', message_id: 11 }),
+    ]
+    let cancelled = 0
+    mockFetch(sseResponse(frames, { onCancel: () => cancelled++ }))
+
+    const events: ChatEvent[] = []
+    const pending = streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => {
+      events.push(e)
+      throw new Error('consumer failed')
+    })
+    await expect(pending).rejects.toThrowError('consumer failed')
+    // The buffered `done` after the failure can never convert it into success.
+    expect(events).toEqual([{ type: 'start', message_id: 11 }])
+    expect(cancelled).toBeGreaterThanOrEqual(1)
+  })
+
+  it('propagates an abort from the body stream', async () => {
+    const encoder = new TextEncoder()
+    mockFetch(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(frame({ type: 'token', text: 'a' })))
+          },
+          pull(controller) {
+            controller.error(new DOMException('The operation was aborted.', 'AbortError'))
+          },
+        }),
+      ),
+    )
+
+    await expect(
+      streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, () => {}),
+    ).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   it('raises the backend error rather than opening a reader', async () => {
@@ -454,10 +624,91 @@ describe('SSE frame parsing', () => {
   })
 })
 
+describe('byte-boundary replay (PLA-502)', () => {
+  // Arbitrary byte boundaries: one chunk, byte-by-byte, and fixed odd splits that
+  // land inside multibyte UTF-8, JSON escapes, and LaTeX delimiters.
+  const PATTERNS = [[-1], [1], [2, 3, 5], [3, 1, 4], [7, 13, 2]]
+
+  it('replays a tutor stream identically at every byte boundary', async () => {
+    const events: ChatEvent[] = [
+      { type: 'start', message_id: 11 },
+      { type: 'status', stage: 'composing_answer' },
+      { type: 'reasoning', text: 'thinking: € 𝄞 汉 🎉' },
+      { type: 'token', text: 'So $\\frac{\\partial f}{\\partial x} = \\frac{1}{2}$' },
+      { type: 'token', text: 'done: "quoted" \t end' },
+      { type: 'done', message_id: 11 },
+    ]
+    const bytes = new TextEncoder().encode(
+      events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''),
+    )
+
+    for (const pattern of PATTERNS) {
+      mockFetch(sseBytesResponse(inChunks(bytes, pattern)))
+      const seen: ChatEvent[] = []
+      await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => seen.push(e))
+      expect(seen, `pattern ${JSON.stringify(pattern)}`).toEqual(events)
+    }
+  })
+
+  it('replays the same stream framed with CRLF', async () => {
+    const events: ChatEvent[] = [
+      { type: 'token', text: '€ 𝄞 汉 🎉' },
+      { type: 'done', message_id: 1 },
+    ]
+    const bytes = new TextEncoder().encode(
+      events.map((e) => `data: ${JSON.stringify(e)}\r\n\r\n`).join(''),
+    )
+
+    mockFetch(sseBytesResponse(inChunks(bytes, [3, 5, 2, 1])))
+    const seen: ChatEvent[] = []
+    await streamChat(1, { content: 'hi', mode: 'guide', document_id: null }, (e) => seen.push(e))
+    expect(seen).toEqual(events)
+  })
+
+  it('replays a /write stream over arbitrary byte boundaries', async () => {
+    const events: WriteEvent[] = [
+      { type: 'token', text: 'By $\\frac{d}{dx}$ of ' },
+      { type: 'token', text: 'the energy, € falls.' },
+      { type: 'done' },
+    ]
+    const bytes = new TextEncoder().encode(
+      events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''),
+    )
+
+    for (const pattern of PATTERNS) {
+      mockFetch(sseBytesResponse(inChunks(bytes, pattern)))
+      const seen: WriteEvent[] = []
+      await streamWrite(4, { instruction: 'expand' }, (e) => seen.push(e))
+      expect(seen, `pattern ${JSON.stringify(pattern)}`).toEqual(events)
+    }
+  })
+
+  it('replays a writer chat turn with its extra frames', async () => {
+    const events: ChatEvent[] = [
+      { type: 'start', message_id: 21 },
+      { type: 'activity', tool: 'search', label: 'Searching notes', ok: true },
+      { type: 'token', text: 'Draft: €' },
+      { type: 'proposed', edit_id: 5 },
+      { type: 'brief' },
+      { type: 'done', message_id: 21 },
+    ]
+    const bytes = new TextEncoder().encode(
+      events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''),
+    )
+
+    for (const pattern of PATTERNS) {
+      mockFetch(sseBytesResponse(inChunks(bytes, pattern)))
+      const seen: ChatEvent[] = []
+      await streamWriterChat(4, 9, { content: 'write' }, (e) => seen.push(e))
+      expect(seen, `pattern ${JSON.stringify(pattern)}`).toEqual(events)
+    }
+  })
+})
+
 describe('regenerate', () => {
   it('posts to the regenerate route and carries no question', async () => {
     // Retry means answer again, not ask again: the question is already stored.
-    const spy = mockFetch(sseResponse(['data: {"type":"done"}\n']))
+    const spy = mockFetch(sseResponse(['data: {"type":"done"}\n\n']))
     await streamRegenerate(7, { mode: 'show', document_id: null }, () => {})
 
     const [url, init] = spy.mock.calls[0]

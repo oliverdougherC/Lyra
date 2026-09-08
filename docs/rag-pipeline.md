@@ -11,6 +11,15 @@ upload returns before background processing completes. `backend/core/ingestion.p
 and durable stage transitions: `pending`, `parsing`, `chunking`, `embedding`, `extracting`, then
 `ready`, `unsupported`, or `failed`. A document is searchable only when it is `ready`.
 
+The accepted file limit is 50 MiB. Before multipart parsing can spool uploaded parts, an ASGI
+guard caps the complete request at that limit plus 64 KiB of framing overhead, including
+unexpected parts. It rejects excessive declared lengths immediately and counts incoming bytes
+when the length is missing or understated. Host, Origin, and packaged-session checks run first.
+The existing file-level copy limit, private atomic publication, and database rollback remain
+in force; oversized requests receive HTTP 413 and temporary files close on rejected or
+disconnected uploads. Unsupported file types are rejected before publication, though multipart
+parsing has already occurred within the request limit.
+
 `backend/rag/parse.py` extracts text and page/section metadata. Scanned or otherwise unreadable
 pages are recorded explicitly. A partly readable document can become ready with skipped pages;
 a wholly unreadable one retains its original upload in the unsupported state. Recognition is an

@@ -34,15 +34,33 @@ router = APIRouter(prefix="/api", tags=["documents"])
 
 DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 
-# 50 MB. Generous for a lecture deck or a scanned problem set, and the ceiling the upload
-# stream is held to: it is enforced chunk by chunk as the body arrives, never by buffering
-# the whole file and measuring it afterward.
+# 50 MB. Generous for a lecture deck or a scanned problem set. This is the accepted-file
+# contract: a file part may be published only if it is this many bytes or fewer, enforced
+# chunk by chunk while the part is copied out of its spool, never by buffering the whole
+# file and measuring it afterward. The whole *request* (the file, the multipart framing,
+# and any extra parts) is held to a slightly higher ceiling by the ASGI byte guard in
+# `api/upload_body_guard.py`, which is what bounds what the multipart parser may spool to
+# temp before this route runs at all.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 # How much of the upload is pulled into memory at a time while it is copied to disk. The
 # peak an upload holds is one chunk, whatever the size of the file, so an oversized body
 # can never spike memory before the ceiling above rejects it.
 UPLOAD_CHUNK_BYTES = private.STREAM_CHUNK_BYTES
 TOO_LARGE_MESSAGE = "That file is larger than 50 MB. Upload a smaller file."
+
+
+class UploadTooLargeError(LyraError):
+    """A file part crossed the accepted-file contract.
+
+    413 rather than the base 400: nothing is malformed, the file is simply too large,
+    and the status says that without the message. The ASGI guard in main.py answers the
+    same 413 when the whole request - file plus framing, or extra parts - exceeds the
+    ceiling, so every over-limit upload gets one status.
+    """
+
+    status = 413
+
+
 # A store that failed for a reason the student did not cause and can only retry: a disk
 # error, a dropped connection mid-upload, or a destination Lyra refused to write through.
 UPLOAD_FAILED_MESSAGE = "That file could not be saved. Try uploading it again."
@@ -239,22 +257,25 @@ def upload_document(
     # The class upload directory is `0o700` and the stored file `0o600`: an uploaded source
     # is coursework, private like the rest of the data tree and not left to the umask.
     private.secure_mkdir(stored_path.parent, root=settings.data_dir)
-    # The size limit is enforced while the upload streams, not after it is buffered whole:
-    # the body is copied to the staged file one fixed-size chunk at a time, the running
-    # total is checked as each chunk lands, and the first byte past `MAX_UPLOAD_BYTES`
-    # aborts the copy before the rest of the request body is ever read into memory. A
-    # `content-length` header cannot be the thing that enforces this - it is whatever the
-    # client chose to send - so the ceiling is measured against the bytes that actually
-    # arrive. Only a complete, accepted stream is published under the final name; every
-    # rejection or fault below discards the staged bytes and rolls the row back, so a
-    # refused upload leaves neither a partial file nor a dangling document.
+    # `file` already sits in a spooled temporary file by the time this handler runs:
+    # FastAPI parsed the multipart body while resolving the dependency, and the spool
+    # itself is bounded only by the ASGI byte guard in `api/upload_body_guard.py` (the
+    # declared Content-Length is checked up front, and every arriving byte is counted
+    # against the request ceiling). What this copy enforces is the file-level contract
+    # on the part itself: the request may lawfully hold up to the ceiling, and only a
+    # part of `MAX_UPLOAD_BYTES` bytes or fewer may be published. The bytes are copied
+    # to the staged file one fixed-size chunk at a time, the running total is checked as
+    # each chunk lands, and the first chunk past the limit aborts the copy with at most
+    # one more chunk read. Only a complete, accepted stream is published under the final
+    # name; every rejection or fault below discards the staged bytes and rolls the row
+    # back, so a refused upload leaves neither a partial file nor a dangling document.
     try:
         byte_size = private.publish_private_stream(
             stored_path, file.file, max_bytes=MAX_UPLOAD_BYTES, chunk_size=UPLOAD_CHUNK_BYTES
         )
     except private.StreamTooLargeError:
         conn.rollback()
-        raise LyraError(TOO_LARGE_MESSAGE) from None
+        raise UploadTooLargeError(TOO_LARGE_MESSAGE) from None
     except (OSError, private.PrivacyContractError):
         # A disk error, a disconnect surfacing as a read failure, or a symlink planted at
         # the destination: the staged file is already gone, and rolling back drops the
