@@ -1,0 +1,36 @@
+/**
+ * The one deliberate entry for KaTeX's vendor stylesheet.
+ *
+ * Two things are being decided here, and they have to be decided together.
+ *
+ * 1. Which cascade layer the vendor maths rules land in. `layer(katex)` on the import puts
+ *    every KaTeX declaration into that layer instead of leaving it unlayered, where it would
+ *    outrank all of Lyra's own CSS whatever its specificity. The order statement below is
+ *    what seats `katex` between `base` and `components`: below `base` it loses to preflight's
+ *    `*, ::before, ::after { border: 0 solid }` and every fraction bar and rule line goes
+ *    invisible; above `components` it beats the chat's own sizing of `.katex` and
+ *    `.katex-display`. `properties` is the `@property` fallback layer Tailwind's output
+ *    carries; naming it first keeps that fallback below the layers it is a default for, as it
+ *    was before this file existed.
+ *
+ *    The statement is written here, and again in `globals.css`, rather than trusted to one
+ *    position: layer order is set by the first statement the browser meets, so whichever of
+ *    the two sheets is bundled first still pins the same order. The two must stay identical.
+ *
+ * 2. Which tool resolves the imported sheet. This is why the entry is its own file and not a
+ *    line in `globals.css`. `globals.css` is a Tailwind entry, so `@tailwindcss/postcss`
+ *    resolves its `@import`s itself and leaves KaTeX's own relative `url(fonts/…)` references
+ *    pointing at `globals.css`'s directory, where no KaTeX fonts are: the built sheet asks for
+ *    `/assets/fonts/KaTeX_Main-Regular.woff2`, gets nothing, and every equation silently falls
+ *    back to Times. A sheet with no Tailwind features in it goes through Vite's importer
+ *    instead, which rewrites those URLs to the emitted `/assets/KaTeX_*.woff2` files.
+ *
+ * Import this before `globals.css` (which `main.tsx` does by importing it first): the entry
+ * that declares the layer order has to be in front, and no earlier `@import` may lock a
+ * conflicting one. The pinned KaTeX version comes from `package.json`, and there is only the
+ * one copy of it in the tree.
+ */
+@layer properties, theme, base, katex, components, utilities;
+
+/* The explicit vendor alias bypasses suppression of transitive bare imports. */
+@import '@lyra/katex-vendor.css' layer(katex);

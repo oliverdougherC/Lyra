@@ -8,6 +8,14 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // Only the eager, layered entry loads the vendor CSS. Crepe's theme also imports
+      // the bare specifier, which would otherwise add an unlayered copy on navigation.
+      'katex/dist/katex.min.css': fileURLToPath(
+        new URL('./src/styles/katex-already-loaded.css', import.meta.url),
+      ),
+      '@lyra/katex-vendor.css': fileURLToPath(
+        new URL('./node_modules/katex/dist/katex.min.css', import.meta.url),
+      ),
     },
   },
   server: {
