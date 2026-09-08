@@ -20,6 +20,13 @@ prerequisites.
 
 - Reopen `Lyra.app`. If only a source build looks stale, rebuild the Vite assets and `.app`.
 
+## If the draft editor cannot open
+
+Use **Retry** to reopen the editor with the same supplied draft text, or **Exit to class**
+to return to the class workspace. A failed initialization does not report the editor ready
+or schedule an autosave. If opening the editor keeps failing, quit and reopen Lyra before
+trying again.
+
 ## If web research is unavailable
 
 - Open Settings and confirm an Exa API key is configured.

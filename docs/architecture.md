@@ -48,6 +48,14 @@ The frontend is now a Vite/React application with client-side routing.
   never to History on scroll. Navigation reserves History quota; refused updates fall back to
   same-document hash navigation. See [the scroll-quota correction](pla-486-scroll-quota.md).
 
+The lazy draft editor owns one active initialization attempt and DOM host. Failed attempts
+offer retry/exit without reporting readiness or emitting changes for autosave; retired
+attempts cannot attach callbacks to their replacements. The pinned Milkdown lifecycle leaves
+failed creation in `OnCreate`, where its public `destroy()` retries indefinitely. Lyra detaches
+such an attempt and suppresses its callbacks instead of starting that loop; full cleanup of
+partially initialized plugin state remains an upstream limitation. Successful editors retain
+ordinary listener removal and destruction.
+
 The production browser suites exercise two different boundaries:
 
 - `pnpm test:e2e` checks the built frontend with Playwright smoke coverage.
