@@ -91,6 +91,7 @@ function mockAttemptLifecycle(quiz: QuizDetail, answers: AttemptAnswer[] = []) {
     const correctIndex = CORRECT_INDEX[body.part_id] ?? 0
     return Promise.resolve({
       correct: body.selected_index === correctIndex,
+      uncertain: false,
       correct_index: correctIndex,
       explanation: 'Because the definition says so.',
     })
@@ -116,7 +117,11 @@ describe('QuizRunner', () => {
     await userEvent.click(screen.getByRole('button', { name: 'One' }))
 
     await waitFor(() =>
-      expect(api.submitAnswer).toHaveBeenCalledWith(10, { part_id: 21, selected_index: 1 }),
+      expect(api.submitAnswer).toHaveBeenCalledWith(10, {
+        part_id: 21,
+        selected_index: 1,
+        response_text: 'One',
+      }),
     )
     expect(await screen.findByText('Correct.')).toBeInTheDocument()
     expect(screen.getByText('Because the definition says so.')).toBeInTheDocument()
@@ -133,7 +138,11 @@ describe('QuizRunner', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Two' }))
 
     await waitFor(() =>
-      expect(api.submitAnswer).toHaveBeenCalledWith(10, { part_id: 21, selected_index: 2 }),
+      expect(api.submitAnswer).toHaveBeenCalledWith(10, {
+        part_id: 21,
+        selected_index: 2,
+        response_text: 'Two',
+      }),
     )
     expect(await screen.findByText('Not quite.')).toBeInTheDocument()
     expect(screen.getByText('The answer:')).toBeInTheDocument()
@@ -172,22 +181,30 @@ describe('QuizRunner', () => {
     expect(api.startAttempt).toHaveBeenCalledTimes(1)
   })
 
-  it('maps a matching fill_blank answer to selected_index 0', async () => {
+  it('sends the typed fill_blank response, not a client-side match', async () => {
+    // The runner no longer grades the text itself: whatever the student types goes to
+    // the server, which grades it and persists the original words. A blank submission
+    // stays blank: the Check button is the only guard the client keeps.
     mockAttemptLifecycle(quizWith([FILL_BLANK]))
     const { wrapper } = createWrapper()
     render(<QuizRunner classId={1} quizId={9} />, { wrapper })
 
     await screen.findByText('The capital of France is ...')
-    // Case and surrounding whitespace do not count against the student.
+    // Case and surrounding whitespace are the student's to keep: the grader normalizes,
+    // so the exact typed text is what the contract carries.
     await userEvent.type(screen.getByLabelText('Your answer'), '  paris ')
     await userEvent.click(screen.getByRole('button', { name: 'Check' }))
 
     await waitFor(() =>
-      expect(api.submitAnswer).toHaveBeenCalledWith(10, { part_id: 22, selected_index: 0 }),
+      expect(api.submitAnswer).toHaveBeenCalledWith(10, {
+        part_id: 22,
+        selected_index: -1,
+        response_text: '  paris ',
+      }),
     )
   })
 
-  it('maps a missing fill_blank answer to selected_index -1', async () => {
+  it('carries a non-matching fill_blank response to the grader', async () => {
     mockAttemptLifecycle(quizWith([FILL_BLANK]))
     const { wrapper } = createWrapper()
     render(<QuizRunner classId={1} quizId={9} />, { wrapper })
@@ -197,7 +214,11 @@ describe('QuizRunner', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Check' }))
 
     await waitFor(() =>
-      expect(api.submitAnswer).toHaveBeenCalledWith(10, { part_id: 22, selected_index: -1 }),
+      expect(api.submitAnswer).toHaveBeenCalledWith(10, {
+        part_id: 22,
+        selected_index: -1,
+        response_text: 'Lyon',
+      }),
     )
   })
 
@@ -243,7 +264,7 @@ describe('QuizRunner', () => {
     // The active attempt already recorded an answer to the first question, so a reload
     // resumes at the second rather than starting over (PLA-277).
     mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
-      { part_id: 21, selected_index: 1, correct: true },
+      { part_id: 21, selected_index: 1, correct: true, uncertain: false, response_text: 'One' },
     ])
     const { wrapper } = createWrapper()
     render(<QuizRunner classId={1} quizId={9} />, { wrapper })
@@ -254,8 +275,8 @@ describe('QuizRunner', () => {
 
   it('lets a fully answered resumed attempt finish without re-answering the last question', async () => {
     mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
-      { part_id: 21, selected_index: 1, correct: true },
-      { part_id: 22, selected_index: 0, correct: true },
+      { part_id: 21, selected_index: 1, correct: true, uncertain: false, response_text: 'One' },
+      { part_id: 22, selected_index: 0, correct: true, uncertain: false, response_text: 'Paris' },
     ])
     vi.spyOn(api, 'finishAttempt').mockResolvedValue({
       score: 2,
@@ -300,7 +321,12 @@ describe('QuizRunner remediation', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'One' }))
     expect(screen.getByRole('button', { name: 'Start over' })).toBeDisabled()
     expect(screen.getByRole('status')).toHaveTextContent('Checking your answer')
-    grading.resolve({ correct: true, correct_index: 1, explanation: 'Correct by definition.' })
+    grading.resolve({
+      correct: true,
+      uncertain: false,
+      correct_index: 1,
+      explanation: 'Correct by definition.',
+    })
     await waitFor(() =>
       expect(screen.getByRole('region', { name: 'Answer feedback' })).toHaveFocus(),
     )
@@ -333,7 +359,9 @@ it('restores the recorded reveal through repeated Ask history returns without su
     attempt_id: 10,
     question_part_ids: [21, 22],
     question_count: 2,
-    answers: [{ part_id: 21, selected_index: 2, correct: false }],
+    answers: [
+      { part_id: 21, selected_index: 2, correct: false, uncertain: false, response_text: 'Two' },
+    ],
     finished: false,
   })
   const returned = render(<QuizRunner classId={1} quizId={9} />, { wrapper })
@@ -354,7 +382,7 @@ it('restores the recorded reveal through repeated Ask history returns without su
 it('ignores help return state from a different attempt', async () => {
   sessionStorage.setItem('lyra:quiz:9:help-return', JSON.stringify({ attemptId: 8, partId: 21 }))
   mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
-    { part_id: 21, selected_index: 2, correct: false },
+    { part_id: 21, selected_index: 2, correct: false, uncertain: false, response_text: 'Two' },
   ])
   render(<QuizRunner classId={1} quizId={9} />, { wrapper: createWrapper().wrapper })
   expect(await screen.findByText('The capital of France is ...')).toBeVisible()
@@ -366,7 +394,7 @@ it('ignores help return state from a different attempt', async () => {
 it('clears help return state when starting over', async () => {
   sessionStorage.setItem('lyra:quiz:9:help-return', JSON.stringify({ attemptId: 10, partId: 21 }))
   mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
-    { part_id: 21, selected_index: 2, correct: false },
+    { part_id: 21, selected_index: 2, correct: false, uncertain: false, response_text: 'Two' },
   ])
   render(<QuizRunner classId={1} quizId={9} />, { wrapper: createWrapper().wrapper })
   await screen.findByText('Not quite.')
@@ -388,11 +416,75 @@ it('keeps the typed fill-blank answer when returning from Ask', async () => {
     attempt_id: 10,
     question_part_ids: [22],
     question_count: 1,
-    answers: [{ part_id: 22, selected_index: -1, correct: false }],
+    answers: [
+      { part_id: 22, selected_index: -1, correct: false, uncertain: false, response_text: 'Lyon' },
+    ],
     finished: false,
   })
   render(<QuizRunner classId={1} quizId={9} />, { wrapper })
   await screen.findByText('Not quite.')
   expect(screen.getByRole('textbox', { name: 'Your answer' })).toHaveValue('Lyon')
   expect(api.submitAnswer).toHaveBeenCalledTimes(1)
+})
+
+it('compares an unsettled answer instead of judging it wrong', async () => {
+  // The grader could not settle the response either way. The student still sees the
+  // reference answer and the explanation, but the reveal stays neutral: no confident
+  // "wrong", no grading machinery explained.
+  mockAttemptLifecycle(quizWith([FILL_BLANK]))
+  vi.mocked(api.submitAnswer).mockResolvedValue({
+    correct: false,
+    uncertain: true,
+    correct_index: 0,
+    explanation: 'Because the definition says so.',
+  })
+  const { wrapper } = createWrapper()
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+  await screen.findByText('The capital of France is ...')
+  await userEvent.type(screen.getByLabelText('Your answer'), 'a big city in France')
+  await userEvent.click(screen.getByRole('button', { name: 'Check' }))
+
+  expect(await screen.findByText("Let's compare.")).toBeInTheDocument()
+  expect(screen.queryByText('Not quite.')).not.toBeInTheDocument()
+  expect(screen.getByText('The answer:')).toBeInTheDocument()
+  // The handoff to Lyra stays available: that is the clarification the flow offers.
+  expect(screen.getByRole('link', { name: 'Go over this with Lyra' })).toBeInTheDocument()
+})
+
+it('restores a recorded fill_blank response on reopen', async () => {
+  // The recorded answer carries the student's own words: reopening the quiz restores
+  // them into the reveal even though the tab-scoped session storage is gone.
+  mockAttemptLifecycle(quizWith([FILL_BLANK]), [
+    {
+      part_id: 22,
+      selected_index: -1,
+      correct: false,
+      uncertain: false,
+      response_text: 'Lyon',
+    },
+  ])
+  const { wrapper } = createWrapper()
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+  expect(await screen.findByText('Not quite.')).toBeInTheDocument()
+  expect(screen.getByRole('textbox', { name: 'Your answer' })).toHaveValue('Lyon')
+  expect(api.submitAnswer).not.toHaveBeenCalled()
+})
+
+it('renders a recorded uncertain answer neutrally on reopen', async () => {
+  mockAttemptLifecycle(quizWith([FILL_BLANK]), [
+    {
+      part_id: 22,
+      selected_index: -1,
+      correct: false,
+      uncertain: true,
+      response_text: 'a big city in France',
+    },
+  ])
+  const { wrapper } = createWrapper()
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+  expect(await screen.findByText("Let's compare.")).toBeInTheDocument()
+  expect(screen.queryByText('Not quite.')).not.toBeInTheDocument()
 })

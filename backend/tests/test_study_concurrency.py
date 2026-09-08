@@ -251,7 +251,12 @@ def _answer(attempt_id: int, part_id: int, selected_index: int) -> Callable[[], 
         try:
             return routes_study.answer_question(
                 attempt_id,
-                routes_study.AnswerCreate(part_id=part_id, selected_index=selected_index),
+                routes_study.AnswerCreate(
+                    part_id=part_id,
+                    selected_index=selected_index,
+                    # The contract carries the chosen option's text; a miss carries "".
+                    response_text="" if selected_index < 0 else "the chosen option",
+                ),
                 conn,
             )
         finally:

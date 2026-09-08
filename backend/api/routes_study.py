@@ -15,13 +15,15 @@ and these are the study tools' view of it.
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
-from backend.core import artifacts, scheduler, study
+from backend.core import artifacts, grading, scheduler, study
+from backend.core.app_settings import resolve_tutor_access
 from backend.core.classes import get_class
 from backend.core.deck_counts import deck_counts_for_class
 from backend.core.errors import ConflictError, NotFoundError
@@ -48,6 +50,7 @@ NOT_READY_MESSAGES: dict[str, str] = {
     artifacts.CANCELLED: "was cancelled.",
 }
 DECK_CHANGED_MESSAGE = "This deck changed while you were reviewing. Reopen it and try again."
+QUIZ_CHANGED_MESSAGE = "This quiz changed while you were answering. Reopen it and try again."
 ATTEMPT_FINISHED_MESSAGE = "This attempt has already been finished."
 NOT_THIS_QUIZ_MESSAGE = "That question does not belong to this quiz's attempt."
 QUIZ_NOT_READY_MESSAGE = "This quiz is not ready to be taken yet."
@@ -144,12 +147,18 @@ class CardReview(BaseModel):
 class AnswerCreate(BaseModel):
     """Body of `POST /api/attempts/{attempt_id}/answers`.
 
-    Any index other than the stored `correct_index` grades incorrect, which is also how
-    a fill_blank answer that matched nothing arrives: the runner sends -1.
+    For multiple choice and true/false, `selected_index` is the whole answer: any index
+    other than the stored `correct_index` grades incorrect. For a fill_blank question the
+    index carries no meaning (the runner sends -1) and `response_text` is the student's
+    actual words - the layered grader evaluates them against the question's reference
+    answer and hidden grading contract, and the route stores them beside the verdict
+    (PLA-496), so a reload, a retry, and the attempt history all carry the original
+    response.
     """
 
     part_id: int
     selected_index: int
+    response_text: str = Field(max_length=grading.MAX_RESPONSE_CHARS)
 
 
 class StudyStatusRead(BaseModel):
@@ -702,14 +711,17 @@ def _quiz_question_part_ids(conn: sqlite3.Connection, artifact_id: int) -> list[
 
 
 def _attempt_answers(conn: sqlite3.Connection, attempt_id: int) -> list[dict[str, object]]:
-    """The answers recorded for an attempt: which option was chosen and whether it was right.
+    """The answers recorded for an attempt: the chosen option, the student's own words
+    where a free response was graded, and each answer's outcome.
 
     Deliberately not the answer key: a question the student has not answered leaks nothing
     here, so resuming an attempt cannot reveal an answer they have not yet earned (PLA-277).
+    `response_text` is None for answers recorded before the layered grader (PLA-496),
+    including a legacy fill-blank miss, which never carried a recoverable text.
     """
     rows = conn.execute(
-        "select part_id, selected_index, correct from quiz_answers "
-        "where attempt_id = ? order by part_id",
+        "select part_id, selected_index, correct, verdict, response_text "
+        "from quiz_answers where attempt_id = ? order by part_id",
         (attempt_id,),
     ).fetchall()
     return [
@@ -717,6 +729,8 @@ def _attempt_answers(conn: sqlite3.Connection, attempt_id: int) -> list[dict[str
             "part_id": int(row["part_id"]),
             "selected_index": int(row["selected_index"]),
             "correct": bool(row["correct"]),
+            "uncertain": row["verdict"] == "uncertain",
+            "response_text": row["response_text"],
         }
         for row in rows
     ]
@@ -835,55 +849,163 @@ def current_attempt(artifact_id: int, conn: DbConn) -> dict[str, object]:
     return {"attempt": _attempt_payload(conn, active)}
 
 
+def _judge_for(conn: sqlite3.Connection) -> Callable[..., grading.GradingResult | None] | None:
+    """The semantic judge for one answer, or None when it cannot run.
+
+    The judge sends the question - generated from the student's own documents - to the
+    configured endpoint, so the same consent gate that guards document text applies: no
+    endpoint, or a remote endpoint the student has not acknowledged, leaves the judge out,
+    and the layered pass then ends on a recorded `uncertain` rather than a confident wrong.
+    """
+    access = resolve_tutor_access(conn)
+    if access.config is None or access.document_block is not None:
+        return None
+    config = access.config
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult | None:
+        return grading.judge_free_response(
+            config, question=question, rubric=rubric, reference=reference, response=response
+        )
+
+    return judge
+
+
+def _answer_read(question: dict[str, object], result: grading.GradingResult) -> dict[str, object]:
+    """The response shape the runner renders: the simple correct/incorrect reveal.
+
+    `uncertain` is the one addition, and it is what the interface needs to render the
+    neutral comparison instead of a confident wrong; it is never grading machinery, and
+    the internal detail that produced it is stored on the row, not returned.
+    """
+    return {
+        "correct": result.correct,
+        "uncertain": result.uncertain,
+        "correct_index": question["correct_index"],
+        "explanation": question["explanation"],
+    }
+
+
+def _stored_answer_read(question: dict[str, object], row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "correct": bool(row["correct"]),
+        "uncertain": row["verdict"] == "uncertain",
+        "correct_index": question["correct_index"],
+        "explanation": question["explanation"],
+    }
+
+
 @router.post("/attempts/{attempt_id}/answers", response_model=None)
 def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dict[str, object]:
-    """Grade one answer against the stored payload and record it, transactionally (PLA-277).
+    """Grade one answer and record it (PLA-277, PLA-496).
 
-    The read of the attempt, the membership check, and the write share one `begin
-    immediate` transaction, so a just-submitted answer cannot race the attempt's finish:
-    an answer to a finished attempt is refused, and an answer that lands commits before a
-    finish can read the answers. The question must belong to this attempt's fixed set, so
-    an answer can never attach to a question from a regenerated quiz.
+    Three short transactions in order: a read that finds the attempt and the question
+    being answered; the grading, which runs a bounded algebra subprocess and, for answers
+    no layer settles, one provider call; and a publish that revalidates everything it is
+    about to commit. Grading never holds a write lock, and the publish rechecks that the
+    attempt is still the same live attempt answering the same question content, so a
+    result that lands late after a restart or a regeneration cannot contaminate the new
+    attempt.
+
+    A resubmission of an answer already recorded against the current grading contract
+    replays the stored result - no regrade, no second semantic judgment; a different
+    response to the same question regrades and updates the row.
     """
+    # Read.
+    attempt = conn.execute("select * from quiz_attempts where id = ?", (attempt_id,)).fetchone()
+    if attempt is None:
+        raise NotFoundError(NOT_AN_ATTEMPT_MESSAGE)
+    if attempt["finished_at"] is not None:
+        raise ConflictError(ATTEMPT_FINISHED_MESSAGE)
+    snapshot = (
+        json.loads(str(attempt["question_part_ids"])) if attempt["question_part_ids"] else None
+    )
+    if snapshot is not None and payload.part_id not in snapshot:
+        raise NotFoundError(NOT_THIS_QUIZ_MESSAGE)
+    part = artifacts.get_part(conn, payload.part_id)
+    if (
+        int(part["artifact_id"]) != int(attempt["artifact_id"])
+        or part["kind"] != artifacts.QUIZ_QUESTION
+    ):
+        raise NotFoundError(NOT_THIS_QUIZ_MESSAGE)
+    question = json.loads(str(part["content"]))
+
+    # A submission already recorded against the current grading contract replays its
+    # stored result rather than grading again.
+    existing = conn.execute(
+        "select * from quiz_answers where attempt_id = ? and part_id = ?",
+        (attempt_id, payload.part_id),
+    ).fetchone()
+    if (
+        existing is not None
+        and existing["response_text"] is not None
+        and existing["response_text"] == payload.response_text
+        and int(existing["selected_index"]) == payload.selected_index
+        and int(existing["grading_version"]) == grading.GRADING_VERSION
+    ):
+        return _stored_answer_read(question, existing)
+
+    # Grade, outside any write transaction.
+    if str(question.get("type")) == "fill_blank":
+        result = grading.grade_free_response(
+            question, payload.response_text, judge=_judge_for(conn)
+        )
+        selected_index = -1
+    else:
+        result = grading.grade_choice(question, payload.selected_index)
+        selected_index = payload.selected_index
+    detail = dict(result.detail)
+    detail["question_digest"] = grading.question_digest(str(part["content"]))
+
+    # Publish.
     try:
         conn.execute("begin immediate")
-        attempt = conn.execute("select * from quiz_attempts where id = ?", (attempt_id,)).fetchone()
-        if attempt is None:
-            raise NotFoundError(NOT_AN_ATTEMPT_MESSAGE)
-        if attempt["finished_at"] is not None:
-            raise ConflictError(ATTEMPT_FINISHED_MESSAGE)
-        snapshot = (
-            json.loads(str(attempt["question_part_ids"])) if attempt["question_part_ids"] else None
-        )
-        if snapshot is not None and payload.part_id not in snapshot:
-            raise NotFoundError(NOT_THIS_QUIZ_MESSAGE)
-        part = artifacts.get_part(conn, payload.part_id)
+        live = conn.execute("select * from quiz_attempts where id = ?", (attempt_id,)).fetchone()
+        if live is None or live["finished_at"] is not None or int(live["abandoned"] or 0) == 1:
+            raise ConflictError(QUIZ_CHANGED_MESSAGE)
+        part_now = conn.execute(
+            "select artifact_id, kind, content from artifact_parts where id = ?",
+            (payload.part_id,),
+        ).fetchone()
         if (
-            int(part["artifact_id"]) != int(attempt["artifact_id"])
-            or part["kind"] != artifacts.QUIZ_QUESTION
+            part_now is None
+            or int(part_now["artifact_id"]) != int(attempt["artifact_id"])
+            or part_now["kind"] != artifacts.QUIZ_QUESTION
+            or str(part_now["content"]) != str(part["content"])
         ):
-            raise NotFoundError(NOT_THIS_QUIZ_MESSAGE)
-
-        question = json.loads(str(part["content"]))
-        correct = payload.selected_index == int(question["correct_index"])
+            raise ConflictError(QUIZ_CHANGED_MESSAGE)
         conn.execute(
-            "insert into quiz_answers (attempt_id, part_id, selected_index, correct) "
-            "values (?, ?, ?, ?) "
+            "insert into quiz_answers "
+            "(attempt_id, part_id, selected_index, correct, response_text, verdict, "
+            "grade_detail, grading_version) "
+            "values (?, ?, ?, ?, ?, ?, ?, ?) "
             "on conflict (attempt_id, part_id) do update set "
             "selected_index = excluded.selected_index, correct = excluded.correct, "
-            "answered_at = datetime('now')",
-            (attempt_id, payload.part_id, payload.selected_index, int(correct)),
+            "response_text = excluded.response_text, verdict = excluded.verdict, "
+            "grade_detail = excluded.grade_detail, "
+            "grading_version = excluded.grading_version, answered_at = datetime('now')",
+            (
+                attempt_id,
+                payload.part_id,
+                selected_index,
+                int(result.correct),
+                payload.response_text,
+                result.verdict,
+                json.dumps(detail, ensure_ascii=False),
+                grading.GRADING_VERSION,
+            ),
         )
         conn.commit()
-        return {
-            "correct": correct,
-            "correct_index": question["correct_index"],
-            "explanation": question["explanation"],
-        }
     except Exception:
         if conn.in_transaction:
             conn.rollback()
         raise
+    return _answer_read(question, result)
 
 
 def _score_attempt(conn: sqlite3.Connection, attempt: sqlite3.Row) -> dict[str, object]:

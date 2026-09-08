@@ -207,3 +207,57 @@ across the class so the interface can offer continuation without fetching every 
 [Study beta quality evaluation](study-beta-quality.md) describes the bounded synthetic source
 corpus and production generation/review replay commands. Its model evidence is separate from
 these deterministic reliability contracts and from final merged-candidate human acceptance.
+
+## Answer grading (PLA-496)
+
+A submitted answer is the pair `(selected_index, response_text)`: for a choice question the
+index is the graded answer and the text of the chosen option rides along; for a fill-blank the
+index carries its `-1` miss marker and the student's typed words are the answer. The raw
+response persists beside the verdict, and the verdict itself is one of `correct`, `incorrect`,
+or `uncertain` — a recorded "not confidently right, not confidently wrong", never an
+irreversible wrong.
+
+The layered pass in `backend/core/grading.py` runs cheapest settled layer first, and every
+layer that cannot decide hands to the next rather than calling the student wrong:
+
+1. Trivial equivalence: case, whitespace, and punctuation folded away.
+2. Rubric alternatives: acceptable forms the question generator wrote into its hidden grading
+   contract, compared by the same equivalence.
+3. Numeric: magnitudes in base units (units, percentages, scientific notation) with a relative
+   tolerance — 1% by default, up to 5% when the rubric says so.
+4. Sets and lists: order-insensitive item comparison; only same-length lists of settled
+   numeric items yield a decisive result.
+5. Symbolic: both sides normalized to plain notation and compared in the bounded algebra
+   subprocess. The runner's `certain` is the contract: equal-and-settled is correct,
+   different-and-shown is incorrect, not shown abstains.
+6. Constrained judge: one small schema-enforced JSON call to the configured tutor endpoint
+   carrying the question, its hidden grading contract, the reference answer, and the student's
+   words. The five provider grades map onto the flow's three outcomes conservatively:
+   `correct`/`mostly_correct` are credit; `partially_correct` and an `incorrect` below the
+   confidence floor are `uncertain`; keyword overlap alone is never enough to be right, and an
+   answer containing a stated contradiction is wrong no matter what else it says.
+
+No endpoint configured, an endpoint refusal, an unreadable reply, or a pass no layer settles
+all land on `uncertain`. The raw response survives reload, retry, and attempt history: a
+re-posted identical submission replays its stored result instead of charging for another
+judgment, a different response regrades and updates the row, and legacy pre-grading rows
+(`grading_version` 0, null response) always regrade — a legacy `-1` is never read as a
+recoverable original response.
+
+Generation writes the hidden grading contract — `answer_kind`, `tolerance`, `units`,
+`acceptable_alternatives`, `required_ideas`, `common_misconceptions`, `contradictions`,
+`partial_understanding_accepted` — into fill-blank questions through the quiz schema, and it is
+revalidated field by field at grading time as well. The contract never reaches the interface;
+the student sees the verdict, the reference answer, and the explanation only.
+
+Grading runs outside any write transaction (the algebra subprocess and the judge may each take
+many seconds), and the publish transaction revalidates the attempt and the question content
+before writing the answer row; a late result after a restart or regeneration is refused with a
+conflict, so a judgment in flight can never contaminate a new attempt.
+
+Honest limits: the algebra's "shown different" rests on sampling the difference at fixed
+rational points, so a difference that vanishes at all sample points, or one over six free
+symbols, is not settled and falls to the judge. The numeric layer abstains on a unit
+mismatch — a bare `4.2` against `4.2 Hz` is the judge's call, not a confident wrong. Without a
+configured tutor endpoint no conceptual answer ever settles beyond the typed layers, and that
+is recorded as `uncertain`.

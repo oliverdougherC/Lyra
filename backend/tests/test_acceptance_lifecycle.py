@@ -290,7 +290,7 @@ def test_learning_workflow_round_trips_class_document_chat_solution_and_study(
     part_id = first_attempt.json()["question_part_ids"][0]
     graded = client.post(
         f"/api/attempts/{attempt_id}/answers",
-        json={"part_id": part_id, "selected_index": 0},
+        json={"part_id": part_id, "selected_index": 0, "response_text": "the chosen option"},
     )
     assert graded.status_code == 200
     assert graded.json()["correct"] is True

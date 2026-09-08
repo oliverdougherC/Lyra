@@ -138,8 +138,15 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             const resumed = quiz.data?.questions.find((entry) => entry.part_id === partId)
             if (recorded && resumed) {
               setSelected(recorded.selected_index)
+              // A recorded free response is the student's own words: restore them so the
+              // reveal shows what they wrote and the handoff to Lyra cites the actual
+              // response instead of an empty one.
+              if (resumed.question.type === 'fill_blank' && recorded.response_text !== null) {
+                setFillText(recorded.response_text)
+              }
               setAnswer({
                 correct: recorded.correct,
+                uncertain: recorded.uncertain,
                 correct_index: resumed.question.correct_index,
                 explanation: resumed.question.explanation,
               })
@@ -255,7 +262,14 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
     busy.current = true
     setSelected(selectedIndex)
     try {
-      const graded = await submitAnswer({ part_id: current.part_id, selected_index: selectedIndex })
+      // The chosen index is the graded answer; the text of that option is the raw
+      // response the backend persists beside it, so a recorded answer always carries
+      // what the student actually submitted.
+      const graded = await submitAnswer({
+        part_id: current.part_id,
+        selected_index: selectedIndex,
+        response_text: payload.options[selectedIndex] ?? '',
+      })
       if (run === generation.current) setAnswer(graded)
     } catch (caught) {
       if (run !== generation.current) return
@@ -267,13 +281,28 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   }
 
   async function checkFillBlank() {
-    if (revealed || submitting || !fillText.trim()) return
-    // The runner grades the text itself: case-insensitive and whitespace-trimmed against
-    // the one stored option, then reported as 0 on a match and -1 on a miss, which is
-    // the contract the answers endpoint documents.
-    const expected = (payload.options[0] ?? '').trim().toLowerCase()
-    const matched = fillText.trim().toLowerCase() === expected
-    await choose(matched ? 0 : -1)
+    if (revealed || busy.current || !attempt || !fillText.trim()) return
+    // The typed words are the answer. The server grades them against the question's
+    // reference answer and its hidden grading contract, and stores the student's own
+    // text beside the verdict; the index carries no meaning here, so the contract
+    // keeps its miss marker.
+    const run = generation.current
+    busy.current = true
+    setSelected(-1)
+    try {
+      const graded = await submitAnswer({
+        part_id: current.part_id,
+        selected_index: -1,
+        response_text: fillText,
+      })
+      if (run === generation.current) setAnswer(graded)
+    } catch (caught) {
+      if (run !== generation.current) return
+      setSelected(null)
+      toast.error(caught instanceof ApiError ? caught.message : 'Could not record that answer.')
+    } finally {
+      if (run === generation.current) busy.current = false
+    }
   }
 
   function advance() {
@@ -395,16 +424,24 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             'flex flex-col gap-2 rounded-md border p-4 focus:outline-none',
             answer.correct
               ? 'border-success-text/50 bg-success-fill/40'
-              : 'border-danger-text/50 bg-danger-fill/40',
+              : answer.uncertain
+                ? 'border-border bg-card'
+                : 'border-danger-text/50 bg-danger-fill/40',
           )}
         >
+          {/* An unsettled answer is compared, not judged: the student still sees the
+              reference answer and the explanation, without a confident "wrong". */}
           <p
             className={cn(
               'text-sm font-medium',
-              answer.correct ? 'text-success-text' : 'text-danger-text',
+              answer.correct
+                ? 'text-success-text'
+                : answer.uncertain
+                  ? 'text-text-secondary'
+                  : 'text-danger-text',
             )}
           >
-            {answer.correct ? 'Correct.' : 'Not quite.'}
+            {answer.correct ? 'Correct.' : answer.uncertain ? "Let's compare." : 'Not quite.'}
           </p>
           {!answer.correct ? (
             <div className="text-text-secondary flex items-baseline gap-1.5 text-sm">
