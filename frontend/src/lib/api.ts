@@ -88,6 +88,7 @@ import type {
   WriteRequest,
   WriterChatRequest,
 } from '@/types'
+import { consumeSseStream, SseStreamError } from '@/lib/sse'
 import { getImmediateRuntimeConfig, getRuntimeConfig, recoverDesktopBackend } from '@/lib/runtime'
 
 /**
@@ -1233,7 +1234,102 @@ export function streamWriterChatRetry(
   )
 }
 
-async function streamTurn<StreamEvent>(
+/**
+ * The JSON frame types Lyra's own SSE endpoints emit, per `data:` line: the chat route's
+ * seven (start, status, notice, reasoning, token, done, error), the writer's extras
+ * (activity, proposed, brief, pass, review, comments), and `/write`'s three (token, done,
+ * error) which are a subset of the rest. The frame types are the contract - there is no
+ * `[DONE]` sentinel - so a meaningful frame outside this set is a protocol violation the
+ * turn must surface, not a line to skip.
+ */
+const CHAT_FRAME_TYPES = new Set([
+  'start',
+  'status',
+  'notice',
+  'reasoning',
+  'token',
+  'done',
+  'error',
+  'activity',
+  'proposed',
+  'brief',
+  'pass',
+  'review',
+  'comments',
+])
+
+/** The agent route's frames: live deltas, the status narration, and its terminals. */
+const AGENT_FRAME_TYPES = new Set(['token', 'reasoning', 'reset', 'status', 'result', 'error'])
+
+/** A bounded message for a frame that is not a JSON object of a known type. */
+const MALFORMED_FRAME_MESSAGE = 'Lyra could not read part of the reply. Try again.'
+
+function parseFrame(data: string): unknown {
+  try {
+    return JSON.parse(data)
+  } catch {
+    // A malformed meaningful frame fails the turn deliberately; the payload itself is
+    // never echoed into the error (PLA-502: no raw provider text in user-facing errors).
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+}
+
+/**
+ * Validates the fields a consumer actually reads before dispatching a chat-route frame:
+ * a known `type`, and - for the frames whose text is appended to the answer - a real
+ * string `text`, not a cast's hope.
+ */
+function validateChatFrame(data: string): unknown {
+  const event = parseFrame(data)
+  if (!event || typeof event !== 'object' || Array.isArray(event)) {
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+  const value = event as Record<string, unknown>
+  if (typeof value.type !== 'string' || !CHAT_FRAME_TYPES.has(value.type)) {
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+  if ((value.type === 'token' || value.type === 'reasoning') && typeof value.text !== 'string') {
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+  return event
+}
+
+/** The agent route's dispatch fields: same shape validation, its own type set. */
+function validateAgentFrame(data: string): {
+  type: string
+  status?: number
+  result?: unknown
+} {
+  const event = parseFrame(data) as Record<string, unknown>
+  if (!event || typeof event !== 'object' || Array.isArray(event)) {
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+  if (typeof event.type !== 'string' || !AGENT_FRAME_TYPES.has(event.type)) {
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+  if ((event.type === 'token' || event.type === 'reasoning') && typeof event.text !== 'string') {
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+  return event as { type: string; status?: number; result?: unknown }
+}
+
+/**
+ * The fields the UI reads from a finished agent turn. A `result` frame without them
+ * must not certify success: the turn's real outcome is unknown, so the reply fails
+ * honestly instead of settling as an empty success.
+ */
+function isAgentChatResult(payload: unknown): payload is AgentChatResult {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
+  const value = payload as Record<string, unknown>
+  return (
+    typeof value.message_id === 'number' &&
+    typeof value.content === 'string' &&
+    typeof value.stopped === 'string' &&
+    Array.isArray(value.activity)
+  )
+}
+
+async function streamTurn<StreamEvent extends { type: string }>(
   path: string,
   body: ChatRequest | RegenerateRequest | WriteRequest | WriterChatRequest | Record<string, never>,
   onEvent: (event: StreamEvent) => void,
@@ -1243,30 +1339,26 @@ async function streamTurn<StreamEvent>(
   const response = await send(path, { method: 'POST', body, signal })
   onResponse?.()
 
-  const reader = response.body?.getReader()
-  if (!reader) throw new ApiError(0, UNREACHABLE)
-
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    let newline = buffer.indexOf('\n')
-    while (newline !== -1) {
-      const line = buffer.slice(0, newline).trim()
-      buffer = buffer.slice(newline + 1)
-      newline = buffer.indexOf('\n')
-      if (!line.startsWith('data:')) continue
-      try {
-        onEvent(JSON.parse(line.slice(5).trim()) as StreamEvent)
-      } catch {
-        // A frame we cannot parse is dropped rather than killing the stream.
-      }
-    }
-  }
+  if (!response.body) throw new ApiError(0, UNREACHABLE)
+  // Every turn on these routes ends with a `done` or an in-band `error` frame, so a
+  // stream that ends without one was cut: reject it with a safe error instead of
+  // letting EOF certify completion (the `/write` consumer finalizes on resolve, so
+  // this is what keeps a truncated passage from looking like a finished one). The
+  // in-band `error` frame still dispatches first, preserving its existing semantics.
+  let terminalSeen = false
+  // Blank-line framing, UTF-8 finalization, and reader release live in the shared SSE
+  // layer. A malformed frame or a throwing consumer rejects the turn - a fragment is
+  // never silently dropped out of the answer.
+  await consumeSseStream(
+    response.body,
+    (frame) => {
+      const event = validateChatFrame(frame.data) as StreamEvent
+      if (event.type === 'done' || event.type === 'error') terminalSeen = true
+      onEvent(event)
+    },
+    signal,
+  )
+  if (!terminalSeen) throw new ApiError(0, 'The answer stopped early. Try again.')
 }
 
 export type AgentStreamEvent = { type: 'token' | 'reasoning'; text: string } | { type: 'reset' }
@@ -1282,44 +1374,30 @@ async function requestAgentTurn(
   if (!response.headers.get('content-type')?.includes('text/event-stream')) {
     return (await response.json()) as AgentChatResult
   }
-  const reader = response.body?.getReader()
-  if (!reader) throw new ApiError(0, UNREACHABLE)
-  const decoder = new TextDecoder()
-  let buffer = ''
+  if (!response.body) throw new ApiError(0, UNREACHABLE)
   let result: AgentChatResult | undefined
-  const consume = (line: string) => {
-    if (!line.startsWith('data:')) return
-    // Invalid frames and callback failures must not silently turn into successful replies.
-    const event = JSON.parse(line.slice(5).trim())
-    if (event.type === 'error') throw agentChatErrorFactory(event.status ?? 500, event)
-    if (event.type === 'result') result = event.result as AgentChatResult
-    else if (event.type === 'reset' || event.type === 'status') onEvent(event)
-    else if (
-      (event.type === 'token' || event.type === 'reasoning') &&
-      typeof event.text === 'string'
-    ) {
-      onEvent(event)
-    }
-  }
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      buffer += decoder.decode(value, { stream: !done })
-      let newline = buffer.indexOf('\n')
-      while (newline !== -1) {
-        consume(buffer.slice(0, newline).trim())
-        buffer = buffer.slice(newline + 1)
-        newline = buffer.indexOf('\n')
+  // Same shared framing as the chat route. Invalid frames and consumer failures must
+  // not silently turn into successful replies, and a structured `error` frame maps to
+  // the same typed failure as its JSON equivalent.
+  await consumeSseStream(
+    response.body,
+    (frame) => {
+      const event = validateAgentFrame(frame.data)
+      if (event.type === 'error') throw agentChatErrorFactory(event.status ?? 500, event)
+      if (event.type === 'result') {
+        if (!isAgentChatResult(event.result)) {
+          throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+        }
+        result = event.result
+        return
       }
-      if (done) {
-        if (buffer.trim()) consume(buffer.trim())
-        break
-      }
-    }
-    if (!result) throw new ApiError(0, 'The answer stopped early. Try again.')
-    return result
-  } finally {
-    await reader.cancel().catch(() => undefined)
-    reader.releaseLock()
-  }
+      // `status` frames narrate the turn's stages into the same handler the deltas use;
+      // the cast mirrors the runtime contract the handler already receives.
+      onEvent(event as unknown as AgentStreamEvent)
+    },
+    options.signal,
+  )
+  // EOF alone never certifies completion: a truncated turn has no `result` to return.
+  if (!result) throw new ApiError(0, 'The answer stopped early. Try again.')
+  return result
 }

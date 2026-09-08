@@ -218,7 +218,7 @@ def test_upload_one_byte_over_the_limit_is_refused_and_stores_nothing(
         files={"file": ("notes.txt", b"0123456789X", "text/plain")},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 413
     assert response.json()["detail"] == routes_documents.TOO_LARGE_MESSAGE
     # The half-built row was rolled back, the staged file discarded, and nothing queued.
     assert _document_count(db) == 0
@@ -235,7 +235,7 @@ def test_upload_substantially_over_the_limit_is_refused_cleanly(
         files={"file": ("big.txt", b"x" * 10_000, "text/plain")},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 413
     assert response.json()["detail"] == routes_documents.TOO_LARGE_MESSAGE
     assert _document_count(db) == 0
     assert no_worker == []

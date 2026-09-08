@@ -53,6 +53,30 @@ The production browser suites exercise two different boundaries:
 - `pnpm test:e2e` checks the built frontend with Playwright smoke coverage.
 - `pnpm test:acceptance` starts the real backend, fake tutor fixture, and built frontend together.
 
+## Streaming replies
+
+Tutor, writer, inline writing, and agent replies share the frontend SSE decoder in
+`frontend/src/lib/sse.ts`. It decodes UTF-8 incrementally and rejects invalid bytes. LF and
+CRLF delimit lines; blank lines delimit events. Multiple `data:` lines join with a newline
+before JSON parsing. Comments, metadata, and empty keepalives do not produce application
+events. For compatibility, a final complete JSON payload may omit its trailing delimiter;
+an incomplete payload fails rather than disappearing.
+
+Parsing and consumer callbacks fail independently: a callback failure stops delivery before
+any later buffered completion event. Readers are cancelled and released on completion or
+failure, while UI generation checks prevent obsolete turns from changing the active view.
+EOF is not completion: chat and writing require their `done` or `error` event, and agent
+streams require a valid `result` or structured error. Agent JSON replay remains supported.
+
+The backend prefers explicit provider reasoning fields. Legacy inline reasoning markers are
+recognized only at the start of content, before answer prose begins; tags in subsequent answer
+prose or code remain literal. A recognized explicit reasoning field holding a string, including
+an empty string, makes content literal when observed before that initial decision. Null, missing,
+or non-string fields do not establish the channel. Only non-empty reasoning text emits a delta.
+If a legacy block has already opened, it remains reasoning until its
+closing marker; already-delivered text is never retrospectively moved between channels. The same
+policy applies to ordinary streaming, each tool round, and nonstreaming completion parsing.
+
 ## Desktop trust boundaries
 
 The packaged bootstrap protocol is version `1`. Rust passes one inherited IPv4 loopback listener,

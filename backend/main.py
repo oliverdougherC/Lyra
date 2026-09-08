@@ -1,7 +1,9 @@
 """FastAPI application factory, middleware, and lifespan.
 
 The API always binds to loopback. Source-development mode retains the hardened Host and
-Origin boundary; packaged mode adds a per-launch session header on every request.
+Origin boundary; packaged mode adds a per-launch session header on every request. The
+document upload route additionally holds its incoming body to a bounded byte ceiling
+(`api/upload_body_guard.py`), so multipart spooling can never run unbounded.
 """
 
 import hmac
@@ -27,6 +29,7 @@ from backend.api import (
     routes_solutions,
     routes_study,
     routes_writer,
+    upload_body_guard,
 )
 from backend.config import settings
 from backend.core import (
@@ -65,6 +68,16 @@ _INVALID_ORIGIN = (
     " or a non-browser client header."
 )
 _INVALID_SESSION = "Request rejected: the packaged session header is missing or invalid."
+
+
+def _upload_request_limit() -> int:
+    """The upload route's whole-request ceiling, resolved per request.
+
+    Read from the route's own constant at request time, so the file contract
+    (`routes_documents.MAX_UPLOAD_BYTES`) and the guard's ceiling can never drift apart,
+    and a test that scales the contract scales both in one patch.
+    """
+    return upload_body_guard.upload_request_cap(routes_documents.MAX_UPLOAD_BYTES)
 
 
 @asynccontextmanager
@@ -166,6 +179,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(*, session_secret: str | None = None) -> FastAPI:
     app = FastAPI(title="Lyra", version=VERSION, lifespan=lifespan)
+
+    # The byte guard is registered first, so it runs innermost (middleware runs in
+    # reverse registration order): the Host, Origin, and session guards refuse a request
+    # first, and CORS wraps it, so a 413 from the guard still carries CORS headers for
+    # the trusted browser that reads the student-facing message.
+    app.add_middleware(upload_body_guard.UploadBodyGuard, limit=_upload_request_limit)
 
     app.add_middleware(
         CORSMiddleware,
