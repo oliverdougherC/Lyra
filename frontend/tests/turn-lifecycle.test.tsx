@@ -107,4 +107,159 @@ describe('answer generations (PLA-501)', () => {
     expect(revealWork.styleWrites).toBe(1)
     expect(units(container).length).toBeGreaterThanOrEqual(21)
   })
+
+  it('drains an empty replacement under the new generation, not the one it replaced', async () => {
+    // A reset whose replacement is empty (a cleared answer that ends immediately) must
+    // report its drain under the new generation. The pane rejects a drain that names a
+    // generation it no longer owns; an old-generation drain is the difference between a
+    // turn that settles and one that is stuck forever.
+    vi.spyOn(performance, 'now').mockReturnValue(1000)
+    const drains: (string | undefined)[] = []
+    const { rerender, unmount } = render(
+      <StreamingMarkdown
+        content="one two"
+        streaming
+        turnEnded
+        generation="g1"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+    await vi.waitFor(() => expect(drains).toEqual(['g1']))
+
+    // The replacement arrives already settled: empty content, a new generation. There is
+    // no queue left to wait out, and the drain is owed now, under g2.
+    drains.length = 0
+    vi.spyOn(performance, 'now').mockReturnValue(5000)
+    rerender(
+      <StreamingMarkdown
+        content=""
+        streaming
+        turnEnded
+        generation="g2"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+    expect(drains).toEqual(['g2'])
+    unmount()
+
+    // A whitespace-only replacement is the same answer as an empty one: no units to
+    // schedule, a drain under the new generation once the wait runs out.
+    const whitespace: (string | undefined)[] = []
+    const again = render(
+      <StreamingMarkdown
+        content="one two"
+        streaming
+        generation="g1"
+        onRevealComplete={(generation) => whitespace.push(generation)}
+      />,
+    )
+    act(() => {
+      vi.spyOn(performance, 'now').mockReturnValue(8000)
+      again.rerender(
+        <StreamingMarkdown
+          content="   "
+          streaming
+          turnEnded
+          generation="g2"
+          onRevealComplete={(generation) => whitespace.push(generation)}
+        />,
+      )
+    })
+    await vi.waitFor(() => expect(whitespace).toEqual(['g2']))
+    again.unmount()
+  })
+
+  it('re-arms the settle wait when the settled answer content changes', async () => {
+    // The accepted final content can replace the streamed text after the cascade drained:
+    // a terminal result arrives with a longer body, same generation, turn already ended.
+    // The settled wait must run out of the NEW tail — the tail that already drained
+    // cannot drain again, and a wait armed against it would settle before the new words
+    // are on screen.
+    vi.spyOn(performance, 'now').mockReturnValue(1000)
+    const drains: (string | undefined)[] = []
+    const { rerender } = render(
+      <StreamingMarkdown
+        content="one two"
+        streaming
+        turnEnded
+        generation="g1"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+    await vi.waitFor(() => expect(drains).toEqual(['g1']))
+
+    drains.length = 0
+    vi.spyOn(performance, 'now').mockReturnValue(5000)
+    rerender(
+      <StreamingMarkdown
+        content="one two three four"
+        streaming
+        turnEnded
+        generation="g1"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+    // The tail's slots were just laid out: the report that was already owed for the old
+    // tail cannot be the only one the caller ever sees.
+    await vi.waitFor(() => expect(drains).toEqual(['g1']))
+  })
+
+  it('never reports a drain from a generation that no longer owns the queue', async () => {
+    // A turn ends and the settle wait arms against the g1 queue. Before that clock runs
+    // out the answer is replaced by a new generation: the arm-time identity the old
+    // timer carried is stale, and the re-arm cancels it. Whatever the old clock would
+    // have reported, it is not the replacement's drain.
+    vi.spyOn(performance, 'now').mockReturnValue(1000)
+    const drains: (string | undefined)[] = []
+    const { rerender } = render(
+      <StreamingMarkdown
+        content="one two"
+        streaming
+        generation="g1"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+    vi.spyOn(performance, 'now').mockReturnValue(2000)
+    rerender(
+      <StreamingMarkdown
+        content="one two"
+        streaming
+        turnEnded
+        generation="g1"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+
+    // The replacement lands before the g1 wait can fire: new generation, settled at once.
+    vi.spyOn(performance, 'now').mockReturnValue(3000)
+    rerender(
+      <StreamingMarkdown
+        content=""
+        streaming
+        turnEnded
+        generation="g2"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+    expect(drains).toEqual(['g2'])
+
+    // Run every clock out: the cancelled g1 arm reports nothing at all, and the re-armed
+    // wait for the empty queue reports only its own generation.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
+    expect(drains.length).toBeGreaterThanOrEqual(1)
+    expect(drains.every((generation) => generation === 'g2')).toBe(true)
+
+    // And a rapid next turn, a third generation, adds no report of its own until IT ends.
+    rerender(
+      <StreamingMarkdown
+        content="fresh answer"
+        streaming
+        generation="g3"
+        onRevealComplete={(generation) => drains.push(generation)}
+      />,
+    )
+    expect(drains.every((generation) => generation === 'g2')).toBe(true)
+  })
 })

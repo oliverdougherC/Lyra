@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useMemo, type ComponentProps } from 'react'
+import { memo, useEffect, useMemo, useRef, type ComponentProps } from 'react'
 import Markdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 
@@ -25,6 +25,30 @@ function tableComponent({ children, ...props }: TableComponentProps) {
 }
 
 /**
+ * Resolve a text offset inside `root` to a (node, offset) the range API accepts.
+ * Offsets beyond the end of the static text (the settled render is not byte-identical to
+ * the streaming one) clamp to the last node, which keeps a restore from throwing rather
+ * than dropping a selection the reader actually held.
+ */
+function resolveOffset(root: HTMLElement, offset: number): { node: Node; offset: number } {
+  let remaining = offset
+  let lastText: Node | null = null
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node) {
+    lastText = node
+    const length = node.textContent?.length ?? 0
+    if (remaining <= length) return { node, offset: remaining }
+    remaining -= length
+    node = walker.nextNode()
+  }
+  if (lastText !== null) {
+    return { node: lastText, offset: (lastText.textContent ?? '').length }
+  }
+  return { node: root, offset: 0 }
+}
+
+/**
  * Memoized on `content` so a stream that appends one token does not re-parse the markdown
  * for every other message on screen.
  */
@@ -34,6 +58,7 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
   turnEnded = false,
   onRevealComplete,
   generation,
+  selectionRestore = null,
 }: {
   content: string
   streaming?: boolean
@@ -52,6 +77,13 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
    * it — stable per message generation, e.g. the message id plus its attempt.
    */
   generation?: string
+  /**
+   * The selection the reader held in the live answer, as text offsets: the settled row
+   * re-renders the same content through the static pipeline, which replaces every inner
+   * node, and a live selection anchored in those nodes vanishes with them. Restored
+   * once, after the static render has landed.
+   */
+  selectionRestore?: { anchor: number; focus: number } | null
 }) {
   const renderContent = normalizeMarkdownForRender(content, streaming)
   const rootRef = useRevealCascade({
@@ -61,6 +93,27 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
     onDrained: onRevealComplete,
     generation,
   })
+
+  // The settled swap is the moment the selection goes away: the reveal layer's own nodes
+  // are gone, and the static markdown's are fresh. Restore once, after that render has
+  // laid out — a layout effect, so no frame shows the answer without its selection.
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (streaming || selectionRestore === null || restoredRef.current) return
+    const root = rootRef.current
+    if (!root) return
+    restoredRef.current = true
+    const range = document.createRange()
+    const start = resolveOffset(root, selectionRestore.anchor)
+    const end = resolveOffset(root, selectionRestore.focus)
+    range.setStart(start.node, start.offset)
+    range.setEnd(end.node, end.offset)
+    const selection = window.getSelection()
+    if (!selection) return
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }, [streaming, selectionRestore, rootRef])
+
   const components = useMemo(() => ({ table: tableComponent }), [])
   // The reveal plugin reads the raw source (as plugin options) to anchor word identity,
   // and runs last: the equations it marks are already typeset.

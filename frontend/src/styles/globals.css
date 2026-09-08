@@ -1383,7 +1383,10 @@ li[data-stream-word].stream-word-visible::marker {
   }
 
   [data-stream-word] {
-    opacity: 1;
+    /* `!important`: the base rules (`span[data-stream-word] { opacity: 0 }` and friends)
+       are more specific than this attribute selector, so a plain declaration would lose
+       and the cascade's words would stream in invisible under reduced motion. */
+    opacity: 1 !important;
     transform: none;
     animation: none !important;
   }

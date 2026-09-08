@@ -305,12 +305,24 @@ type RevealOptions = {
  * Update-work counts, read by the performance gate that keeps a commit from doing
  * unbounded work on a long answer. Zeroed per commit, not per message: a number is only
  * meaningful against the commit that produced it.
+ *
+ * The split that matters when bounding the work: `inheritanceScans` is the containment
+ * checks the deadline-inheritance pass ran (one per historical range examined), while
+ * `newUnitsScheduled` is how many units actually needed a fresh slot that commit. A pass
+ * that costs O(new units × historical ranges) will show scans growing with BOTH numbers;
+ * a bounded pass keeps scans proportional to the units it actually places.
  */
 export const revealWork = {
   /** `reveal()` style writes this commit (the rest of the schedule work is reads). */
   styleWrites: 0,
   /** Containment checks the deadline inheritance ran this commit. */
   inheritanceScans: 0,
+  /** Units this commit assigned a fresh slot to (not a remembered deadline). */
+  newUnitsScheduled: 0,
+  /** Units this commit took their deadline from a held range. */
+  inheritedUnits: 0,
+  /** Historical ranges the pass had to look through this commit. */
+  historicalRanges: 0,
 }
 
 /**
@@ -352,21 +364,37 @@ export function useRevealCascade({
   // token), which never re-runs the layout effect. On the flip, wait out whatever is still
   // scheduled and report then, so a caller that settles on this waits for the last words.
   // A single timeout is safe: in a hidden tab it simply waits until the reader looks again.
+  // The generation is captured when the timer is ARMED, not read when it fires: the drain
+  // it reports belongs to the queue that was on screen at arm time, whatever the ref
+  // holds by the time the clock runs out. The queue itself moves under a settled flag —
+  // a terminal result can replace the text with a longer one, or extend it, in the same
+  // generation — so a content change re-arms the wait out of the new tail, and the report
+  // still carries the generation the queue was armed under.
   useEffect(() => {
     if (!settled) return
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       onDrainedRef.current?.(generationRef.current)
       return
     }
+    const drainGeneration = generationRef.current
     const remaining = Math.max(0, nextRevealAtRef.current + SETTLE_GRACE_MS - performance.now())
-    const timer = window.setTimeout(() => onDrainedRef.current?.(generationRef.current), remaining)
+    const timer = window.setTimeout(() => onDrainedRef.current?.(drainGeneration), remaining)
     return () => window.clearTimeout(timer)
     // A generation change re-arms the report: the replacement answer has its own queue
     // to finish, and a drain of the old one has already fired (or been cancelled) —
     // settling must wait for the new generation's tail, reported under its identity.
-  }, [settled, generation])
+    // A content change under an unchanged flag and generation is the same contract: the
+    // accepted final text grew, and the wait must run out of the new tail, not the old
+    // one that already drained.
+  }, [settled, generation, content])
 
   useLayoutEffect(() => {
+    // Reconcile the generation BEFORE anything else, including the early returns: an empty
+    // replacement is a new generation too, and its drain must report the new identity —
+    // reporting the old one would make the pane reject the drain the replacement owes and
+    // leave the turn stuck.
+    const generationChanged = generation !== undefined && generationRef.current !== generation
+    if (generation !== undefined) generationRef.current = generation
     if (!enabled) {
       onDrainedRef.current?.(generationRef.current)
       return
@@ -381,7 +409,7 @@ export function useRevealCascade({
       return
     }
 
-    if (generation !== undefined && generationRef.current !== generation) {
+    if (generationChanged) {
       // A new generation of this message: the slots on the books belong to the answer it
       // replaces, and every node of this one would reveal at once.
       scheduleRef.current.clear()
@@ -389,10 +417,11 @@ export function useRevealCascade({
       lastDeadlineRef.current.clear()
       nextRevealAtRef.current = 0
     }
-    if (generation !== undefined) generationRef.current = generation
 
     revealWork.styleWrites = 0
     revealWork.inheritanceScans = 0
+    revealWork.newUnitsScheduled = 0
+    revealWork.inheritedUnits = 0
     const now = performance.now()
     const nodes = Array.from(
       rootRef.current?.querySelectorAll<HTMLElement>(`[${REVEAL_ATTRIBUTE}]`) ?? [],
@@ -411,31 +440,76 @@ export function useRevealCascade({
       MAX_REVEAL_BACKLOG_MS / Math.max(1, pending),
     )
 
-    // A per-commit snapshot of the historical ranges: the pass reads it many times
-    // (once per unremembered unit) and writes to `rangesRef` as it goes, so the snapshot
-    // is what keeps the inheritance reading the state this commit started from.
-    const historicalRanges: [string, [number, number]][] = [...rangesRef.current]
+    // A per-commit snapshot of the historical ranges, pre-shaped for the inheritance
+    // pass below: the pass reads it many times (once per unremembered unit) and writes
+    // to `rangesRef` as it goes, so the snapshot is what keeps the inheritance reading the
+    // state this commit started from. Sorting by source start (and carrying a prefix max
+    // of the ends) is what bounds the pass: a range can contain the unit only if it starts
+    // at or before the unit, and the moment every earlier range ends before the unit,
+    // the walk stops — the rest of the history cannot hold the unit no matter how far it
+    // stretches.
+    const historicalRanges = [...rangesRef.current]
+      .map(([key, range]) => ({ key, start: range[0], end: range[1] }))
+      .sort((a, b) => a.start - b.start)
+    const prefixMaxEnd: number[] = new Array(historicalRanges.length)
+    for (let j = 0; j < historicalRanges.length; j += 1) {
+      prefixMaxEnd[j] =
+        j === 0
+          ? historicalRanges[j]!.end
+          : Math.max(historicalRanges[j]!.end, prefixMaxEnd[j - 1]!)
+    }
+    revealWork.historicalRanges = historicalRanges.length
 
     /**
      * The moment the unit's source range already holds: the deadline of the smallest
      * previously-seen range that contains it. A range on screen carries a past deadline,
      * which the unit re-uses exactly — it never re-hides; a pending range carries its
      * queued slot, so the unit joins the queue where its range sits.
+     *
+     * Bounded: candidates must start at or before the unit, so the walk begins at the last
+     * such range and steps toward earlier starts, and it stops the moment the prefix max
+     * of everything earlier is below the unit's end — no remaining range can contain it.
+     * On a long answer with its own word ranges that is a handful of neighbors, not the
+     * whole history.
      */
     const inheritedDeadline = (range: [number, number], selfKey: string): number | undefined => {
       let best: { span: number; deadline: number | undefined } | null = null
-      for (const [otherKey, other] of historicalRanges) {
-        if (otherKey === selfKey) continue
+      let lo = 0
+      let hi = historicalRanges.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (historicalRanges[mid]!.start <= range[0]) lo = mid + 1
+        else hi = mid
+      }
+      for (let j = lo - 1; j >= 0; j -= 1) {
         revealWork.inheritanceScans += 1
-        if (other[0] <= range[0] && range[1] <= other[1]) {
-          const span = other[1] - other[0]
+        const other = historicalRanges[j]!
+        if (other.key !== selfKey && other.end >= range[1]) {
+          const span = other.end - other.start
           if (best === null || span < best.span) {
             best = {
               span,
-              deadline: scheduleRef.current.get(otherKey) ?? lastDeadlineRef.current.get(otherKey),
+              deadline:
+                scheduleRef.current.get(other.key) ?? lastDeadlineRef.current.get(other.key),
             }
+            // Anything starting before this floor cannot hold a smaller span than `best`
+            // over the same end: its span would exceed `best`'s, so it is skipped. The
+            // jump only ever moves down the walk — a refined floor that sits ahead of the
+            // current position excludes nothing that was not already examined.
+            const floorStart = range[1] - best.span
+            let k = 0
+            let m = j - 1
+            while (k <= m) {
+              const mid = (k + m) >> 1
+              if (historicalRanges[mid]!.start < floorStart) k = mid + 1
+              else m = mid - 1
+            }
+            if (k - 1 < j) j = k - 1
           }
         }
+        // The whole earlier history ends before the unit's end: no range among it can
+        // contain the unit (with or without a candidate on hand), so the walk is done.
+        if (j === 0 || prefixMaxEnd[j - 1]! < range[1]) break
       }
       return best?.deadline
     }
@@ -484,9 +558,11 @@ export function useRevealCascade({
           remembered === undefined && range !== null ? inheritedDeadline(range, key) : undefined
         if (inherited !== undefined) {
           deadline = inherited <= now ? inherited : Math.max(inherited, prev)
+          revealWork.inheritedUnits += 1
         } else {
           deadline = remembered !== undefined ? Math.max(Math.min(remembered, fresh), prev) : fresh
         }
+        if (remembered === undefined) revealWork.newUnitsScheduled += 1
         assigned = true
       }
       assignedUnits.push({ node, key, deadline })

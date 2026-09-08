@@ -7,6 +7,11 @@ export default defineConfig({
   testDir: './e2e',
   testIgnore: '**/acceptance/**',
   fullyParallel: true,
+  // The streaming specs each run a real feed server on the app's baked API origin
+  // (127.0.0.1:8000) - two workers would bind the same port and the app's requests
+  // would land on whichever server won the race. One worker keeps every spec's
+  // wire proof honest; the suite is short enough that parallelism buys nothing.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',

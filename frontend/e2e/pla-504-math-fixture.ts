@@ -443,6 +443,86 @@ export const SOLUTION_DETAIL = {
   ],
 }
 
+// A second solution set in the workbench state: its problem is solved, so the steps and
+// the answer are rendered by the shared renderer - and each step is the tutor's surface,
+// with a thread that streams over the tutor transport.
+export const SOLVER_SOLUTION_ID = 22
+
+export const SOLVER_SOLUTION = {
+  id: SOLVER_SOLUTION_ID,
+  class_id: CLASS_ID,
+  kind: 'solution_set',
+  title: 'Solved homework',
+  state: 'ready',
+  stage_detail: null,
+  problems_total: 1,
+  problems_done: 1,
+  error_message: null,
+  created_at: '2026-08-06T08:00:00Z',
+  updated_at: '2026-08-06T09:30:00Z',
+  sources: [{ document_id: 101, role: 'problem_set', ordinal: 0, filename: 'Homework 2.pdf' }],
+  parts: [
+    {
+      id: 20,
+      artifact_id: SOLVER_SOLUTION_ID,
+      parent_part_id: null,
+      ordinal: 1,
+      label: 'Problem 1',
+      content: 'Find the impulse response of $H(s)=\\frac{1}{s+2}$.',
+      content_type: 'markdown',
+      kind: 'problem',
+      status: 'complete',
+      origin: 'generated',
+      verdict: 'verified',
+      verdict_detail: null,
+      solve_parts: 'together',
+      error_message: null,
+      checks: [],
+      provenance: [],
+    },
+    {
+      id: 21,
+      artifact_id: SOLVER_SOLUTION_ID,
+      parent_part_id: 20,
+      ordinal: 2,
+      label: 'Factor the denominator',
+      // A solution step: the shared renderer's home for display mathematics outside the
+      // chat pane, with a display equation the step's row has to typeset as one unit.
+      content:
+        'Factor the denominator first.\n\n$$ (s+2)(s+3)=s^{2}+5s+6 $$\n\n' +
+        'The poles sit where the factors vanish: $s=-2$ and $s=-3$.',
+      content_type: 'markdown',
+      kind: 'step',
+      status: 'complete',
+      origin: 'generated',
+      verdict: 'unchecked',
+      verdict_detail: null,
+      solve_parts: 'together',
+      error_message: null,
+      checks: [],
+      provenance: [],
+    },
+    {
+      id: 23,
+      artifact_id: SOLVER_SOLUTION_ID,
+      parent_part_id: 20,
+      ordinal: 3,
+      label: 'Answer',
+      content: 'Each pole contributes one partial fraction; the impulse response is $e^{-2t}u(t)$.',
+      content_type: 'markdown',
+      kind: 'answer',
+      status: 'complete',
+      origin: 'generated',
+      verdict: 'unchecked',
+      verdict_detail: null,
+      solve_parts: 'together',
+      error_message: null,
+      checks: [],
+      provenance: [],
+    },
+  ],
+}
+
 export type Responder = (route: Route) => Promise<void> | void
 
 /**
@@ -490,7 +570,7 @@ export async function installLyraApi(
       },
       TWIN_SESSION,
     ],
-    [`/api/classes/${CLASS_ID}/solutions`]: [SOLUTION_DETAIL],
+    [`/api/classes/${CLASS_ID}/solutions`]: [SOLUTION_DETAIL, SOLVER_SOLUTION],
     [`/api/classes/${CLASS_ID}/study`]: { decks: [], quizzes: [] },
     [`/api/classes/${CLASS_ID}/drafts`]: [
       {
@@ -524,8 +604,17 @@ export async function installLyraApi(
     '/api/desktop-import/status': { available: false, status: 'idle' },
     '/api/export/availability': { available: false, message: 'Not on this machine.' },
     '/api/solutions/1/segmentation': SOLUTION_DETAIL,
+    // The solutions workbench reads the source sheet beside the problems; without a body
+    // the source pane's `.text.trim()` throws and the page's error boundary takes over.
+    '/api/documents/101/text': {
+      filename: 'Homework 2.pdf',
+      text: 'Homework 2. Find the Fourier transform of each signal.\n\n(a) x(t)=e^{-2t}u(t-3)\n\n(b) x(t)=t e^{-2t}u(t)',
+      truncated: false,
+    },
     [`/api/solutions/${SOLUTION_ID}`]: SOLUTION_DETAIL,
     [`/api/solutions/${SOLUTION_ID}/status`]: { parts: [] },
+    [`/api/solutions/${SOLVER_SOLUTION_ID}`]: SOLVER_SOLUTION,
+    [`/api/solutions/${SOLVER_SOLUTION_ID}/status`]: { ...STATUS, parts: [] },
     '/api/drafts': [],
     [`/api/drafts/${DRAFT_ID}`]: DRAFT_DETAIL,
     [`/api/drafts/${DRAFT_ID}/status`]: STATUS,

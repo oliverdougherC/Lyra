@@ -359,20 +359,39 @@ reply is the page's main content, so it gets the page.
   cascade still owes is reported under the old identity and ignored. The pane settles a turn
   only when the drain arrives under the generation it is running and under the outcome that ended
   the turn — an empty answer has nothing to drain and settles at once
-- **The streaming row is the row that persists.** When a turn settles, the pane maps the tail
-  rows of the refetched conversation back onto the placeholder keys the optimistic rows used, so
-  the row the reader has been watching — the same DOM node, the same mounted renderer — is the
-  row that now carries the saved message's ID. The handoff names the turn's conversation and
-  clears with it, so a navigation or a new conversation retires it before the tail could claim
-  another pane's rows
+- **The streaming row is the row that persists, by ID, not by position.** The terminal frame of
+  a turn names the message the backend saved the answer under, and on settle the pane verifies
+  that ID in the refetched conversation before handing anything over: the user row is the saved
+  question (adjacent, same content), the answer row is the saved answer, and both keep the keys
+  the optimistic rows used — the same DOM node, the same mounted renderer — so a selection the
+  reader made in the live answer is measured against the stream's text and restored onto the
+  settled render of the identical content. A handoff that names an ID the transcript does not
+  hold yet is rechecked once (bounded), and a handoff that cannot verify itself falls back to the
+  plain settle. The handoff is scoped to the turn's conversation and is retired when the pane
+  moves to another one, so it can never claim another conversation's rows
+- **A word is published at frame cadence, and the terminal owes no frame.** Token arrivals
+  schedule at most one pending publication, which a requestAnimationFrame flushes at the next
+  frame with a timer backstop — hidden tabs withhold frames, not timers, and the turn's
+  terminal frame (done, result, error, stop) flushes synchronously on its own microtask, so the
+  last words never sit behind a frame the tab may not owe. A reset or an unmount invalidates
+  the pending publication before it can publish
 - **Completion is a drain, not a frame.** The cascade reports done from a settle-grace timer
   (220ms after the last word's reveal is scheduled), which in a hidden tab simply waits until
   the reader looks again: no timer chain, no requestAnimationFrame the terminal flush depends
-  on. Under `prefers-reduced-motion` there is nothing to wait for — the drain is immediate.
+  on. Under `prefers-reduced-motion` there is nothing to wait for — the drain is immediate, and
+  the words read as words from the first frame, in the stylesheet as well as the timer: the
+  reveal's base state hides each word until its frame arrives, and a reduced-motion reader must
+  never sit in that hidden state, so the media query carries the only `!important` the cascade
+  uses, pinning every word visible while the terminal flush does its work.
   Finished units also go quiet: once a unit has revealed with an unchanged delay, later commits
-  do not rewrite it, so a long finished answer costs no schedule work while a new tail streams
-  (measured: roughly ten style writes per commit at 183 units; the inheritance pass is linear in
-  the visible unit count, not in source length, so no stable-prefix cache is kept)
+  do not rewrite it, so a long finished answer costs no schedule work while a new tail streams.
+  Measured at the feed cadence (one content append per commit, jsdom, no FPS claim): a
+  representative 1,340-character answer costs ~9 style writes per commit and ~9 commit-ms mean,
+  and the deadline-inheritance scan is bounded, not O(new units × history) — it walks a
+  start-sorted snapshot toward earlier starts, stops the moment the earlier ranges can no
+  longer reach the unit, and skips the rest once a containing range is on hand. At an
+  18,000-character math-heavy source the scan per new unit stays around three hundred and the
+  worst commit around 127ms, versus 12.3 million scans and 153ms unbounded
 - There is no stream caret. Markdown blocks are block-level, so a trailing marker cannot sit
   at the end of the last word: it lands at the start of the line below, reading as stray
   punctuation. The word reveal is already the evidence that text is arriving
