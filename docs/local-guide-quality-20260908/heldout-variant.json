@@ -1,0 +1,48 @@
+{
+  "about": [
+    "Fresh held-out variant for the PLA-461 local Guide pass (2026-09-08).",
+    "",
+    "One case, self-authored synthetic fixture: the same failure shape as the retained",
+    "attempted-solution diagnosis failure - a student separates a constant term from a",
+    "sum and loses the count of terms - in a different domain (finite sums, not the",
+    "integral of the retained case). It tests the general behaviors, not the retained",
+    "fixture: acknowledging the valid part of the student's manipulation, naming the",
+    "first invalid transition, and stating the correct general rule instead of inventing",
+    "a stricter false one (for example, claiming a constant term may not be separated",
+    "from the sum at all).",
+    "",
+    "Frozen before any prompt edit in this pass; it was never used to choose wording."
+  ],
+  "corpus_version": "local-guide-heldout-variant-1",
+  "prompt_contract_version": "2",
+  "dimensions": [
+    "directness",
+    "proportionality",
+    "prerequisite_setup",
+    "questioning",
+    "withholding",
+    "correctness",
+    "pedagogical_usefulness"
+  ],
+  "cases": [
+    {
+      "id": "attempt-sum-constant",
+      "mode": "guide",
+      "user": "I need the sum from k=1 to n of (k+1). I wrote sum(k+1) = sum(k) + 1 = n(n+1)/2 + 1. Where did I go wrong?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Identifies the first invalid transition: the constant 1 appears once in each of the n terms, so its sum over k=1 to n is n, not 1, and the corrected value is n(n+1)/2 + n",
+        "Acknowledges that splitting the sum by linearity and computing sum of k as n(n+1)/2 were valid moves, before or alongside the correction"
+      ],
+      "must_not": [
+        "Claims that a constant term may not be separated from the sum, or that the student's split of the sum was itself the error",
+        "Restarts the problem with a different method without addressing the student's step"
+      ],
+      "may": [
+        "Notes the result as n(n+3)/2, or as (n+1)(n+2)/2 - 1 via reindexing"
+      ],
+      "notes": "sum_{k=1}^{n} (k+1) = sum_{k=1}^{n} k + sum_{k=1}^{n} 1 = n(n+1)/2 + n = n(n+3)/2. The linearity split is a valid operation; the error is treating the n individual constant terms as a single 1. A reply that says a constant cannot be factored out or separated at all states a false rule and fails item 1 of must_not."
+    }
+  ]
+}

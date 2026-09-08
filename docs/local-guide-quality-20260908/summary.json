@@ -1,0 +1,730 @@
+{
+  "evidence_version": 2,
+  "about": [
+    "PLA-461 local implementation pass (2026-09-08): bounded CANDIDATE repair of the two",
+    "formerly failing Guide explanation cases (attempted-solution diagnosis, simpler",
+    "explanation), measured on the production class_chat planner/tool loop",
+    "(`scripts/eval_tutor.py --surface class_chat`) against the authorized Qwen3.8-27B",
+    "endpoint. The prompt change is a candidate for parent integration; nothing here",
+    "asserts packaged-candidate or issue completion. Raw per-run workspaces (runs/grades/",
+    "meta JSON) live in the gitignored data/local-guide-eval/ of the Lyra-local-guide",
+    "worktree; this directory carries the sanitized compact record (this file) plus",
+    "transcripts.json (full sanitized terminal text, case context, tool arguments/results,",
+    "and grading for every run) and the versioned held-out fixture. All corpus content is",
+    "synthetic; no endpoint URL, key, or student data is retained - locality class only.",
+    "Same-model (same-endpoint) judging is supporting evidence, not independent review;",
+    "the parent's independent reading of the retained terminal text is recorded in",
+    "independent_review below and in the main document."
+  ],
+  "runtime_identity": {
+    "model": "Qwen3.8-27B",
+    "endpoint_locality": "remote (non-loopback; URL not retained)",
+    "context_window": 262144,
+    "context_window_source": "configured; maximum not independently measured",
+    "tools_supported": true,
+    "model_identity_source": "configured; advertised by /models preflight (HTTP 200) on 2026-09-08",
+    "generation_parameters": "production tool-loop defaults (deterministic temperature; 600s per-call bound; depth 24)",
+    "judge": "same endpoint/model as tutor (supporting evidence only)"
+  },
+  "source_state": {
+    "base_sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+    "baseline_runs": "pristine base (no working diff)",
+    "fixed-1_prompts_py_sha256": "55f1ab5a3fa97583a1c5a0c73b10434478c2cd6863f212b07262bb6328f2999e (intermediate v1; retained failure, not adopted)",
+    "fixed-2_3_and_later_prompts_py_sha256": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723 (candidate v2, retained for parent integration review)",
+    "prompts_py_base_sha256": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6",
+    "final_working_diff_sha256": "c2479a232686b78959e7ec3b1f9e0ada501c482bf2bd8d17ce28b3be495f294b",
+    "diff_files": [
+      "backend/llm/prompts.py",
+      "backend/tests/test_prompts.py",
+      "docs/README.md",
+      "docs/tutor-prompt-contract.md"
+    ],
+    "corpus_tutor_semantic_sha256": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+    "corpus_heldout_variant_sha256": "167865510b515b3c89a08cb8d889d19b098f907d35dd71c803c4347e61d9fc66",
+    "grader_rubric_sha256": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+    "harness_sha256": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c",
+    "note": "fixed-2 show-convolution-worked terminal text is byte-identical to the baseline (mode=show prompt unchanged; deterministic endpoint)."
+  },
+  "cases": {
+    "baseline/attempt-where-did-i-go-wrong": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_integrate",
+        "cas_integrate"
+      ],
+      "tool_outcomes": [
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 29.18,
+      "verdict": "fail",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 1,
+        "pedagogical_usefulness": 1
+      },
+      "dimension_notes_under_2": {
+        "correctness": "The final piecewise formulas are correct, but the claim that pulling e^{-t} out is only legal when the integrand is constant in \u03c4 misstates a basic rule.",
+        "pedagogical_usefulness": "It gives an actionable fix and correct results, but the flawed statement about extracting e^{-t} may leave a misleading mental model."
+      },
+      "must": {
+        "1": {
+          "met": false,
+          "why": "It identifies the lost \u03c4 dependence in h(t\u2212\u03c4), but it does not explicitly say the integrand retains e^\u03c4 and instead incorrectly frames pulling e^{-t} outside as invalid unless the integrand is constant."
+        },
+        "2": {
+          "met": true,
+          "why": "It says \u201cYour setup is right\u201d and, in the corrected case 0<t<1, uses the attempt's limits 0 to t, thereby acknowledging the setup and limits are correct in that interval."
+        }
+      },
+      "must_not_violated": []
+    },
+    "baseline/explain-that-more-simply": {
+      "status": "ok",
+      "rounds": 1,
+      "tools": [],
+      "tool_outcomes": [],
+      "stopped": "completed",
+      "duration_seconds": 9.39,
+      "verdict": "fail",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 1,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {
+        "correctness": "It presents convolution as summing only past inputs and assumes h fades with age, which are not true for every convolution system, though they are common simplifying assumptions."
+      },
+      "must": {
+        "1": {
+          "met": false,
+          "why": "The reply simplifies convolution, but it uses a fingerprint/copy/smeared-response picture rather than the requested overlap/sliding-window picture, and it gives no concrete small example."
+        },
+        "2": {
+          "met": true,
+          "why": "It stays on the same time-domain convolution idea and lowers the abstraction by replacing integral mechanics with plain-language pushes, copies, and adding."
+        }
+      },
+      "must_not_violated": []
+    },
+    "baseline/show-convolution-worked": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate"
+      ],
+      "tool_outcomes": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 29.87,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It gives the complete piecewise result\u20140 for t<0, 1-e^{-t} for 0<=t<=1, and e^{1-t}-e^{-t}=e^{-t}(e-1) for t>1\u2014and works through the integral setup, case split, and evaluation in order."
+        },
+        "2": {
+          "met": true,
+          "why": "Step 1 names the convolution integral definition, Step 2 identifies where the integrand is nonzero, and Step 3 explicitly evaluates the integral in each case."
+        }
+      },
+      "must_not_violated": []
+    },
+    "baseline-heldout/attempt-sum-constant": {
+      "status": "ok",
+      "rounds": 5,
+      "tools": [
+        "cas_evaluate",
+        "cas_evaluate",
+        "cas_evaluate",
+        "cas_evaluate"
+      ],
+      "tool_outcomes": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 19.85,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "The reply states that the +1 is added once per term, so the constant sum is n, and gives the corrected value n(n+1)/2 + n = n(n+3)/2."
+        },
+        "2": {
+          "met": true,
+          "why": "It treats the linearity split and the n(n+1)/2 sum as the correct parts, using them in the corrected expression and saying the student's version is short only by n-1."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-1/attempt-where-did-i-go-wrong": {
+      "status": "ok",
+      "rounds": 3,
+      "tools": [
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate"
+      ],
+      "tool_outcomes": [
+        false,
+        false,
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 19.14,
+      "verdict": "fail",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": false,
+          "why": "It identifies that e^{-(t-\u03c4)} is not constant in \u03c4, but it does not explicitly state the e^{\u03c4} factor or that e^{-t} alone is valid to pull out."
+        },
+        "2": {
+          "met": true,
+          "why": "It says the setup is right and then uses the 0-to-t overlap for 0<t<1, acknowledging the correct limits in that range alongside the correction."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-1/explain-that-more-simply": {
+      "status": "ok",
+      "rounds": 4,
+      "tools": [
+        "cas_evaluate",
+        "cas_evaluate",
+        "cas_evaluate",
+        "cas_evaluate",
+        "cas_evaluate",
+        "cas_evaluate"
+      ],
+      "tool_outcomes": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 44.83,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It simplifies the material with a plain weighted-sum/sliding-window story and includes a concrete 1-second averager example whose output is a triangle."
+        },
+        "2": {
+          "met": true,
+          "why": "It remains on convolution and system output, lowering the abstraction to 'pokes', 'age', and an averaging window rather than changing topics."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-1/show-convolution-worked": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate"
+      ],
+      "tool_outcomes": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 20.64,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "The reply gives the complete piecewise result and then shows the integral setup, nonzero-region analysis, and evaluation for each case in order."
+        },
+        "2": {
+          "met": true,
+          "why": "It explicitly names the convolution integral definition, identifies where the integrand is nonzero, and then evaluates the integral case by case."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-2/attempt-where-did-i-go-wrong": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_integrate",
+        "cas_integrate"
+      ],
+      "tool_outcomes": [
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 23.56,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 1,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 1,
+        "pedagogical_usefulness": 1
+      },
+      "dimension_notes_under_2": {
+        "proportionality": "The corrected cases are appropriate, but the extra shape commentary and unit-impulse analogy make it a bit more than the error check asked for.",
+        "correctness": "The piecewise convolution values are correct, but the claim that t e^{-t} would result from a unit impulse is false; that convolution would give e^{-t}u(t).",
+        "pedagogical_usefulness": "It is largely useful and gives the corrected cases, but the wrong impulse analogy and initial emphasis on the upper limit can leave a misleading mental note."
+      },
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It says \"the integrand still isn't e^{-t}\" and then writes the corrected integrand e^{-(t-\\tau)}, making the retained tau dependence explicit."
+        },
+        "2": {
+          "met": true,
+          "why": "It begins \"Your setup is right\" and explicitly notes \"for 0 < t < 1 your limits happen to be correct\" alongside the correction."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-2/explain-that-more-simply": {
+      "status": "ok",
+      "rounds": 1,
+      "tools": [],
+      "tool_outcomes": [],
+      "stopped": "completed",
+      "duration_seconds": 20.9,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 1,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {
+        "correctness": "The weighted-sum interpretation and the worked example are correct, but the unqualified claim that older input values contribute less is not generally true for an arbitrary impulse response."
+      },
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It simplifies convolution to a sliding window of past input values and gives a concrete small example with h=1 over one second and a ramp input."
+        },
+        "2": {
+          "met": true,
+          "why": "It stays on the same convolution topic and lowers the level of abstraction by describing the output as a weighted sum over past input."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-2/show-convolution-worked": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate",
+        "cas_integrate"
+      ],
+      "tool_outcomes": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 32.25,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "The reply gives the complete piecewise result and evaluates each case in order, including 0 for t<0, 1-e^{-t} for 0<=t<=1, and e^{-t}(e-1) for t>1 with t=1 covered by the middle case."
+        },
+        "2": {
+          "met": true,
+          "why": "It explicitly names the integral definition, identifies where the integrand is nonzero, and then evaluates the integral in each case."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-3/attempt-where-did-i-go-wrong": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_integrate",
+        "cas_integrate"
+      ],
+      "tool_outcomes": [
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 25.04,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 1,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {
+        "correctness": "The convolution results are correct, but the aside that matching pieces is expected \"as a convolution of continuous signals should\" is imprecise because the given signals are not continuous at the steps."
+      },
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It states the correct h(t-\u03c4)=e^{-(t-\u03c4)}u(t-\u03c4) and says the \u03c4 in the exponent matters, diagnosing the error of using a \u03c4-independent e^{-t}."
+        },
+        "2": {
+          "met": true,
+          "why": "It says \"Your setup is right\" and later notes \"Your [0, t] is only valid while 0 < t < 1,\" acknowledging the correct setup and range-appropriate limits."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-3/explain-that-more-simply": {
+      "status": "ok",
+      "rounds": 1,
+      "tools": [],
+      "tool_outcomes": [],
+      "stopped": "completed",
+      "duration_seconds": 13.29,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 1,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {
+        "correctness": "The moving-average example is correct, but the general statement that older input values contribute less is not always true; the weight is just the impulse response."
+      },
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It simplifies convolution as a weighted sum of past input values and uses a concrete last-second averaging window with a ramp example."
+        },
+        "2": {
+          "met": true,
+          "why": "The reply remains about the convolution integral's output-at-a-time meaning and does not switch to a different topic."
+        }
+      },
+      "must_not_violated": []
+    },
+    "fixed-heldout/attempt-sum-constant": {
+      "status": "ok",
+      "rounds": 3,
+      "tools": [
+        "cas_evaluate",
+        "cas_evaluate"
+      ],
+      "tool_outcomes": [
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 12.3,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It identifies the invalid transition by saying \\(\\sum_{k=1}^{n}1\\) is not 1 but n, giving the corrected expression \\(n(n+1)/2+n\\)."
+        },
+        "2": {
+          "met": true,
+          "why": "It explicitly says the student's split \\(\\sum(k+1)=\\sum k+\\sum 1\\) was correct and only the evaluation of \\(\\sum 1\\) was off."
+        }
+      },
+      "must_not_violated": []
+    },
+    "controls-heldout/start-quadratic": {
+      "status": "ok",
+      "rounds": 1,
+      "tools": [],
+      "tool_outcomes": [],
+      "stopped": "completed",
+      "duration_seconds": 8.59,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It gives the actionable setup: \"Divide every term by 3 first\" and \"move the 5 over to get standard form,\" with a short reason that the leading coefficient becomes 1 and the numbers become manageable."
+        }
+      },
+      "must_not_violated": []
+    },
+    "controls-heldout/attempt-distribution": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_evaluate",
+        "cas_solve",
+        "cas_evaluate"
+      ],
+      "tool_outcomes": [
+        true,
+        true,
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 10.16,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "The reply says the work went wrong at distribution and states 2(x+3)=2x+2\u00b73=2x+6, not 2x+3."
+        },
+        "2": {
+          "met": true,
+          "why": "It explains that the 2 must multiply both terms inside the parentheses and shows the corrected step 2x+6=10."
+        }
+      },
+      "must_not_violated": []
+    },
+    "controls-heldout/simpler-osmosis": {
+      "status": "ok",
+      "rounds": 1,
+      "tools": [],
+      "tool_outcomes": [],
+      "stopped": "completed",
+      "duration_seconds": 1.49,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It describes a barrier that \"lets water through but not sugar\" and a \"barrier that only water can pass.\""
+        },
+        "2": {
+          "met": true,
+          "why": "It says water flows into the bag containing sugar water and that water moves from where it is plentiful to where it is scarce, which explains the direction in plain words."
+        }
+      },
+      "must_not_violated": []
+    },
+    "controls-heldout/guide-to-worked": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_evaluate"
+      ],
+      "tool_outcomes": [
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 2.76,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "It ends with \u201cx = 6 is the solution\u201d after stating \u201cAdd 2 to both sides.\u201d"
+        },
+        "2": {
+          "met": true,
+          "why": "The check explicitly evaluates \u201c5(6-2) = 5 \u00b7 4 = 20\u201d."
+        }
+      },
+      "must_not_violated": []
+    },
+    "controls-show/transfer-show-probability": {
+      "status": "ok",
+      "rounds": 2,
+      "tools": [
+        "cas_evaluate"
+      ],
+      "tool_outcomes": [
+        true
+      ],
+      "stopped": "completed",
+      "duration_seconds": 8.33,
+      "verdict": "pass",
+      "dimension_scores": {
+        "directness": 2,
+        "proportionality": 2,
+        "prerequisite_setup": 2,
+        "questioning": 2,
+        "withholding": 2,
+        "correctness": 2,
+        "pedagogical_usefulness": 2
+      },
+      "dimension_notes_under_2": {},
+      "must": {
+        "1": {
+          "met": true,
+          "why": "The reply states the probability is 3/10 and explicitly gives P(1st red)=3/5 and P(2nd red | 1st red)=2/4."
+        },
+        "2": {
+          "met": true,
+          "why": "It includes the self-contained multiplication 3/5 * 2/4 = 6/20 = 3/10."
+        }
+      },
+      "must_not_violated": []
+    }
+  },
+  "key_excerpts": {
+    "baseline_attempt_false_rule": "Pulling $e^{-t}$ out of the integral is only legal if the integrand is constant in $\\tau$; it isn't.  [baseline, attempt-where-did-i-go-wrong]",
+    "fixed1_attempt_false_rule_rephrased": "the $\\tau$ in the exponent means it's **not** constant with respect to $\\tau$ \u2014 it can't come out.  [fixed-1, attempt-where-did-i-go-wrong; still failed must#1]",
+    "fixed2_attempt_diagnosis": "That mistake only shows up once $t > 1$: for $0 < t < 1$ your limits happen to be correct, but the integrand still isn't $e^{-t}$.  [fixed-2, attempt-where-did-i-go-wrong; same-model pass - parent independent review FAILs this answer over its closing unit-impulse claim; see independent_review]",
+    "fixed3_attempt_diagnosis": "The $\\tau$ in the exponent matters: it's what makes the integrand depend on $\\tau$ at all. ... Your $[0, t]$ is only valid while $0 < t < 1$.  [fixed-3 repeat, passed]",
+    "fixed1_simpler_sliding_example": "Feed it a 1-second blip ... the output is a triangle: it ramps up as the blip slides into the averaging window, peaks at 1 when the blip is fully inside, and ramps back down as it slides out.  [fixed-1, explain-that-more-simply; CAS-verified; same-model pass all dimensions 2]",
+    "fixed2_simpler_sliding_example": "the system 'remembers' the input for exactly 1 second ... Feed it a ramp, x(t)=t. At t=3, the 'last second' is the interval [2,3] ... y(3) = 2.5.  [fixed-2/3, same-model pass; independent concern: 'older ones contribute less' is not true for arbitrary impulse responses]",
+    "heldout_baseline_correct_rule": "The +1 isn't added once \u2014 it's added once per term, and there are n terms. ... The general rule: sum (a_k + c) = sum a_k + nc, for a constant c.  [baseline attempt-sum-constant; passed]",
+    "heldout_v2_correct_rule": "Your split sum(k+1) = sum k + sum 1 was correct; only the evaluation of sum 1 was off.  [fixed-heldout attempt-sum-constant; passed, no over-allowing]",
+    "fixed2_attempt_false_impulse_claim": "Your $t e^{-t}$ would be the answer if $x(t)$ were a unit impulse at the origin, not a unit pulse. [fixed-2, attempt-where-did-i-go-wrong; parent independent review marks this answer FAIL - delta * h = h, not t e^{-t}]"
+  },
+  "transcripts": {
+    "file": "docs/local-guide-quality-20260908/transcripts.json",
+    "contents": "Full sanitized records for all 18 case executions: synthetic user/history/context, terminal text, tool arguments (including raw_arguments) and results, prompt/provenance identity, and the same-model grading",
+    "raw_unaltered": "The original raw workspace reports and the rubric are not rewritten; transcripts.json is an allowlisted extraction plus the independent-review block"
+  },
+  "independent_review": {
+    "reviewer": "parent (Codex) independent reading of retained terminal text",
+    "fixed-2 attempt-where-did-i-go-wrong": "FAIL - false claim 'Your t e^{-t} would be the answer if x(t) were a unit impulse at the origin, not a unit pulse' (delta * h = h, not t e^{-t}); diagnosis leads with the upper limit instead of the dropped tau dependence. Same-model pass is self-judging only.",
+    "fixed-3 attempt-where-did-i-go-wrong": "False impulse claim removed; diagnosis improved. Residual caveats: verification wording ('checked both integrals' over a calculator that treats e as an unresolved symbol) and the step-discontinuous 'continuous signals' aside.",
+    "explain-that-more-simply (fixed-1/2/3)": "Same-model pass, but 'older ones contribute less' is not true for arbitrary impulse responses - independent correctness concern.",
+    "controls-heldout/simpler-osmosis": "Same-model pass, but the explanation confuses amount with concentration ('more water outside than inside') and omits counterpressure - qualified, not an unqualified correctness pass.",
+    "robust_controls": "Show (show-convolution-worked, byte-stable; transfer-show-probability), finite-sum held-out variant (baseline and v2), attempt-distribution, guide-to-worked full solution - independent reading finds them sound.",
+    "overall": "The formerly failing pair is not independently resolved. PLA-461 stays open. All evidence is single-configuration exploratory/qualified; no issue completion is claimed."
+  }
+}
