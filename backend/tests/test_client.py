@@ -1314,6 +1314,128 @@ def test_tag_policy_is_independent_of_where_the_chunks_break(
     assert _split(text, chunk) == (answer, reasoning)
 
 
+def _explicit_frame(field: str, value: object, content: str | None = None) -> str:
+    """One delta frame carrying a reasoning field, optionally alongside content."""
+    delta: dict[str, object] = {field: value}
+    if content is not None:
+        delta["content"] = content
+    return json.dumps({"choices": [{"delta": delta}]})
+
+
+def test_reasoning_channel_separates_presence_from_text() -> None:
+    # Presence is any recognized field holding a string - including the empty string;
+    # text is the first non-empty string in field order. Null, non-string, and missing
+    # fields establish no channel at all, so the legacy tag policy still applies.
+    assert client._reasoning_channel({"reasoning_content": ""}) == (True, "")
+    assert client._reasoning_channel({"reasoning": "A.", "thinking": "B."}) == (True, "A.")
+    assert client._reasoning_channel({"reasoning_content": "", "thinking": "B."}) == (True, "B.")
+    assert client._reasoning_channel({"reasoning_content": None}) == (False, "")
+    assert client._reasoning_channel({"reasoning_content": 5}) == (False, "")
+    assert client._reasoning_channel({"reasoning": None, "thinking": None}) == (False, "")
+    assert client._reasoning_channel({}) == (False, "")
+    assert client._reasoning_channel({"content": "Only content."}) == (False, "")
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning", "thinking"])
+async def test_an_empty_reasoning_string_commits_the_channel_and_keeps_a_leading_tag_literal(
+    field: str,
+) -> None:
+    # The F4 shape: the endpoint supplied its channel (a string, here the empty one), so
+    # a tag opening the content is literal answer text, not a reasoning block to strip.
+    sentence = _T_OPEN + "Draft." + _T_CLOSE + "Final."
+    deltas = await _collect(_body(_explicit_frame(field, "", content=sentence)))
+
+    assert _text(deltas, "reasoning") == ""
+    assert _text(deltas, "answer") == sentence
+    # An empty fragment is absence of text, not an empty delta to publish.
+    assert all(delta.text for delta in deltas)
+
+
+async def test_an_empty_reasoning_frame_commits_the_channel_before_the_content_arrives() -> None:
+    sentence = _T_OPEN + "Draft." + _T_CLOSE + "Final."
+    deltas = await _collect(
+        _body(_explicit_frame("reasoning_content", ""), _content_frame(sentence))
+    )
+
+    assert _text(deltas, "reasoning") == ""
+    assert _text(deltas, "answer") == sentence
+    assert all(delta.text for delta in deltas)
+
+
+async def test_reasoning_text_still_arrives_when_an_earlier_frame_was_empty() -> None:
+    sentence = "The tag " + _T_OPEN + " stays answer."
+    deltas = await _collect(
+        _body(
+            _explicit_frame("reasoning_content", ""),
+            _explicit_frame("thinking", "Late."),
+            _content_frame(sentence),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Late."
+    assert _text(deltas, "answer") == sentence
+    assert all(delta.text for delta in deltas)
+
+
+async def test_a_null_reasoning_field_does_not_commit_the_channel() -> None:
+    # Null is "no reasoning in this frame", not "the channel exists": a legacy leading
+    # block still splits, and a null field must not permanently disable tag recognition.
+    deltas = await _collect(
+        _body(
+            _explicit_frame("reasoning_content", None),
+            _content_frame(_T_OPEN + "Deliberating." + _T_CLOSE + "Answer."),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Deliberating."
+    assert _text(deltas, "answer") == "Answer."
+
+
+async def test_a_non_string_reasoning_field_does_not_commit_the_channel() -> None:
+    deltas = await _collect(
+        _body(
+            _explicit_frame("reasoning_content", 5),
+            _content_frame(_T_OPEN + "Deliberating." + _T_CLOSE + "Answer."),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Deliberating."
+    assert _text(deltas, "answer") == "Answer."
+
+
+async def test_an_empty_field_releases_a_held_tag_prefix_as_answer_text() -> None:
+    # The stream opened the way a legacy block does, so the prefix is held; the channel
+    # then commits with an empty string, and the held prefix is answer text from that
+    # frame on - neither lost nor duplicated as the rest of the tag arrives.
+    sentence = _T_OPEN + " is literal."
+    deltas = await _collect(
+        _body(
+            _content_frame(_T_OPEN[:4]),
+            _explicit_frame("reasoning_content", ""),
+            _content_frame(_T_OPEN[4:] + " is literal."),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == ""
+    assert _text(deltas, "answer") == sentence
+    assert all(delta.text for delta in deltas)
+
+
+async def test_an_empty_field_after_a_committed_block_keeps_the_block_reasoning() -> None:
+    # The block was committed to reasoning before the field arrived, so an empty field
+    # cannot unlock that decision; it only settles the rest of the content as literal.
+    deltas = await _collect(
+        _body(
+            _content_frame(_T_OPEN + "Deliberation." + _T_CLOSE),
+            _explicit_frame("thinking", ""),
+            _content_frame("Answer."),
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Deliberation."
+    assert _text(deltas, "answer") == "Answer."
+
+
 async def test_a_literal_tag_late_in_the_answer_stays_in_the_answer() -> None:
     """The reported corruption, reproduced one character at a time through the stream."""
     sentence = "The XML tag " + _T_OPEN + " is literal text, not a reasoning channel."
@@ -1481,6 +1603,87 @@ async def test_tool_rounds_split_only_a_leading_block_and_keep_explicit_content_
     assert _text(seen3, "answer") == third.content
 
 
+async def test_a_tool_stream_with_an_empty_reasoning_field_keeps_content_literal() -> None:
+    # Same F4 shape through the verification loop: the empty field commits the channel,
+    # so the leading tag in the live text is answer, and no empty delta is published.
+    seen: list[client.StreamDelta] = []
+    chunks = [
+        {"reasoning_content": ""},
+        {"content": _T_OPEN + "math" + _T_CLOSE + "One "},
+        {
+            "tool_calls": [
+                {"index": 0, "id": "a", "function": {"name": "add", "arguments": '{"a": 1'}},
+            ]
+        },
+        {
+            "content": "moment",
+            "tool_calls": [
+                {"index": 0, "function": {"arguments": ', "b": 2}'}},
+            ],
+        },
+    ]
+
+    class LiveStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for delta in chunks:
+                yield ("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n").encode()
+            yield b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]\n\n'
+            yield b"data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["stream"] is True
+        return httpx.Response(200, stream=LiveStream())
+
+    result = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        None,
+        [],
+        [_SCHEMA_TOOL],
+        transport=_transport(handler),
+        on_delta=seen.append,
+    )
+
+    assert result.content == _T_OPEN + "math" + _T_CLOSE + "One moment"
+    assert result.tool_calls == (client.ToolCall("a", "add", '{"a": 1, "b": 2}'),)
+    assert _text(seen, "reasoning") == ""
+    assert all(delta.text for delta in seen)
+    assert "".join(item.text for item in seen if item.channel == "answer") == result.content
+
+
+async def test_a_tool_stream_with_a_null_reasoning_field_still_splits_a_leading_block() -> None:
+    seen: list[client.StreamDelta] = []
+    chunks = [
+        {"reasoning_content": None},
+        {"content": _T_OPEN + "Check 2+3." + _T_CLOSE + "Let me verify "},
+        {"tool_calls": [{"index": 0, "id": "a", "function": {"name": "add", "arguments": "{}"}}]},
+    ]
+
+    class LiveStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for delta in chunks:
+                yield ("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n").encode()
+            yield b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]\n\n'
+            yield b"data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=LiveStream())
+
+    result = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        None,
+        [],
+        [_SCHEMA_TOOL],
+        transport=_transport(handler),
+        on_delta=seen.append,
+    )
+
+    assert result.content == "Let me verify "
+    assert _text(seen, "reasoning") == "Check 2+3."
+    assert _text(seen, "answer") == result.content
+
+
 def test_strip_reasoning_keeps_tags_that_are_not_at_the_head() -> None:
     # Mid-message tags are answer text, in prose, in inline code, and inside fences.
     prose = "Answer is 2. (" + _T_OPEN + " is literal.)"
@@ -1568,3 +1771,75 @@ async def test_non_streaming_tool_turn_applies_the_same_field_policy() -> None:
         transport=transport,
     )
     assert answer.content == '{"topics": []}'
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning", "thinking"])
+async def test_complete_keeps_content_literal_for_an_empty_reasoning_field(field: str) -> None:
+    # The F4 shape, non-streaming: an empty string channel means the content, including a
+    # literal leading `think` block, stands as-is.
+    content = _T_OPEN + "Draft." + _T_CLOSE + "Final."
+    payload = {"choices": [{"message": {"content": content, field: ""}, "finish_reason": "stop"}]}
+    transport = _transport(lambda request: httpx.Response(200, json=payload))
+
+    result = await client.complete(
+        _ENDPOINT, None, "local-model", [{"role": "user", "content": "hi"}], transport=transport
+    )
+
+    assert result == content
+
+
+@pytest.mark.parametrize("value", [None, 5])
+async def test_complete_still_strips_a_leading_block_when_the_field_is_not_a_string(value) -> None:
+    # A null or non-string field establishes no channel, so the legacy leading-block
+    # policy still strips it; only a string value, even an empty one, commits the channel.
+    content = _T_OPEN + "Deliberating." + _T_CLOSE + "Final."
+    payload = {
+        "choices": [
+            {"message": {"content": content, "reasoning_content": value}, "finish_reason": "stop"}
+        ]
+    }
+    transport = _transport(lambda request: httpx.Response(200, json=payload))
+
+    result = await client.complete(
+        _ENDPOINT, None, "local-model", [{"role": "user", "content": "hi"}], transport=transport
+    )
+
+    assert result == "Final."
+
+
+async def test_non_streaming_tool_turn_treats_an_empty_reasoning_field_as_literal() -> None:
+    content = _T_OPEN + "Draft." + _T_CLOSE + "Final."
+    payload = {
+        "choices": [
+            {"message": {"content": content, "reasoning_content": ""}, "finish_reason": "stop"}
+        ]
+    }
+    transport = _transport(lambda request: httpx.Response(200, json=payload))
+    answer = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        "m",
+        [{"role": "user", "content": "hi"}],
+        [_SCHEMA_TOOL],
+        transport=transport,
+    )
+    assert answer.content == content
+
+
+async def test_non_streaming_tool_turn_still_strips_a_leading_block_for_a_null_field() -> None:
+    content = _T_OPEN + "Deliberating." + _T_CLOSE + "Final."
+    payload = {
+        "choices": [
+            {"message": {"content": content, "reasoning_content": None}, "finish_reason": "stop"}
+        ]
+    }
+    transport = _transport(lambda request: httpx.Response(200, json=payload))
+    answer = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        "m",
+        [{"role": "user", "content": "hi"}],
+        [_SCHEMA_TOOL],
+        transport=transport,
+    )
+    assert answer.content == "Final."

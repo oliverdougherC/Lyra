@@ -70,8 +70,10 @@ streams require a valid `result` or structured error. Agent JSON replay remains 
 
 The backend prefers explicit provider reasoning fields. Legacy inline reasoning markers are
 recognized only at the start of content, before answer prose begins; tags in subsequent answer
-prose or code remain literal. An explicit reasoning field observed before that initial decision
-makes content literal. If a legacy block has already opened, it remains reasoning until its
+prose or code remain literal. A recognized explicit reasoning field holding a string, including
+an empty string, makes content literal when observed before that initial decision. Null, missing,
+or non-string fields do not establish the channel. Only non-empty reasoning text emits a delta.
+If a legacy block has already opened, it remains reasoning until its
 closing marker; already-delivered text is never retrospectively moved between channels. The same
 policy applies to ordinary streaming, each tool round, and nonstreaming completion parsing.
 

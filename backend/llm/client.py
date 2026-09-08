@@ -8,11 +8,13 @@ beats silently guessing at another one.
 Reasoning models reach this client two different ways, and both are handled. A server run
 with a reasoning parser (llama.cpp, vLLM, Ollama, and the hosted DeepSeek and OpenRouter
 APIs) puts the thought in its own delta field, under one of `reasoning_content`,
-`reasoning`, or `thinking`; once a stream supplies that field, its content is answer
-text byte for byte. A server without one leaves a leading `think` block at the head of
-the reply, and `_ReasoningTagSplitter` pulls just that block back out: a tag anywhere
-else in the answer is literal text. A model that does not think at all trips neither
-path and streams exactly as before.
+`reasoning`, or `thinking`; once a frame supplies that field holding a string - even the
+empty one - the endpoint has committed to the channel and its content is answer text
+byte for byte from that frame on, while a null or absent field commits nothing and the
+legacy policy below still applies. A server without one leaves a leading `think` block
+at the head of the reply, and `_ReasoningTagSplitter` pulls just that block back out:
+a tag anywhere else in the answer is literal text. A model that does not think at all
+trips neither path and streams exactly as before.
 
 Tool calling lives here too, and is used only by the verification loop in `llm/tools.py`.
 Background verification uses complete replies; interactive callers can opt into live
@@ -361,8 +363,9 @@ class _ReasoningTagSplitter:
     buffering every answer until a close marker might arrive would delay the first word
     of every non-thinking model. Those servers ship a reasoning parser that fills
     `reasoning_content` instead, which is the path above. And an endpoint that supplies
-    its own reasoning field carries the thought there, so from the first such frame on
-    the content is literal answer text; see `note_explicit_reasoning`.
+    its own reasoning channel - a recognized field holding a string, even an empty one -
+    carries the thought there, so from the first such frame on the content is literal
+    answer text; see `note_explicit_reasoning`.
     """
 
     def __init__(self) -> None:
@@ -377,7 +380,7 @@ class _ReasoningTagSplitter:
         return 0
 
     def note_explicit_reasoning(self) -> list[StreamDelta]:
-        """The endpoint supplied its own reasoning field, so the content is literal.
+        """The endpoint supplied its own reasoning channel, so the content is literal.
 
         No inline tag is recognized from this point on. A leading block that has already
         begun is locked to the reasoning channel until its closing tag: nothing already
@@ -682,28 +685,41 @@ def _stream_error(error: object) -> UpstreamError:
     return UpstreamError(_ERROR_MIDREPLY)
 
 
-def _reasoning_field(frame: dict[str, object]) -> str:
-    """The first non-empty explicit reasoning field on one delta or message, if any.
+def _reasoning_channel(frame: dict[str, object]) -> tuple[bool, str]:
+    """Whether the frame carries the endpoint's reasoning channel, and its text.
 
-    A server that supplies its own reasoning channel names the thought here rather than
-    leaving inline markers in the content, which is what makes the content literal
-    answer text.
+    Presence and text are separate concerns. A recognized field holding a *string* -
+    including the empty string - commits the endpoint to the channel: its content is
+    answer text literal byte for byte from that frame on. The text is the first
+    non-empty string in field order, and only text may be emitted as a reasoning
+    delta: an empty fragment is absence of reasoning, not an empty delta.
+
+    A missing field, or one whose value is null or not a string, commits nothing, so
+    the legacy leading-tag policy still applies. Null is the shape a compatible
+    server uses for "no reasoning in this frame", and treating it as a committed
+    channel would permanently disable tag recognition on an endpoint that merely
+    always emits the key, turning genuine leading `think` blocks into literal text.
+    Only a string value - even the empty one - says the channel is real.
     """
-    return next(
-        (
-            value
-            for field in _REASONING_FIELDS
-            if isinstance(value := frame.get(field), str) and value
-        ),
-        "",
-    )
+    present = False
+    text = ""
+    for field in _REASONING_FIELDS:
+        value = frame.get(field)
+        if isinstance(value, str):
+            present = True
+            if not text:
+                text = value
+    return present, text
 
 
-def _delta_fields(payload: str) -> tuple[str, str]:
-    """Pull one SSE data payload apart into its `(content, reasoning)` text.
+def _delta_fields(payload: str) -> tuple[str, str, bool]:
+    """Pull one SSE data payload apart into its `(content, reasoning, explicit)` parts.
 
-    Either half is an empty string when the frame does not carry it, which is the common
-    case: a frame holds one or the other, not both.
+    Either text half is an empty string when the frame does not carry it, which is the
+    common case: a frame holds one or the other, not both. `explicit` reports whether
+    the frame carries the endpoint's committed reasoning channel (a recognized field
+    holding a string, even an empty one) - that presence, not the text, is what turns
+    the content into literal answer text; see `_reasoning_channel`.
 
     Raises:
         UpstreamError: The frame is an in-band error, or parses as JSON but not as a
@@ -716,18 +732,18 @@ def _delta_fields(payload: str) -> tuple[str, str]:
         frame = json.loads(payload)
     except ValueError:
         # Keep-alive noise and half-written frames are normal on some servers, not fatal.
-        return "", ""
+        return "", "", False
     if not isinstance(frame, dict):
-        return "", ""
+        return "", "", False
     if "error" in frame:
         raise _stream_error(frame["error"])
     choices = frame.get("choices")
     if choices is None:
-        return "", ""
+        return "", "", False
     if not isinstance(choices, list):
         raise UpstreamError(_ERROR_UNREADABLE)
     if not choices:
-        return "", ""
+        return "", "", False
     first = choices[0]
     if not isinstance(first, dict):
         raise UpstreamError(_ERROR_UNREADABLE)
@@ -736,7 +752,8 @@ def _delta_fields(payload: str) -> tuple[str, str]:
         raise UpstreamError(_ERROR_UNREADABLE)
 
     content = delta.get("content")
-    return (content if isinstance(content, str) else ""), _reasoning_field(delta)
+    explicit, text = _reasoning_channel(delta)
+    return (content if isinstance(content, str) else ""), text, explicit
 
 
 class StreamCompletionError(UpstreamError):
@@ -814,7 +831,7 @@ async def stream_chat(
                     if payload == "[DONE]":
                         finished = True
                         break
-                    content, reasoning = _delta_fields(payload)
+                    content, reasoning, explicit = _delta_fields(payload)
                     try:
                         choices = json.loads(payload).get("choices", [])
                         if choices and isinstance(choices[0], dict):
@@ -823,9 +840,14 @@ async def stream_chat(
                         pass
                     if require_complete and finish_reason == "length":
                         raise UpstreamError(_ERROR_TRUNCATED)
-                    if reasoning:
+                    # The channel commits the moment the endpoint supplies it, even
+                    # when this fragment carries no reasoning text: from this frame on,
+                    # the content is literal answer text. Text is published only when
+                    # there is any.
+                    if explicit:
                         for delta in splitter.note_explicit_reasoning():
                             yield delta
+                    if reasoning:
                         yield StreamDelta("reasoning", reasoning)
                     for delta in splitter.feed(content) if content else ():
                         yield delta
@@ -863,8 +885,9 @@ async def complete(
      Profile extraction uses this: it wants one whole JSON document, not a token stream.
      A `think` block that opens the reply is stripped before the content is returned,
      because a reasoning model left unparsed by its server prefixes its JSON with
-     paragraphs of deliberation; when the message carries the provider's own
-     reasoning field, the content is returned as-is.
+     paragraphs of deliberation; when the message carries the provider's own reasoning
+     channel - a recognized field holding a string, even an empty one - the content is
+     returned as-is.
 
     Args:
         endpoint: Endpoint base URL including its version suffix.
@@ -927,7 +950,8 @@ async def complete(
         logger.warning("Tutor endpoint reply hit the output-token ceiling and was cut off")
         if truncated is not None:
             truncated.append(True)
-    return strip_reasoning(content, literal=bool(_reasoning_field(message)))
+    explicit, _ = _reasoning_channel(message)
+    return strip_reasoning(content, literal=explicit)
 
 
 async def _post_constrained(
@@ -1074,10 +1098,14 @@ async def _collect_tool_stream(
         if payload == "[DONE]":
             finished = True
             break
-        content, reasoning = _delta_fields(payload)
-        if reasoning:
+        content, reasoning, explicit = _delta_fields(payload)
+        # Same commit rule as the ordinary stream: the channel is established by a
+        # string-valued field, even an empty one, and the text is published only
+        # when non-empty.
+        if explicit:
             for delta in splitter.note_explicit_reasoning():
                 emit(delta)
+        if reasoning:
             emit(StreamDelta("reasoning", reasoning))
         for delta in splitter.feed(content) if content else ():
             emit(delta)
@@ -1246,14 +1274,12 @@ async def complete_with_tools(
     # A turn that only calls tools carries no content at all, which is not an error. A
     # `finish_reason` of "length" is the one field that says the reply was cut off at the
     # output ceiling; the loop reads it to keep a truncated turn from passing as finished.
-    # When the message carries the provider's own reasoning field, the content is
-    # literal: the explicit channel, not an inline marker, is the reasoning.
+    # When the message carries the provider's own reasoning channel - a recognized field
+    # holding a string, even an empty one - the content is literal: the explicit
+    # channel, not an inline marker, is the reasoning.
+    explicit, _ = _reasoning_channel(message)
     return AssistantMessage(
-        content=(
-            strip_reasoning(content, literal=bool(_reasoning_field(message)))
-            if isinstance(content, str)
-            else ""
-        ),
+        content=(strip_reasoning(content, literal=explicit) if isinstance(content, str) else ""),
         tool_calls=_read_tool_calls(message),
         truncated=choices[0].get("finish_reason") == "length",
     )
@@ -1409,8 +1435,9 @@ def strip_reasoning(content: str, *, literal: bool = False) -> str:
     Same recognition policy as the streaming splitter: only a block that opens the
     message, after at most whitespace, is reasoning; a tag anywhere else is part of
     the answer and stays. `literal` is set when the message already carried the
-    provider's own reasoning field - that field, not an inline marker, is the
-    reasoning channel, so the content is preserved as-is.
+    provider's own reasoning channel - a recognized field holding a string, even an
+    empty one; that field, not an inline marker, is the reasoning channel, so the
+    content is preserved as-is.
     """
     if literal:
         return content.strip()
