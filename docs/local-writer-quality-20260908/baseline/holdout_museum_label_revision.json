@@ -1,0 +1,50 @@
+{
+ "evidence_kind": "compact-sanitized",
+ "note": "Derived from the raw case receipt in the retained output directory; all prose is synthetic corpus content. assembled_proposal is a faithful rendering of the preserved state: for live full-draft runs it is derived from the preserved blocks (heading dedupe plus mathnorm, identical to the pending proposal when one exists), and for scoped revision runs it is the pending proposal itself.",
+ "case_id": "holdout_museum_label_revision",
+ "scenario": "uninterrupted",
+ "run": {
+  "tested_sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+  "corpus_sha256": "3f7c629d775412f84fedbf31c4b960222721030f72327c59a1f6ddb0496fd34b",
+  "prompt_sha256": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6",
+  "backend_source_sha256": "b247cfb86a78f99ae9d15929a59d8c284da6f19c2a2f400da013b9f7e40641f0",
+  "model": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "runtime": "source_desktop_bootstrap"
+ },
+ "plan_mode": "corpus_seeded",
+ "case_status": "recorded",
+ "elapsed_seconds": 11.909,
+ "run_status": "completed",
+ "stage_detail": null,
+ "artifact_error_message": null,
+ "warnings": [],
+ "length": {
+  "brief_length_target": "360 words",
+  "requested_words": 360,
+  "candidate_words": 306,
+  "assembled_block_words": 0,
+  "model_owned_block_words": 0,
+  "body_unchanged": true
+ },
+ "blocks": [],
+ "deterministic": {
+  "candidate_present": true,
+  "candidate_protected_passages_preserved": 3,
+  "candidate_forbidden_literal_hits": [],
+  "excerpt_revision_support_violations": [],
+  "body_unchanged": true,
+  "protected_passages_total": 3,
+  "protected_passages_preserved": 3,
+  "duplicate_comment_signatures": 0,
+  "real_run_id_present": true,
+  "missed_seeded_issues": null,
+  "unsupported_rewrites": null,
+  "unrelated_candidate_edits": null,
+  "citation_support": null,
+  "seed_metrics_note": "Semantic measures await independent/human review."
+ },
+ "assembled_proposal": "# Leave room for the repaired bowl\n\n## Position\n\nI like the cracked blue bowl more than the polished pieces beside it. Its label says the maker repaired it twice, which is a better invitation to look closely than another date in bold type. That preference is why I am wary of treating a museum label as a machine for delivering facts. Visitors should be able to find the basics, but I do not want clarity to become an excuse for sanding the objects smooth. This memo asks whether a small layout change deserves a longer trial, not whether stories should give way to checklists.\n\n## Evidence\n\nIn the classroom session, 27 of 36 participants located the accession number within 30 seconds. The exercise did not measure understanding of the collection or retention of object histories [@lyra:1]. No question about the maker, repairs, collection history, or interpretation was asked [@lyra:2]. Locating a number is useful, but it is not the same task as explaining why a repaired bowl matters. I also do not know how these participants would have done with the old layout. I want a label that opens a door, not one that hustles people through it. The evaluation should help me ask a narrower question without making the number disappear just because it is inconvenient to explain.\n\n## Recommendation\n\nMy recommendation is to keep both label versions for a short comparison before replacing the gallery labels. I would ask visitors what they noticed as well as whether they found the accession number. A fast answer can be useful without being the only answer worth collecting. The bowl's repairs should still have room in the story. That is the part of the proposal I am least willing to trade away, even if a cleaner spreadsheet would be easier to present at the committee meeting.\n",
+ "candidate": "# Leave room for the repaired bowl\n\n## Position\n\nI like the cracked blue bowl more than the polished pieces beside it. Its label says the maker repaired it twice, which is a better invitation to look closely than another date in bold type. That preference is why I am wary of treating a museum label as a machine for delivering facts. Visitors should be able to find the basics, but I do not want clarity to become an excuse for sanding the objects smooth. This memo asks whether a small layout change deserves a longer trial, not whether stories should give way to checklists.\n\n## Evidence\n\nIn the classroom session, 27 of 36 participants located the accession number within 30 seconds. The exercise did not measure understanding of the collection or retention of object histories [@lyra:1]. No question about the maker, repairs, collection history, or interpretation was asked [@lyra:2]. Locating a number is useful, but it is not the same task as explaining why a repaired bowl matters. I also do not know how these participants would have done with the old layout. I want a label that opens a door, not one that hustles people through it. The evaluation should help me ask a narrower question without making the number disappear just because it is inconvenient to explain.\n\n## Recommendation\n\nMy recommendation is to keep both label versions for a short comparison before replacing the gallery labels. I would ask visitors what they noticed as well as whether they found the accession number. A fast answer can be useful without being the only answer worth collecting. The bowl's repairs should still have room in the story. That is the part of the proposal I am least willing to trade away, even if a cleaner spreadsheet would be easier to present at the committee meeting.\n"
+}

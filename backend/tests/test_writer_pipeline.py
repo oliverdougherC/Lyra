@@ -229,11 +229,14 @@ def test_a_durable_full_pass_uses_fixed_paragraph_stages_and_never_writes_the_do
             None,
         )
         streamed_jobs.append((str(block["stable_key"]), rendered, previous))
+        # Three words per repetition, sized to land at the block's budget: a model
+        # obeying "write about N words" lands in budget, not three times over it.
+        repeats = max(1, int(block["target_words"]) // 3)
         return live_drafts.append_block_text(
             conn,
             suggestion_id,
             str(block["stable_key"]),
-            f"Paragraph {block['paragraph_ordinal']} prose. " * int(block["target_words"]),
+            f"Paragraph {block['paragraph_ordinal']} prose. " * repeats,
             status="complete",
         )
 
@@ -321,6 +324,301 @@ def test_a_durable_full_pass_uses_fixed_paragraph_stages_and_never_writes_the_do
     pending = suggestions.pending_for_part(db, part_id)
     assert pending is not None
     assert "Paragraph 3 prose." in str(pending["proposed_content"])
+    # A draft that lands in its budget attaches no length warning.
+    run_row = writer_runs.get_run(db, int(run["id"]))
+    assert not [w for w in run_row["warnings"] if w["code"] == "length_overshoot"]
+
+
+def _live_essay_setup(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    length_target: str,
+) -> tuple[int, int, int]:
+    """A durable live pass: one brief, one two-section plan, one run, no research."""
+    artifact_id, part_id = _draft(db, class_id, content="My notes stay editable.\n")
+    briefs.save_brief(
+        db,
+        artifact_id,
+        summary="Explain why pendulum period depends on length.",
+        length_target=length_target,
+    )
+    writer_plans.create_plan(
+        db,
+        artifact_id,
+        brief_analysis='{"assignment_type":"essay","task":"explain","success_criteria":[]}',
+        thesis="A pendulum's period is controlled by its length.",
+        argument_map=[{"id": "c1", "claim": "Length changes period", "supports": []}],
+        sections=[
+            {
+                "section_ref": "1.1",
+                "ordinal": 0,
+                "title": "Introduction",
+                "job": "Frame the question and thesis.",
+                "claim": "Length is the key variable.",
+                "evidence": [],
+                "source_ids": [],
+                "word_budget": 320,
+            },
+            {
+                "section_ref": "1.2",
+                "ordinal": 1,
+                "title": "Explanation",
+                "job": "Explain the physical relationship.",
+                "claim": "A longer pendulum has a longer period.",
+                "evidence": [],
+                "source_ids": [],
+                "word_budget": 380,
+            },
+        ],
+    )
+    run = writer_runs.create_run(
+        db,
+        artifact_id,
+        writer_runs.PASS,
+        "quick",
+        request={},
+        started_at="2026-08-07T00:00:00+00:00",
+    )
+    db.commit()
+    monkeypatch.setattr(writer_pipeline, "_prepare_research_batch", lambda *args, **kwargs: [])
+    return artifact_id, part_id, int(run["id"])
+
+
+def _live_essay_model_script(model: _StubModel) -> None:
+    """Two outline jobs, one transition review, one clean document review."""
+    model.script = [
+        json.dumps(
+            {
+                "paragraphs": [
+                    {
+                        "key": "intro-1",
+                        "purpose": "Open with the question.",
+                        "claim": "Length matters.",
+                        "evidence": [],
+                        "target_words": 320,
+                        "transition_in": "Open the paper.",
+                        "transition_out": "Move to the mechanism.",
+                    }
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "paragraphs": [
+                    {
+                        "key": "explain-1",
+                        "purpose": "Explain the mechanism.",
+                        "claim": "Longer length increases period.",
+                        "evidence": [],
+                        "target_words": 380,
+                        "transition_in": "Develop the thesis.",
+                        "transition_out": "Close the explanation.",
+                    }
+                ]
+            }
+        ),
+        '{"needs_change":false,"rationale":"clear","revised_next_paragraph":"x"}',
+        '{"summary":"The chunk is coherent.","issues":[]}',
+    ]
+
+
+def _oversize_paragraph_replier(
+    conn: sqlite3.Connection,
+    job: writer_pipeline.PassJob,
+    config: TutorConfig,
+    suggestion_id: int,
+    block: dict[str, object],
+    messages: list[dict[str, str]],
+) -> dict[str, object]:
+    # The model ignores the budget and writes three words per budgeted word.
+    return live_drafts.append_block_text(
+        conn,
+        suggestion_id,
+        str(block["stable_key"]),
+        f"Paragraph {block['paragraph_ordinal']} prose. " * int(block["target_words"]),
+        status="complete",
+    )
+
+
+def _in_budget_paragraph_replier(
+    conn: sqlite3.Connection,
+    job: writer_pipeline.PassJob,
+    config: TutorConfig,
+    suggestion_id: int,
+    block: dict[str, object],
+    messages: list[dict[str, str]],
+) -> dict[str, object]:
+    # Three words per repetition, sized to land at the block's budget.
+    repeats = max(1, int(block["target_words"]) // 3)
+    return live_drafts.append_block_text(
+        conn,
+        suggestion_id,
+        str(block["stable_key"]),
+        f"Paragraph {block['paragraph_ordinal']} prose. " * repeats,
+        status="complete",
+    )
+
+
+def test_a_live_draft_over_the_requested_length_finalizes_with_a_durable_length_warning(
+    db: sqlite3.Connection, class_id: int, model: _StubModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An over-length proposal is still a usable draft: warn, don't withhold.
+
+    An approximate length target is not permission to fail the whole pass: the
+    complete reviewable proposal still finalizes as a pending edit, and the run keeps
+    a durable warning that states the actual and requested words so the student can
+    review or shorten it before accepting.
+    """
+    artifact_id, part_id, run_id = _live_essay_setup(
+        db, class_id, monkeypatch, length_target="700 words"
+    )
+    _live_essay_model_script(model)
+    monkeypatch.setattr(writer_pipeline, "_stream_live_paragraph", _oversize_paragraph_replier)
+
+    writer_pipeline.run_pass(writer_pipeline.PassJob(artifact_id, depth="quick", run_id=run_id))
+
+    assert _body(db, part_id) == "My notes stay editable.\n"
+    live = live_drafts.get_live_suggestion_for_run(db, run_id)
+    assert live is not None
+    assert live["stage"] == "completed"
+    assert live["status"] == "ready"
+    # The complete proposal is delivered as a reviewable edit, not withheld.
+    pending = suggestions.pending_for_part(db, part_id)
+    assert pending is not None
+    assert "Paragraph 1 prose." in str(pending["proposed_content"])
+    # The warning is durable on the run and states actual and requested words.
+    run_row = writer_runs.get_run(db, run_id)
+    assert run_row["status"] == "completed"
+    warnings = [w for w in run_row["warnings"] if w["code"] == "length_overshoot"]
+    assert len(warnings) == 1
+    assert (
+        warnings[0]["message"] == "The assembled draft runs 2100 words against a requested 700. "
+        "Review or shorten it before accepting."
+    )
+
+
+def test_a_live_draft_that_fits_the_requested_length_finalizes_without_a_length_warning(
+    db: sqlite3.Connection, class_id: int, model: _StubModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Within the band the draft finalizes with no length warning attached."""
+    artifact_id, part_id, run_id = _live_essay_setup(
+        db, class_id, monkeypatch, length_target="700 words"
+    )
+    _live_essay_model_script(model)
+    monkeypatch.setattr(writer_pipeline, "_stream_live_paragraph", _in_budget_paragraph_replier)
+
+    writer_pipeline.run_pass(writer_pipeline.PassJob(artifact_id, depth="quick", run_id=run_id))
+
+    live = live_drafts.get_live_suggestion_for_run(db, run_id)
+    assert live is not None
+    assert live["stage"] == "completed"
+    assert live["status"] == "ready"
+    pending = suggestions.pending_for_part(db, part_id)
+    assert pending is not None
+    run_row = writer_runs.get_run(db, run_id)
+    assert run_row["status"] == "completed"
+    assert not [w for w in run_row["warnings"] if w["code"] == "length_overshoot"]
+
+
+def test_a_live_draft_without_a_requested_length_finalizes_regardless_of_words(
+    db: sqlite3.Connection, class_id: int, model: _StubModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No explicit student length means no length contract: no warning, even if long.
+
+    The plan's word budgets are the model's own planning numbers, not a student
+    requirement. A stale warning from an earlier pass is cleared on the no-target
+    path so it cannot survive as a false alarm.
+    """
+    artifact_id, part_id, run_id = _live_essay_setup(db, class_id, monkeypatch, length_target="")
+    _live_essay_model_script(model)
+    monkeypatch.setattr(writer_pipeline, "_stream_live_paragraph", _oversize_paragraph_replier)
+    writer_runs.add_warning(
+        db,
+        run_id,
+        code=writer_runs.LIVE_LENGTH_WARNING,
+        message="A stale warning from an earlier pass.",
+    )
+
+    writer_pipeline.run_pass(writer_pipeline.PassJob(artifact_id, depth="quick", run_id=run_id))
+
+    assert _body(db, part_id) == "My notes stay editable.\n"
+    live = live_drafts.get_live_suggestion_for_run(db, run_id)
+    assert live is not None
+    assert live["stage"] == "completed"
+    assert live["status"] == "ready"
+    pending = suggestions.pending_for_part(db, part_id)
+    assert pending is not None
+    assert "Paragraph 2 prose." in str(pending["proposed_content"])
+    run_row = writer_runs.get_run(db, run_id)
+    assert run_row["status"] == "completed"
+    assert not [w for w in run_row["warnings"] if w["code"] == "length_overshoot"]
+
+
+def test_a_user_edited_block_is_preserved_and_counts_toward_the_length_warning(
+    db: sqlite3.Connection, class_id: int, model: _StubModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The draft's word count is the whole assembled draft, student edits included.
+
+    The student's own words are not a reason to lose the draft or to measure only the
+    model's half of it: the edit is preserved exactly in the reviewable proposal and
+    counts toward the honest assembled length the warning reports.
+    """
+    artifact_id, part_id, run_id = _live_essay_setup(
+        db, class_id, monkeypatch, length_target="700 words"
+    )
+    _live_essay_model_script(model)
+    # 401 exact words: the student's own replacement of the first paragraph.
+    student_edit = "I kept my own words here. " + "Replaced " * 395
+
+    def editing_paragraph(
+        conn: sqlite3.Connection,
+        job: writer_pipeline.PassJob,
+        config: TutorConfig,
+        suggestion_id: int,
+        block: dict[str, object],
+        messages: list[dict[str, str]],
+    ) -> dict[str, object]:
+        result = _in_budget_paragraph_replier(conn, job, config, suggestion_id, block, messages)
+        if block["stable_key"] == "1.2:p1":
+            # The student rewrites the first paragraph while the pass continues.
+            blocks = live_drafts.get_live_suggestion(conn, suggestion_id)["blocks"]
+            first = next(b for b in blocks if b["stable_key"] == "1.1:p1")
+            live_drafts.patch_block(
+                conn,
+                int(first["id"]),
+                expected_revision=int(first["revision"]),
+                content=student_edit,
+            )
+        return result
+
+    monkeypatch.setattr(writer_pipeline, "_stream_live_paragraph", editing_paragraph)
+
+    writer_pipeline.run_pass(writer_pipeline.PassJob(artifact_id, depth="quick", run_id=run_id))
+
+    assert _body(db, part_id) == "My notes stay editable.\n"
+    live = live_drafts.get_live_suggestion_for_run(db, run_id)
+    assert live is not None
+    assert live["stage"] == "completed"
+    assert live["status"] == "ready"
+    # The student's words survive exactly in the block...
+    first = next(b for b in live["blocks"] if b["stable_key"] == "1.1:p1")
+    assert str(first["content"]) == student_edit
+    assert int(first["user_revision"]) > 0
+    # ...and the draft is still delivered as a reviewable edit.
+    pending = suggestions.pending_for_part(db, part_id)
+    assert pending is not None
+    assert student_edit.strip() in str(pending["proposed_content"])
+    # Model words (318 + 378); the student's 401-word replacement makes the whole
+    # draft 779, over the 770 band: the warning reports the assembled count, not
+    # the model's half of it.
+    run_row = writer_runs.get_run(db, run_id)
+    warnings = [w for w in run_row["warnings"] if w["code"] == "length_overshoot"]
+    assert len(warnings) == 1
+    assert (
+        warnings[0]["message"] == "The assembled draft runs 779 words against a requested 700. "
+        "Review or shorten it before accepting."
+    )
 
 
 def test_an_empty_draft_becomes_a_skeleton_and_then_a_full_document(

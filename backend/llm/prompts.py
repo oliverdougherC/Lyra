@@ -1956,7 +1956,8 @@ def build_paragraph_draft_prompt(
         f"Global document map:\n{document_map}",
         f"Section plan:\n{section_plan}",
         f"This paragraph's fixed job:\n{paragraph_plan}",
-        f"Write about {target_words} words. Write one paragraph only.",
+        f"Write about {target_words} words, staying within 10 percent of that budget. "
+        "Write one paragraph only.",
     ]
     if research_block:
         context.append(f"Research for this paragraph:\n{research_block}")
@@ -1981,7 +1982,16 @@ def build_paragraph_draft_prompt(
                 "outline, notes, preface, or explanation. Establish the paragraph's "
                 "relationship to the preceding idea through meaning, not a generic "
                 "transition phrase. Do not perform work assigned to later paragraphs. "
-                "Do not plan or reason about the job; begin the paragraph immediately."
+                "Do not plan or reason about the job; begin the paragraph immediately. "
+                "State historical or factual claims only where the supplied sources "
+                "establish them: do not extend a source's sample, group, or measurements "
+                "to a broader population than the source describes, and do not present "
+                "an unmeasured effect or population as already measured. Clearly labeled "
+                "proposals - a next step, a method to try, a survey to run - are the "
+                "student's own recommendations and may be stated, and the student's own "
+                "stated experiences and stance may be used as the notes give them; no "
+                "personal experience may be invented. A missing measurement is not "
+                "evidence that an effect or population is absent."
             ),
         },
         {"role": "user", "content": "/no_think\n\n" + "\n\n".join(context)},

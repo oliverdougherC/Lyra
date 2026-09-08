@@ -1,0 +1,105 @@
+{
+ "evidence_version": 2,
+ "workstream": "PLA-153 local implementation",
+ "date": "2026-09-08",
+ "scope": "Grounded full-draft quality and instruction adherence in the writer live-drafting pipeline (PLA-153).",
+ "baseline_source": {
+  "git_sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+  "note": "Current origin/main baseline; prior prompt/transport/recovery fixes already integrated. Suite on this pristine tree: 3508 passed, 1 skipped (independently re-run on the baseline source). The 3379-passed count cited in docs/writer-semantic-followup.md is the historical count of the earlier e2857f6 candidate, not of current main."
+ },
+ "source_states": [
+  {
+   "label": "baseline",
+   "note": "Pristine 07ad451 working tree.",
+   "backend_source_sha256": "b247cfb86a78f99ae9d15929a59d8c284da6f19c2a2f400da013b9f7e40641f0",
+   "prompt_sha256": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6"
+  },
+  {
+   "label": "intermediate",
+   "note": "First revision (superseded): hard-fail total-length guard plus overbroad scope contract. Retained as history, not replaced. This run settled the over-length case failed and withheld the pending edit; the retained partial's full prose is in the compact record.",
+   "backend_source_sha256": "9eee1d3d951bc3413cec786893b9c0dfb32e7b07c86e5d9173a5fcf68e19d8aa",
+   "prompt_sha256": "9d9946f07ecca8f28747c3900150b78a68f11f83b2ed9a52805a6d446dbc1d20"
+  },
+  {
+   "label": "after",
+   "note": "Final revised working tree (uncommitted; no commit made). Durable whole-draft length warning plus revised scope contract. Suite on this tree: 3513 passed, 1 skipped (3508 baseline plus 5 net-new tests).",
+   "backend_source_sha256": "42aa8af8062b6547ddfd628c5e147099ef3ce0fd83829ecae1004d4bbc72929d",
+   "prompt_sha256": "387377fc1d78026c8fd72ea88ebc638dca6f06999bbecf01a9a4d5cbe4ccd9bb"
+  }
+ ],
+ "model": {
+  "label": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "note": "Endpoint settings read from an existing configuration; only the locality class, model label, and context window are recorded here. No endpoint URL, key, or profile data appears in this evidence."
+ },
+ "corpora": {
+  "writer_quality.v1.json": {
+   "sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+   "synthetic_only": true
+  },
+  "writer_semantic_holdout.v1.json": {
+   "sha256": "3f7c629d775412f84fedbf31c4b960222721030f72327c59a1f6ddb0496fd34b",
+   "synthetic_only": true
+  }
+ },
+ "runs": [
+  {
+   "label": "baseline/full_live_draft_from_student_notes",
+   "case": "full_live_draft_from_student_notes",
+   "corpus": "scripts/eval_corpora/writer_quality.v1.json",
+   "scenario": "uninterrupted",
+   "source": "baseline",
+   "harness": "scripts/eval_writer.py",
+   "timeout_seconds": 630
+  },
+  {
+   "label": "baseline/holdout_museum_label_revision",
+   "case": "holdout_museum_label_revision",
+   "corpus": "scripts/eval_corpora/writer_semantic_holdout.v1.json",
+   "scenario": "uninterrupted",
+   "source": "baseline",
+   "harness": "scripts/eval_writer.py",
+   "timeout_seconds": 630
+  },
+  {
+   "label": "intermediate/full_live_draft_failed_guard",
+   "case": "full_live_draft_from_student_notes",
+   "corpus": "scripts/eval_corpora/writer_quality.v1.json",
+   "scenario": "uninterrupted",
+   "source": "intermediate",
+   "harness": "scripts/eval_writer.py",
+   "timeout_seconds": 630,
+   "note": "First-revision hard guard settled this run failed; the retained partial and its error message are recorded in the compact JSON, including the full assembled proposal text derived from the preserved blocks."
+  },
+  {
+   "label": "intermediate/holdout_museum_label_revision",
+   "case": "holdout_museum_label_revision",
+   "corpus": "scripts/eval_corpora/writer_semantic_holdout.v1.json",
+   "scenario": "uninterrupted",
+   "source": "intermediate",
+   "harness": "scripts/eval_writer.py",
+   "timeout_seconds": 630
+  },
+  {
+   "label": "after/full_live_draft_from_student_notes",
+   "case": "full_live_draft_from_student_notes",
+   "corpus": "scripts/eval_corpora/writer_quality.v1.json",
+   "scenario": "uninterrupted",
+   "source": "after",
+   "harness": "scripts/eval_writer.py",
+   "timeout_seconds": 630,
+   "note": "Final revised source: run completed with the durable length_overshoot warning (535 words against a requested 320) and a reviewable 539-word pending edit."
+  },
+  {
+   "label": "after/holdout_museum_label_revision",
+   "case": "holdout_museum_label_revision",
+   "corpus": "scripts/eval_corpora/writer_semantic_holdout.v1.json",
+   "scenario": "uninterrupted",
+   "source": "after",
+   "harness": "scripts/eval_writer.py",
+   "timeout_seconds": 630
+  }
+ ],
+ "evidence_policy": "Compact JSONs are sanitized: no endpoint URLs, credentials, user paths, or profile data; locality is a class only. assembled_proposal is a faithful rendering of the preserved state (for live runs, the pipeline's own block rendering: heading dedupe plus mathnorm; for scoped runs, the pending proposal itself). Raw receipts remain in the out-of-repository evidence directory named in the workstream document."
+}
