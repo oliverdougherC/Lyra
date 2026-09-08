@@ -34,6 +34,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Desktop Migration Inventory](desktop-migration-inventory.md) | Historical record |
 | [Lyra desktop resource summary](desktop-runtime-summary.md) | Historical record |
 | [Distribution notices and license review](distribution-notices.md) | Maintained |
+| [Local writer quality — September 8, 2026](local-writer-quality-20260908.md) | Candidate evidence; length warning and unresolved semantic quality |
 | [Draft autosave concurrency (PLA-289)](draft-autosave-concurrency.md) | Maintained |
 | [Ex Libris: The Lyra Design System (Approved Brief)](exlibris-design-system.md) | Historical record |
 | [Ex Libris Migration: Component Inventory and Transition Plan](exlibris-migration.md) | Historical record |

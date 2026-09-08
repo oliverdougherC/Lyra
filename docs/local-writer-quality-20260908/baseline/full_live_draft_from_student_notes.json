@@ -1,0 +1,79 @@
+{
+ "evidence_kind": "compact-sanitized",
+ "note": "Derived from the raw case receipt in the retained output directory; all prose is synthetic corpus content. assembled_proposal is a faithful rendering of the preserved state: for live full-draft runs it is derived from the preserved blocks (heading dedupe plus mathnorm, identical to the pending proposal when one exists), and for scoped revision runs it is the pending proposal itself.",
+ "case_id": "full_live_draft_from_student_notes",
+ "scenario": "uninterrupted",
+ "run": {
+  "tested_sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+  "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "prompt_sha256": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6",
+  "backend_source_sha256": "b247cfb86a78f99ae9d15929a59d8c284da6f19c2a2f400da013b9f7e40641f0",
+  "model": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "runtime": "source_desktop_bootstrap"
+ },
+ "plan_mode": "corpus_seeded",
+ "case_status": "recorded",
+ "elapsed_seconds": 40.002,
+ "run_status": "completed",
+ "stage_detail": "The live draft suggestion is ready for review.",
+ "artifact_error_message": null,
+ "warnings": [],
+ "length": {
+  "brief_length_target": "320 words",
+  "requested_words": 320,
+  "candidate_words": 514,
+  "assembled_block_words": 510,
+  "model_owned_block_words": 510,
+  "body_unchanged": true
+ },
+ "blocks": [
+  {
+   "stable_key": "1:p1",
+   "status": "complete",
+   "words": 129,
+   "target_words": 80,
+   "user_revision": 0
+  },
+  {
+   "stable_key": "1:p2",
+   "status": "complete",
+   "words": 120,
+   "target_words": 80,
+   "user_revision": 0
+  },
+  {
+   "stable_key": "2:p1",
+   "status": "complete",
+   "words": 143,
+   "target_words": 80,
+   "user_revision": 0
+  },
+  {
+   "stable_key": "2:p2",
+   "status": "complete",
+   "words": 118,
+   "target_words": 80,
+   "user_revision": 0
+  }
+ ],
+ "deterministic": {
+  "candidate_present": true,
+  "candidate_protected_passages_preserved": 0,
+  "candidate_forbidden_literal_hits": [],
+  "excerpt_revision_support_violations": [],
+  "body_unchanged": true,
+  "protected_passages_total": 0,
+  "protected_passages_preserved": 0,
+  "duplicate_comment_signatures": 0,
+  "real_run_id_present": true,
+  "missed_seeded_issues": null,
+  "unsupported_rewrites": null,
+  "unrelated_candidate_edits": null,
+  "citation_support": null,
+  "seed_metrics_note": "Semantic measures await independent/human review."
+ },
+ "assembled_proposal": "## Evidence\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. The observed boardings support further investigation, not a causal conclusion. Week A recorded 160 boardings, while week B recorded 240 boardings [@lyra:1]. These figures count trips, not unique people, so repeated events do not establish the number of distinct students who rode. No attendance data were collected during either week [@lyra:1]. Because the weeks differed in academic schedule and the pilot was not randomized, the increase in trip volume cannot be attributed to a change in student attendance. I want the memo to admit that this is my starting point. It is not a campus-wide survey. I should not make a number answer a question it was never asked.\n\nBeyond the boarding counts, the survey data carry their own limits. Eighteen voluntary responses came from students already riding the shuttle, and non-riders were not surveyed [@lyra:2]. These responses describe the experiences of the 18 respondents, but they cannot establish how much of the broader student population rejected the service or why they chose to walk. A voluntary sample drawn only from users does not reveal the preferences of those excluded from the experience. The gap is not merely missing data; it is a missing population. I want the committee to hear from students who stand at the gate and leave, not only from those who board. Without their input, the pilot’s reach remains an inference rather than a measurement.\n\n## Recommendation\n\nBecause the pilot has not yet demonstrated that the shuttle resolves the access barrier, I recommend extending it for one term rather than expanding or terminating it now. This continuation serves a diagnostic purpose: it preserves the operational window while the committee gathers the missing evidence. The prior weeks’ boardings—160 in week A and 240 in week B [@lyra:1]—suggest usage occurred, but they do not prove the service succeeded in changing how students reach campus. No attendance data were collected during the pilot [@lyra:1], and the survey responses, limited to voluntary riders, cannot establish demand across all students [@lyra:2]. Therefore, the extension is conditional on our ability to measure who is excluded, not on an assumption that the current riders represent the whole. We keep the shuttle running so that the next term’s data can address the gap the first term left open.\n\nTo measure that exclusion, we need to hear from non-riders, not just the people already on the bus [@lyra:2]. The previous survey’s responses describe these respondents and cannot establish demand across all students [@lyra:2]. A feasible next step is to pair the boarding count with a brief, anonymous check-in at the east gate asking students who are walking why they did not board. This captures barriers directly from those who skipped the ride. We should not invent cost or emissions figures that were not collected [@lyra:2]. I remain uncertain whether the shuttle will work for most students, but a simple gate survey offers a concrete way to find out without assuming the current riders represent the whole campus.\n",
+ "candidate": "## Evidence\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. The observed boardings support further investigation, not a causal conclusion. Week A recorded 160 boardings, while week B recorded 240 boardings [@lyra:1]. These figures count trips, not unique people, so repeated events do not establish the number of distinct students who rode. No attendance data were collected during either week [@lyra:1]. Because the weeks differed in academic schedule and the pilot was not randomized, the increase in trip volume cannot be attributed to a change in student attendance. I want the memo to admit that this is my starting point. It is not a campus-wide survey. I should not make a number answer a question it was never asked.\n\nBeyond the boarding counts, the survey data carry their own limits. Eighteen voluntary responses came from students already riding the shuttle, and non-riders were not surveyed [@lyra:2]. These responses describe the experiences of the 18 respondents, but they cannot establish how much of the broader student population rejected the service or why they chose to walk. A voluntary sample drawn only from users does not reveal the preferences of those excluded from the experience. The gap is not merely missing data; it is a missing population. I want the committee to hear from students who stand at the gate and leave, not only from those who board. Without their input, the pilot’s reach remains an inference rather than a measurement.\n\n## Recommendation\n\nBecause the pilot has not yet demonstrated that the shuttle resolves the access barrier, I recommend extending it for one term rather than expanding or terminating it now. This continuation serves a diagnostic purpose: it preserves the operational window while the committee gathers the missing evidence. The prior weeks’ boardings—160 in week A and 240 in week B [@lyra:1]—suggest usage occurred, but they do not prove the service succeeded in changing how students reach campus. No attendance data were collected during the pilot [@lyra:1], and the survey responses, limited to voluntary riders, cannot establish demand across all students [@lyra:2]. Therefore, the extension is conditional on our ability to measure who is excluded, not on an assumption that the current riders represent the whole. We keep the shuttle running so that the next term’s data can address the gap the first term left open.\n\nTo measure that exclusion, we need to hear from non-riders, not just the people already on the bus [@lyra:2]. The previous survey’s responses describe these respondents and cannot establish demand across all students [@lyra:2]. A feasible next step is to pair the boarding count with a brief, anonymous check-in at the east gate asking students who are walking why they did not board. This captures barriers directly from those who skipped the ride. We should not invent cost or emissions figures that were not collected [@lyra:2]. I remain uncertain whether the shuttle will work for most students, but a simple gate survey offers a concrete way to find out without assuming the current riders represent the whole campus.\n"
+}
