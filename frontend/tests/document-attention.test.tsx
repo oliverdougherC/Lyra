@@ -150,10 +150,12 @@ describe('document attention arrival', () => {
 
     const filter = await screen.findByRole('searchbox', { name: 'Filter documents by name' })
     expect(filter).toHaveValue('homework')
-    // The stored filter hides lecture-1.pdf; the arrival clears it so the row can stand.
+    // The stored filter hides lecture-1.pdf; the arrival borrows a clearing so the row can
+    // stand - without ever writing to the stored filter, which must survive the visit.
     await waitFor(() => expect(filter).toHaveValue(''))
     await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-41')))
     expect(screen.getByRole('group', { name: /1 of 2/ })).toBeInTheDocument()
+    expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
 
     // Dismiss ends the visit: the anchor leaves the URL and the filter comes back.
     await user.click(screen.getByRole('button', { name: 'Dismiss documents that need attention' }))
@@ -288,5 +290,159 @@ describe('document attention arrival', () => {
     await Promise.resolve()
     expect(scrollIntoView.mock.calls.length).toBe(jumpsBefore)
     expect(document.activeElement).toBe(document.getElementById('document-41'))
+  })
+
+  it('keeps the student filter across pane unmount, tab remount, and reload', async () => {
+    sessionStorage.setItem('lyra:class:1:files-query', 'homework')
+    resetLocation('/#/classes/1?tab=files&lyra-anchor=document-41')
+
+    const client = createQueryClient()
+    const view = renderPane(client)
+    const filter = await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    await waitFor(() => expect(filter).toHaveValue(''))
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-41')))
+    // The stored filter is untouched while the visit borrows its clearing.
+    expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
+
+    // Leaving the Files tab (or going Back) unmounts the pane entirely.
+    view.unmount()
+    expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
+
+    // Coming back to the same route remounts it: the visit resumes from the URL, and the
+    // student's filter is still there to borrow.
+    const tabBack = renderPane(client)
+    await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-41')))
+    expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
+    tabBack.unmount()
+
+    // Reloading the page mid-visit (fresh app, same URL) behaves the same: the stored
+    // filter has never been overwritten by the visit, so it is there when it is needed.
+    const reloadView = renderPane(createQueryClient())
+    await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-41')))
+    expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
+    reloadView.unmount()
+
+    // The visit ends (the anchor is gone), and the pane returns to the student's filter.
+    resetLocation('/#/classes/1?tab=files')
+    const settled = renderPane(client)
+    const settledFilter = await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    expect(settledFilter).toHaveValue('homework')
+    expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
+    settled.unmount()
+  })
+
+  // A class with three affected documents in list order: lecture-1 (41), homework_2 (3),
+  // scan-1 (7). Used to watch a poll change the standing target under an unchanged
+  // navigation.
+  const THREE_ATTENTION: DocumentRead[] = DOCUMENTS.map((document) =>
+    document.id === 3
+      ? {
+          ...document,
+          state: 'failed' as DocumentState,
+          pages_failed: 1,
+          error_message: 'Lyra could not finish reading this document. Retry it.',
+        }
+      : document,
+  )
+
+  it('keeps the strip and visible target consistent when a poll resolves the standing row, without moving focus', async () => {
+    const user = userEvent.setup()
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
+    vi.mocked(api.listDocuments).mockResolvedValue(THREE_ATTENTION)
+    resetLocation('/#/classes/1?tab=files&lyra-anchor=document-41')
+    const client = createQueryClient()
+    renderPane(client)
+
+    // Arrival: standing on lecture-1, first of three.
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-41')))
+    expect(screen.getByRole('group', { name: /1 of 3/ })).toBeInTheDocument()
+
+    // The student moves the keyboard to the filter; from here on it is theirs.
+    const filter = await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    await user.click(filter)
+    expect(document.activeElement).toBe(filter)
+    const jumpsBefore = scrollIntoView.mock.calls.length
+
+    // A poll resolves lecture-1 while the visit stands on it (same navigation, new data).
+    client.setQueryData(
+      ['documents', 1],
+      THREE_ATTENTION.map((document) =>
+        document.id === 41 ? { ...document, state: 'ready' as DocumentState } : document,
+      ),
+    )
+
+    // The strip, the visible target, and the live region follow the next live item...
+    await waitFor(() =>
+      expect(
+        screen.getByRole('group', { name: /Documents that need attention, 1 of 2/ }).textContent,
+      ).toContain('homework_2.pdf'),
+    )
+    expect(
+      screen.getByText(/Now standing on homework_2\.pdf\. 2 documents need attention\./),
+    ).toBeInTheDocument()
+    expect((document.getElementById('document-3') as HTMLElement).className).toContain(
+      'ring-accent-primary',
+    )
+    expect((document.getElementById('document-41') as HTMLElement).className).not.toContain(
+      'ring-accent-primary',
+    )
+    // ...but the keyboard stays where the student put it: no focus move, no scroll.
+    expect(document.activeElement).toBe(filter)
+    expect(scrollIntoView.mock.calls.length).toBe(jumpsBefore)
+
+    // An explicit step performs the full reveal on the next live target.
+    await user.click(screen.getByRole('button', { name: 'Next document that needs attention' }))
+    await waitFor(() =>
+      expect(window.location.hash).toBe('#/classes/1?tab=files&lyra-anchor=document-7'),
+    )
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-7')))
+    expect(screen.getByRole('group', { name: /2 of 2/ })).toBeInTheDocument()
+    expect(
+      screen.getByText(/Jumped to scan-1\.pdf\. 2 documents need attention\./),
+    ).toBeInTheDocument()
+  })
+
+  it('lands on the remaining live target when a poll deletes the standing row, and an explicit step reveals it', async () => {
+    const user = userEvent.setup()
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
+    vi.mocked(api.listDocuments).mockResolvedValue(THREE_ATTENTION)
+    resetLocation('/#/classes/1?tab=files&lyra-anchor=document-41')
+    const client = createQueryClient()
+    renderPane(client)
+
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-41')))
+    const filter = await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    await user.click(filter)
+    expect(document.activeElement).toBe(filter)
+    const jumpsBefore = scrollIntoView.mock.calls.length
+
+    // The anchored document is deleted out from under the standing visit.
+    client.setQueryData(
+      ['documents', 1],
+      THREE_ATTENTION.filter((document) => document.id !== 41),
+    )
+
+    // The visit stands on the next live item, and the URL keeps naming the place it meant.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('group', { name: /Documents that need attention, 1 of 2/ }).textContent,
+      ).toContain('homework_2.pdf'),
+    )
+    expect(
+      screen.getByText(/Now standing on homework_2\.pdf\. 2 documents need attention\./),
+    ).toBeInTheDocument()
+    expect(document.activeElement).toBe(filter)
+    expect(scrollIntoView.mock.calls.length).toBe(jumpsBefore)
+    expect(window.location.hash).toBe('#/classes/1?tab=files&lyra-anchor=document-41')
+
+    // An explicit step stands on the next live target with the full reveal.
+    await user.click(screen.getByRole('button', { name: 'Next document that needs attention' }))
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById('document-7')))
+    expect(screen.getByRole('group', { name: /2 of 2/ })).toBeInTheDocument()
+    expect(
+      screen.getByText(/Jumped to scan-1\.pdf\. 2 documents need attention\./),
+    ).toBeInTheDocument()
   })
 })

@@ -11,11 +11,20 @@ import type { DocumentRead } from '@/types'
 const HIGHLIGHT_MS = 2600
 
 /**
- * The bounded reveal state one arrival produces. The list polls while anything in it is
- * mid-ingestion, so a reveal must happen exactly once per navigation, not once per poll:
- * the remembered keys keep a busy class from re-focusing a row the student has already
- * seen, which would read as the app yanking their attention every two seconds.
+ * The bounded reveal state one navigation produces. The list polls while anything in it is
+ * mid-ingestion, so the arrival must happen exactly once per navigation: the single current
+ * navigation record keeps a busy class from re-focusing a row the student has already seen,
+ * which would read as the app yanking their attention every two seconds.
  */
+type RevealRecord = {
+  /** The navigation (and anchor) this record belongs to; a new one replaces it whole. */
+  navKey: string
+  /** The target this record has been made consistent with. */
+  targetId: number | null
+  /** Keyboard focus has been moved to the row once under this navigation. */
+  focused: boolean
+}
+
 type DocumentAttention = {
   /** A document attention anchor is active on this route. */
   active: boolean
@@ -31,6 +40,12 @@ type DocumentAttention = {
   announcement: string | null
   /** The navigation that produced the current arrival, for re-announcing it. */
   navigationVersion: number
+  /**
+   * The filter the pane should show and apply right now: '' while this visit borrows a
+   * clearing of the student's filter (the original is untouched - the pane's own state and
+   * its session-storage copy still hold it), otherwise null and the pane's filter applies.
+   */
+  filterOverride: '' | null
   /** Step to the previous/next attention item (wrapping), landing on its row. */
   step: (direction: -1 | 1) => void
   /** End the visit: the anchor leaves the URL and the list returns to itself. */
@@ -40,23 +55,20 @@ type DocumentAttention = {
 /**
  * The "needs attention" half of the shared navigation contract, on the document list.
  *
- * Arriving with a `document-N` anchor, the pane stands on the exact row: it clears a
- * filter that would hide the row (restoring it when the visit ends), scrolls the row into
- * view, moves focus to it, and announces the arrival. Multi-item visits step through the
- * affected documents in list order, one history entry at a time, so Back walks them back.
- * A row that resolved or was deleted in the meantime is handled rather than hunted for:
- * the visit lands on the next item that still needs attention, or says plainly that the
- * document is gone.
- *
- * `filter` and `setFilter` are the pane's own search state: the reveal borrows a clearing
- * of it for the duration of the visit and gives it back on the way out, which is what
- * "the list's state cannot hide the target, and return restores it" means in practice.
+ * Arriving with a `document-N` anchor, the pane stands on the exact row: it temporarily
+ * hides a filter that would hide the row (the pane's own filter state - and its session
+ * storage - is never written, so the original survives pane unmount, tab navigation,
+ * Back/Forward, and reload), scrolls the row into view, moves focus to it, and announces
+ * the arrival. Multi-item visits step through the affected documents in list order, one
+ * history entry at a time, so Back walks them back. A row that resolves or is deleted while
+ * the student stands on the list is handled rather than hunted for: the strip, the visible
+ * target, and the live region follow the next live item without moving keyboard focus, and
+ * an explicit step (or a new navigation) stands on the next live target with the full reveal.
  */
 export function useDocumentAttention(
   documents: DocumentRead[],
   loaded: boolean,
   filter: string,
-  setFilter: (value: string) => void,
 ): DocumentAttention {
   const router = useRouter()
   const routeAnchor = useRouteAnchor()
@@ -77,65 +89,89 @@ export function useDocumentAttention(
 
   const [highlightedId, setHighlightedId] = useState<number | null>(null)
   const [announcement, setAnnouncement] = useState<string | null>(null)
-  const revealedRef = useRef(new Set<string>())
-  const focusedRef = useRef(new Set<string>())
+  const [filterOverride, setFilterOverride] = useState<'' | null>(null)
+  const recordRef = useRef<RevealRecord | null>(null)
+  // The pane's filter when this visit borrowed its clearing, so a value the student types
+  // mid-visit can be recognised as their intent and takes over from the override.
+  const filterBaselineRef = useRef('')
   const highlightTimerRef = useRef<number | null>(null)
-  const filterBackupRef = useRef<string | null>(null)
+
+  const armHighlight = useCallback(() => {
+    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current)
+    highlightTimerRef.current = window.setTimeout(() => setHighlightedId(null), HIGHLIGHT_MS)
+  }, [])
 
   useEffect(() => {
+    const navKey = `${navigationVersion}:${anchorDocumentId}`
     if (!active || !loaded) {
       // The visit ended (the anchor cleared, another route owns it, or a tab change
-      // rewrote the URL): hand the filter back if this visit borrowed the clearing. A
-      // filter the student typed themselves is kept, because that is now their intent.
-      if (filterBackupRef.current !== null) {
-        if (filter === '') setFilter(filterBackupRef.current)
-        filterBackupRef.current = null
-      }
-      if (highlightTimerRef.current !== null) {
-        window.clearTimeout(highlightTimerRef.current)
-        highlightTimerRef.current = null
-      }
+      // rewrote the URL): drop the view state. The filter needs no restoration - this hook
+      // never wrote to it, so whatever is in the pane's state is what the student left.
+      recordRef.current = null
+      setFilterOverride(null)
       setHighlightedId(null)
       setAnnouncement(null)
       return
     }
 
     if (target === null) {
-      // The anchored document is here but no longer needs attention, and nothing else
-      // does either: the work was done while we were standing on it. End the visit
-      // quietly (a replace, not a push) rather than leaving a spent anchor in the URL.
+      // Nothing live to stand on.
+      recordRef.current = null
+      setFilterOverride(null)
+      setHighlightedId(null)
       if (anchored !== null) {
+        // The anchored document is here but no longer needs attention, and nothing else
+        // does either: the work was done while we were standing on it. End the visit
+        // quietly (a replace, not a push) rather than leaving a spent anchor in the URL.
         router.replaceAnchor(null)
+        setAnnouncement(null)
       } else {
         // A deleted anchor with nothing left to show is said once, the same way a missing
         // source anchor is, and left in the URL: the history entry still names the place.
         setAnnouncement('That document is no longer in this class.')
       }
-      setHighlightedId(null)
       return
     }
 
-    const revealKey = `${navigationVersion}:${anchorDocumentId}`
-    if (!revealedRef.current.has(revealKey)) {
-      revealedRef.current.add(revealKey)
-      // Bound the set: one entry per navigation, and a session's worth of steps is small.
-      if (revealedRef.current.size > 32) {
-        revealedRef.current = new Set([...revealedRef.current].slice(-16))
-      }
-      // Search state must not be allowed to hide an attention target.
+    if (filter !== filterBaselineRef.current) {
+      // The student typed during the visit (or the pane's filter otherwise changed under
+      // us): that is now their intent, and it takes over from the temporary clearing.
+      setFilterOverride(null)
+    }
+
+    if (recordRef.current?.navKey !== navKey) {
+      // A new navigation: the arrival (or a Back/Forward re-arrival). One full reveal for
+      // this navigation, and one record that bounds everything it produces.
+      recordRef.current = { navKey, targetId: target.id, focused: false }
+      // Search state must not be allowed to hide an attention target: show an unfiltered
+      // list for the visit without ever writing to the pane's own (persisted) filter.
       const query = filter.trim().toLowerCase()
-      if (query && !target.filename.toLowerCase().includes(query)) {
-        filterBackupRef.current = filter
-        setFilter('')
-      }
+      filterBaselineRef.current = filter
+      setFilterOverride(query && !target.filename.toLowerCase().includes(query) ? '' : null)
       setHighlightedId(target.id)
       setAnnouncement(
         attention.length === 1
           ? `Jumped to ${target.filename}. It needs attention.`
           : `Jumped to ${target.filename}. ${attention.length} documents need attention.`,
       )
-      if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current)
-      highlightTimerRef.current = window.setTimeout(() => setHighlightedId(null), HIGHLIGHT_MS)
+      armHighlight()
+      return
+    }
+
+    if (recordRef.current.targetId !== target.id) {
+      // The list changed under an unchanged navigation (a poll resolved or deleted the row
+      // we stand on): keep the strip, the visible target, and the live region consistent
+      // with the new live target. Deliberately no focus move and no scroll - a background
+      // refresh must not yank the keyboard from the student; an explicit step or a new
+      // navigation performs the full reveal.
+      recordRef.current = { ...recordRef.current, targetId: target.id }
+      setHighlightedId(target.id)
+      setAnnouncement(
+        attention.length === 1
+          ? `Now standing on ${target.filename}. It needs attention.`
+          : `Now standing on ${target.filename}. ${attention.length} documents need attention.`,
+      )
+      armHighlight()
     }
   }, [
     active,
@@ -146,28 +182,27 @@ export function useDocumentAttention(
     navigationVersion,
     anchorDocumentId,
     filter,
-    setFilter,
     router,
+    armHighlight,
   ])
 
   // Focus and scroll as a second stage: the row may not be in the DOM yet when the
   // arrival lands (the list still loading, or the filter clearing this very tick), so
-  // this effect retries as the list renders until the row exists. Once it stands on a
-  // row, the same row is never stood on twice for one navigation - a poll re-rendering
-  // the list must not re-steal focus.
+  // this effect retries as the list renders until the row exists. One focus per
+  // navigation - the record's `focused` flag is what keeps a poll, or a target swap within
+  // the same navigation, from re-stealing the keyboard.
   useEffect(() => {
-    if (highlightedId === null || !active || anchorDocumentId === null) return
-    const key = `${navigationVersion}:${anchorDocumentId}:${highlightedId}`
-    if (focusedRef.current.has(key)) return
-    const row = document.getElementById(documentRowId(highlightedId))
+    const record = recordRef.current
+    if (!active || record === null || record.focused || record.targetId === null) return
+    const row = document.getElementById(documentRowId(record.targetId))
     if (!row) return
-    focusedRef.current.add(key)
+    record.focused = true
     // Focusable exactly for programmatic arrival (tabIndex -1 on every row); focus moves
     // there, the list scrolls the row to the middle of the pane, and ordinary tab order
     // is untouched.
     row.focus({ preventScroll: true })
     row.scrollIntoView({ block: 'center' })
-  }, [highlightedId, active, anchorDocumentId, navigationVersion, documents])
+  }, [active, target, documents, navigationVersion])
 
   // Give the highlight its time to settle, then let the row return to the list's colours.
   useEffect(() => {
@@ -201,6 +236,7 @@ export function useDocumentAttention(
     highlightedId,
     announcement,
     navigationVersion,
+    filterOverride,
     step,
     dismiss,
   }

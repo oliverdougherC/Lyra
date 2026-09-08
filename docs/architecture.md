@@ -54,12 +54,17 @@ The frontend is now a Vite/React application with client-side routing.
   student's place mid-visit, and without a permanent badge. When several items need attention,
   a transient strip names the position ("1 of 2") and steps between items; each step is a
   history push, so Back walks the items back in order, and Dismiss, Back, or the last item
-  resolving quietly retires the visit. A list filter is cleared only for the duration of the
-  visit and given back on Back if the student typed nothing meanwhile; a target that no longer
-  exists lands on the next unresolved item and, when none remains, says so plainly while the
-  URL keeps naming the place it meant. The class overview's "documents could not be used"
-  row is built from the same per-class list query as the Files tab, so its first item and the
-  tab's top row always agree.
+  resolving quietly retires the visit. A list filter that would hide the target is shown as
+  cleared only for the duration of the visit - the student's stored filter is never written,
+  so it survives pane unmount, tab changes, Back/Forward, and reload, and anything the student
+  types mid-visit takes over as their own query. A target that no longer exists lands on the
+  next unresolved item and, when none remains, says so plainly while the URL keeps naming the
+  place it meant. While the visit stands, a background poll that resolves or deletes the row
+  it stands on does not move keyboard focus or scroll; the strip, the visible target, and the
+  live region follow the next live item, and an explicit step (or a new navigation) performs
+  the full reveal on it. The class overview's "documents could not be used" row is built from
+  the same per-class list query as the Files tab, so its first item and the tab's top row
+  always agree.
 - The UI talks only to the FastAPI API surface; it does not call tutor providers or Exa directly.
 - Scroll positions are tracked per history entry in memory and checkpointed to session storage,
   never to History on scroll. Navigation reserves History quota; refused updates fall back to

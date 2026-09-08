@@ -339,10 +339,15 @@ function ClassDocumentsPane({
 
   const allDocuments = data ? documentsInListOrder(data) : []
   // The "needs attention" half of the shared navigation contract: a `lyra-anchor=document-N`
-  // arrival stands on the exact row (filter borrowed and restored, focus, scroll, announce,
-  // transient emphasis) and steps through the rest of the affected documents.
-  const attention = useDocumentAttention(allDocuments, data !== undefined, filter, setFilter)
-  const query = filter.trim().toLowerCase()
+  // arrival stands on the exact row (focus, scroll, announce, transient emphasis) and steps
+  // through the rest of the affected documents. A reveal may temporarily hide a filter that
+  // would hide the target - but it only borrows a clearing, never writing the pane's own
+  // (persisted) filter, so the student's original survives unmount, tab changes, Back,
+  // Forward, and reload.
+  const attention = useDocumentAttention(allDocuments, data !== undefined, filter)
+  // '' while the reveal borrows the clearing; otherwise the student's own filter applies.
+  const effectiveFilter = attention.filterOverride ?? filter
+  const query = effectiveFilter.trim().toLowerCase()
   const documents = query
     ? allDocuments.filter((document) => document.filename.toLowerCase().includes(query))
     : allDocuments
@@ -490,7 +495,9 @@ function ClassDocumentsPane({
           />
           <Input
             type="search"
-            value={filter}
+            value={effectiveFilter}
+            // Typing (or clearing) is the student's intent: it lands in the pane's own
+            // filter, and the reveal's temporary clearing steps aside for it.
             onChange={(event) => setFilter(event.target.value)}
             placeholder={`Filter ${formatCount(allDocuments.length, 'document')}`}
             aria-label="Filter documents by name"
@@ -586,7 +593,7 @@ function ClassDocumentsPane({
             // than showing the same blank the truly-empty class shows.
             <div className="px-1 py-6 text-center">
               <p className="text-text-tertiary text-sm">
-                No documents match &ldquo;{filter.trim()}&rdquo;.
+                No documents match &ldquo;{effectiveFilter.trim()}&rdquo;.
               </p>
               <Button variant="outline" size="sm" className="mt-2" onClick={() => setFilter('')}>
                 Clear filter

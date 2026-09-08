@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const CLASS_ID = 12
 
@@ -19,8 +19,7 @@ const documents = Array.from({ length: 40 }, (_, i) => ({
   pages_skipped: 0,
   pages_failed: i + 1 === 7 ? 2 : 0,
   recognize: false,
-  error_message:
-    i + 1 === 7 ? 'Lyra could not finish reading this document. Retry it.' : null,
+  error_message: i + 1 === 7 ? 'Lyra could not finish reading this document. Retry it.' : null,
   created_at: new Date(CREATED_BASE - i * 60_000).toISOString(),
 }))
 
@@ -71,9 +70,7 @@ test.beforeEach(async ({ page }) => {
       },
     }
     await route.fulfill({
-      json: route.request().method() === 'POST'
-        ? {}
-        : (handlers[path] ?? []),
+      json: route.request().method() === 'POST' ? {} : (handlers[path] ?? []),
     })
   })
 })
@@ -94,12 +91,16 @@ test('the overview row deep-links to the first affected document and the Files t
 
   await attentionLink.click()
 
-  // The click lands on the Files tab, the list scrolled to the exact row, with the
-  // transient emphasis and the multi-item readout.
-  await expect(
-    page.locator('#main-content').getByRole('tab', { name: /Files/ }),
-  ).toHaveAttribute('aria-selected', 'true')
+  // The click lands on the Files tab: the list scrolled the exact row into the viewport,
+  // keyboard focus is on the row, the live region says why we are here, and the row wears
+  // the transient emphasis.
+  await expect(page.locator('#main-content').getByRole('tab', { name: /Files/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
   await expect(page.locator('#document-7')).toBeInViewport()
+  await expect(page.locator('#document-7')).toBeFocused()
+  await expect(page.getByText('Jumped to lecture-7.pdf. 2 documents need attention.')).toBeVisible()
   await expect(page.getByText('2 need attention')).toBeVisible()
   const emphasized = await page
     .locator('#document-7')
@@ -113,6 +114,8 @@ test('the attention strip walks the affected documents, and Back walks them back
   await page.goto(`/#/classes/${CLASS_ID}?tab=files&lyra-anchor=document-7`)
 
   await expect(page.locator('#document-7')).toBeInViewport()
+  await expect(page.locator('#document-7')).toBeFocused()
+  await expect(page.getByText('Jumped to lecture-7.pdf. 2 documents need attention.')).toBeVisible()
   await expect(page.getByText('2 need attention')).toBeVisible()
   await expect(page.getByText(/1 of 2/)).toBeVisible()
 
@@ -120,17 +123,23 @@ test('the attention strip walks the affected documents, and Back walks them back
   await page.getByRole('button', { name: 'Next document that needs attention' }).click()
   await expect(page).toHaveURL(/lyra-anchor=document-13$/)
   await expect(page.locator('#document-13')).toBeInViewport()
+  await expect(page.locator('#document-13')).toBeFocused()
+  await expect(
+    page.getByText('Jumped to lecture-13.pdf. 2 documents need attention.'),
+  ).toBeVisible()
   await expect(page.getByText(/2 of 2/)).toBeVisible()
 
   // The path wraps, so a long visit never dead-ends at the last item.
   await page.getByRole('button', { name: 'Next document that needs attention' }).click()
   await expect(page).toHaveURL(/lyra-anchor=document-7$/)
+  await expect(page.locator('#document-7')).toBeFocused()
   await expect(page.getByText(/1 of 2/)).toBeVisible()
 
-  // Back re-arrives at the previously visited item, on its row.
+  // Back re-arrives at the previously visited item, on its row, with focus returned to it.
   await page.goBack()
   await expect(page).toHaveURL(/lyra-anchor=document-13$/)
   await expect(page.locator('#document-13')).toBeInViewport()
+  await expect(page.locator('#document-13')).toBeFocused()
 })
 
 test('a filter cannot hide the attention target on arrival, and Back restores the filter', async ({
@@ -146,9 +155,9 @@ test('a filter cannot hide the attention target on arrival, and Back restores th
   await expect(filter).toHaveValue('lecture-9')
   await expect(page.locator('#document-7')).toHaveCount(0)
 
-  // Arriving with the attention anchor clears the filter so the row can stand. The pane
-  // stays mounted across this same-document navigation, which is the return the restore
-  // has to serve.
+  // Arriving with the attention anchor borrows a clearing of the filter so the row can
+  // stand - the stored filter itself is never written. The pane stays mounted across this
+  // same-document navigation, which is the return the restore has to serve.
   await page.evaluate((classId: number) => {
     window.location.hash = `#/classes/${classId}?tab=files&lyra-anchor=document-7`
   }, CLASS_ID)
@@ -180,9 +189,7 @@ test('a deleted target still lands on the remaining affected documents', async (
   await expect(page).toHaveURL(/lyra-anchor=document-99$/)
 })
 
-test('an exhausted attention visit says plainly that the document is gone', async ({
-  page,
-}) => {
+test('an exhausted attention visit says plainly that the document is gone', async ({ page }) => {
   // Every document re-ingested to ready while the link was being built.
   await page.route(`**/api/classes/${CLASS_ID}/documents`, async (route) => {
     await route.fulfill({
@@ -191,9 +198,55 @@ test('an exhausted attention visit says plainly that the document is gone', asyn
   })
   await page.goto(`/#/classes/${CLASS_ID}?tab=files&lyra-anchor=document-99`)
 
-  await expect(
-    page.getByText('That document is no longer in this class.'),
-  ).toBeVisible()
+  await expect(page.getByText('That document is no longer in this class.')).toBeVisible()
   await expect(page.locator('#documents-pane-body')).toBeVisible()
   await expect(page).toHaveURL(/lyra-anchor=document-99$/)
 })
+
+/**
+ * Representative screenshots for visual review (Codex): a long list standing on the first
+ * affected row, the second target after a step, and the filter being borrowed and given
+ * back - in both themes. The files are regenerated on every run under e2e/artifacts/
+ * (gitignored), the same convention as the other evidence suites.
+ */
+async function setTheme(page: Page, theme: 'light' | 'dark') {
+  await page.addInitScript((value) => localStorage.setItem('lyra-theme', value), theme)
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`evidence: arrival and second target (${theme})`, async ({ page }) => {
+    await setTheme(page, theme)
+    await page.goto(`/#/classes/${CLASS_ID}?tab=files&lyra-anchor=document-7`)
+
+    await expect(page.locator('#document-7')).toBeInViewport()
+    await expect(page.locator('#document-7')).toBeFocused()
+    await page.screenshot({ path: `e2e/artifacts/attention-arrival-${theme}.png` })
+
+    await page.getByRole('button', { name: 'Next document that needs attention' }).click()
+    await expect(page.locator('#document-13')).toBeInViewport()
+    await expect(page.locator('#document-13')).toBeFocused()
+    await page.screenshot({ path: `e2e/artifacts/attention-second-target-${theme}.png` })
+  })
+
+  test(`evidence: filter borrow and return (${theme})`, async ({ page }) => {
+    await setTheme(page, theme)
+    await page.addInitScript(() => {
+      sessionStorage.setItem('lyra:class:12:files-query', 'lecture-9')
+    })
+    await page.goto(`/#/classes/${CLASS_ID}?tab=files&lyra-anchor=document-7`)
+
+    const filter = page.getByRole('searchbox', { name: 'Filter documents by name' })
+    await expect(page.locator('#document-7')).toBeInViewport()
+    await expect(page.locator('#document-7')).toBeFocused()
+    // The visit borrows the clearing (the stored filter is untouched); the row stands.
+    await expect(filter).toHaveValue('')
+    await page.screenshot({ path: `e2e/artifacts/attention-filter-borrowed-${theme}.png` })
+
+    // Dismiss ends the visit and the student's filter comes back - which hides the
+    // affected row again, proving the original survived the whole visit.
+    await page.getByRole('button', { name: 'Dismiss documents that need attention' }).click()
+    await expect(filter).toHaveValue('lecture-9')
+    await expect(page.locator('#document-7')).toHaveCount(0)
+    await page.screenshot({ path: `e2e/artifacts/attention-filter-restored-${theme}.png` })
+  })
+}
