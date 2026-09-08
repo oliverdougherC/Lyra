@@ -113,10 +113,7 @@ function openSse(res: ServerResponse) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    // One socket per stream: a turn whose stream rejects tears its connection down on
-    // the client side, and a retry that reuses the dying pooled socket dies with its
-    // first chunks (seen as a truncated stream at random cadence). Closing the
-    // connection per stream keeps every stream's socket its own.
+    // Keep each synthetic stream's connection lifecycle independent.
     'Connection': 'close',
     ...CORS,
   })
@@ -462,28 +459,23 @@ test('the solver steps read through the shared renderer, and a step thread strea
     }
 
     // The second question fails in-band, and the retry re-answers it over the replay
-    // transport - the replacement settles under its own persisted ID. A test transport
-    // that cuts an attempt short (seen under full-suite load) leaves the pane in its own
-    // error state with the retry offered again, so the reader keeps clicking until an
-    // attempt completes - each attempt is a fresh replay over the same transport.
+    // transport; the replacement settles under its own persisted ID.
     await send(page, question2)
     const tutorFailure = thread.locator('[data-tutor-turn-failure]')
     await expect(tutorFailure).toBeVisible()
     await expect(tutorFailure).toContainText('The tutor endpoint timed out.')
-    let settled2 = ''
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      await thread.getByRole('button', { name: 'Try again' }).last().click()
-      await thread
-        .locator('[data-stream-word]')
-        .last()
-        .waitFor({ state: 'detached', timeout: 60_000 })
-      settled2 = await thread.evaluate((section) => {
+    // Wait for the retry's answer before checking reveal completion: no units can
+    // also mean the stream has not begun. Exactly one click exercises the retry.
+    await thread.getByRole('button', { name: 'Try again' }).last().click()
+    const readThread = () =>
+      thread.evaluate((section) => {
         const clone = section.cloneNode(true) as HTMLElement
         for (const math of Array.from(clone.querySelectorAll('math'))) math.remove()
         return (clone.textContent ?? '').trim()
       })
-      if (settled2.includes('the tail is light')) break
-    }
+    await expect.poll(readThread, { timeout: 30_000 }).toContain('the tail is light')
+    await expect(thread.locator('[data-stream-word]')).toHaveCount(0, { timeout: 30_000 })
+    const settled2 = await readThread()
     expect(settled2, 'the retried answer carried raw TeX').not.toContain('$')
     expect(settled2).toContain('the tail is light')
     await expect.poll(() => api.servedMessages!().length, { timeout: 15_000 }).toBe(5)
@@ -770,21 +762,15 @@ test('an error frame fails the turn on its own row, and the retry re-sends over 
     await expect(retry).toBeVisible()
 
     // The retry re-sends over the replay transport and completes: the answer settles onto
-    // the static render of the good content, under the persisted ID. A test transport that
-    // cuts an attempt short (seen under full-suite load) leaves the pane in its own error
-    // state with the retry offered again, so the reader keeps clicking until an attempt
-    // completes - each attempt is a fresh replay over the same transport.
-    let last = ''
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      await page.getByRole('button', { name: 'Try again' }).last().click()
-      await page
-        .locator('.assistant-content')
-        .filter({ has: page.locator('[data-stream-word]') })
-        .last()
-        .waitFor({ state: 'detached', timeout: 30_000 })
-      last = (await visibleAnswerText(page)) ?? ''
-      if (last.includes('converges to the right of it')) break
-    }
+    // the static render of the good content, under the persisted ID.
+    await page.getByRole('button', { name: 'Try again' }).last().click()
+    await expect
+      .poll(() => visibleAnswerText(page), { timeout: 30_000 })
+      .toContain('converges to the right of it')
+    await expect(page.locator('.assistant-content [data-stream-word]')).toHaveCount(0, {
+      timeout: 30_000,
+    })
+    const last = (await visibleAnswerText(page)) ?? ''
     expect(last, 'the retried answer carries raw TeX').not.toContain('$')
     expect(last).toContain('converges to the right of it')
     const served = api.servedMessages!()
