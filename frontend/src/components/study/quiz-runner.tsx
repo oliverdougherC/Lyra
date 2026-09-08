@@ -100,10 +100,15 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
           if (run !== generation.current) return
           busy.current = false
           setAttempt(started)
-          // Resume where the student left off: the first question with no recorded answer,
-          // or the last question when every one has already been answered (PLA-277).
+          // Resume where the student left off: the earliest question that still needs
+          // the student - unanswered, or answered but unsettled (an unresolved answer
+          // keeps its words and its retry) - or the last question when none do (PLA-277).
           const answered = new Set(started.answers.map((entry) => entry.part_id))
-          const firstUnanswered = started.question_part_ids.findIndex((id) => !answered.has(id))
+          const recordedByPart = new Map(started.answers.map((entry) => [entry.part_id, entry]))
+          const firstUnresolved = started.question_part_ids.findIndex((id) => {
+            const recorded = recordedByPart.get(id)
+            return recorded === undefined || recorded.uncertain
+          })
           let helpPartId: number | null = null
           try {
             const saved = JSON.parse(sessionStorage.getItem(returnKey) ?? 'null')
@@ -124,33 +129,37 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
           const resumeIndex =
             helpIndex >= 0
               ? helpIndex
-              : firstUnanswered === -1
+              : firstUnresolved === -1
                 ? Math.max(0, started.question_part_ids.length - 1)
-                : firstUnanswered
+                : firstUnresolved
           setIndex(resumeIndex)
 
-          // A lost finish response can leave every answer durably recorded while the
-          // attempt is still active. Restore the final reveal so the student can retry
-          // finish directly instead of submitting the last answer a second time.
-          if (firstUnanswered === -1 || helpIndex >= 0) {
-            const partId = started.question_part_ids[resumeIndex]
-            const recorded = started.answers.find((entry) => entry.part_id === partId)
-            const resumed = quiz.data?.questions.find((entry) => entry.part_id === partId)
-            if (recorded && resumed) {
-              setSelected(recorded.selected_index)
-              // A recorded free response is the student's own words: restore them so the
-              // reveal shows what they wrote and the handoff to Lyra cites the actual
-              // response instead of an empty one.
-              if (resumed.question.type === 'fill_blank' && recorded.response_text !== null) {
-                setFillText(recorded.response_text)
-              }
-              setAnswer({
-                correct: recorded.correct,
-                uncertain: recorded.uncertain,
-                correct_index: resumed.question.correct_index,
-                explanation: resumed.question.explanation,
-              })
+          // The resumed question carries a recorded answer - settled, or unsettled with
+          // its words and its retry intact. Restore the reveal so the student returns
+          // exactly to where they were, and a lost finish response still lands on a
+          // re-usable final reveal instead of a resubmitted answer.
+          const resumedPartId = started.question_part_ids[resumeIndex]
+          const resumedRecorded = started.answers.find((entry) => entry.part_id === resumedPartId)
+          const resumedQuestion = quiz.data?.questions.find(
+            (entry) => entry.part_id === resumedPartId,
+          )
+          if (resumedRecorded && resumedQuestion) {
+            setSelected(resumedRecorded.selected_index)
+            // A recorded free response is the student's own words: restore them so the
+            // reveal shows what they wrote and the handoff to Lyra cites the actual
+            // response instead of an empty one.
+            if (
+              resumedQuestion.question.type === 'fill_blank' &&
+              resumedRecorded.response_text !== null
+            ) {
+              setFillText(resumedRecorded.response_text)
             }
+            setAnswer({
+              correct: resumedRecorded.correct,
+              uncertain: resumedRecorded.uncertain,
+              correct_index: resumedQuestion.question.correct_index,
+              explanation: resumedQuestion.question.explanation,
+            })
           }
         },
         onError: (error) => {
@@ -525,10 +534,13 @@ function QuizResult({
           tabIndex={-1}
           className="font-heading text-text-primary text-2xl tracking-tight focus:outline-none"
         >
-          You scored {result.score} out of {result.total}
+          {/* With unsettled answers a score would count them as wrong, so the heading
+              claims only what is settled: how much was answered (PLA-496). */}
+          {result.unresolved > 0
+            ? `You answered ${result.answered} of ${result.total}`
+            : `You scored ${result.score} out of ${result.total}`}
         </h2>
         <p className="text-text-secondary text-sm">Review topics where you scored below 60%.</p>
-        {/* Unsettled judgments are reported, never scored as wrong (PLA-496). */}
         {result.unresolved > 0 ? (
           <p className="text-text-tertiary text-xs">
             {result.unresolved} {result.unresolved === 1 ? 'answer' : 'answers'} left unresolved,

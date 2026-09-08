@@ -823,7 +823,9 @@ question:
 - contradictions: statements that make a response wrong no matter what else it says.
 - partial_understanding_accepted: true when a response that conveys the core idea but
   misses detail can still count as correct.
-For mcq and true_false questions, leave every grading field null or an empty array."""
+For mcq and true_false questions the graded answer is the chosen option, so leave
+answer_kind, tolerance, and units null, leave the four lists empty, and set
+partial_understanding_accepted to false - the schema requires exactly that shape."""
 
 
 def _quiz_messages(job: _Job, source_text: str) -> list[dict[str, str]]:
@@ -1405,8 +1407,10 @@ def _grading_problem(raw: object) -> str | None:
     units = raw.get("units")
     if units is not None and (not isinstance(units, str) or not units.strip() or len(units) > 100):
         return "grading units must be a short non-empty string"
+    # The schema requires a boolean here (never null), so the code agrees: a null flag
+    # is malformed generation output, not a default.
     partial = raw.get("partial_understanding_accepted")
-    if partial is not None and not isinstance(partial, bool):
+    if not isinstance(partial, bool):
         return "grading partial_understanding_accepted must be a boolean"
     for list_field, max_entries, max_length in _GRADING_LIST_FIELDS:
         value = raw.get(list_field, [])

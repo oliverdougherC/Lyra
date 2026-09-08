@@ -736,6 +736,7 @@ def _schema_violation(value: object, schema: dict[str, object]) -> str | None:
                     and isinstance(value, (int, float))
                     and not isinstance(value, bool)
                 )
+                or (wanted == "integer" and isinstance(value, int) and not isinstance(value, bool))
                 or (wanted == "boolean" and isinstance(value, bool))
             ):
                 break
@@ -891,6 +892,96 @@ def test_a_rubric_that_violates_the_contract_fails_generation(
     contract = schema.schema["properties"]["questions"]["items"]["properties"]["grading"]
     assert _schema_violation(bad, contract) is not None
     assert study._grading_problem(bad) is not None
+
+
+def _choice_rubric() -> dict[str, object]:
+    """The rubric the instruction sends for an mcq/true_false question: the nullable
+    scalars null, the four lists empty, the partial flag false - one shape for both
+    choice types, because a chosen option needs no free-response contract."""
+    return {
+        "answer_kind": None,
+        "tolerance": None,
+        "units": None,
+        "acceptable_alternatives": [],
+        "required_ideas": [],
+        "common_misconceptions": [],
+        "contradictions": [],
+        "partial_understanding_accepted": False,
+    }
+
+
+def _true_false_question() -> dict[str, object]:
+    return {
+        "type": "true_false",
+        "question": "The sifting property picks x(0).",
+        "options": ["True", "False"],
+        "correct_index": 0,
+        "explanation": "x(t) delta(t) = x(0).",
+        "topic": "delta",
+        "difficulty": "intermediate",
+    }
+
+
+def _fill_blank_question() -> dict[str, object]:
+    return {
+        "type": "fill_blank",
+        "question": "The angular sampling frequency is ___ .",
+        "options": ["2pi/T"],
+        "correct_index": 0,
+        "explanation": "Omega_s is 2 pi over T.",
+        "topic": "sampling",
+        "difficulty": "intermediate",
+    }
+
+
+@pytest.mark.parametrize(
+    ("question", "rubric"),
+    [
+        (dict(_mcq("delta")), _choice_rubric()),
+        (_true_false_question(), _choice_rubric()),
+        (_fill_blank_question(), _good_rubric()),
+    ],
+    ids=["mcq", "true_false", "fill_blank"],
+)
+def test_the_question_type_rubric_shapes_are_one_contract(
+    question: dict[str, object], rubric: dict[str, object]
+) -> None:
+    """Each question type's rubric is the same contract three ways: the shape the
+    instruction asks for validates against the emitted schema, the store-side check the
+    writer applies accepts it, and the grader's own parser reads it back."""
+    item = study._quiz_grading_schema().schema["properties"]["questions"]["items"]
+    full = {**question, "grading": rubric}
+    assert _schema_violation(full, item) is None  # type: ignore[arg-type]
+    assert study._question_problem(full) is None
+    assert study._grading_problem(rubric) is None
+    assert grading.parse_rubric(rubric) is not None
+
+
+def test_a_legacy_question_without_a_rubric_passes_the_code_but_not_the_schema() -> None:
+    """A stored pre-grading question carries no `grading` key at all. The emitted schema
+    (which constrains generated replies) requires the field on every question, but the
+    store side must still accept the legacy shape: the writer skips its rubric check and
+    the grader parses nothing, grading against the reference answer alone."""
+    legacy = dict(_mcq("legacy"))
+    item = study._quiz_grading_schema().schema["properties"]["questions"]["items"]
+    assert _schema_violation(legacy, item) is not None  # type: ignore[arg-type]
+    assert study._question_problem(legacy) is None
+    assert grading.parse_rubric(None) is None
+
+
+def test_a_null_flag_or_null_list_is_rejected_by_schema_and_code_together() -> None:
+    """The nullability fix has one shape: nullable scalars may be null, lists and the
+    partial flag may not. Both the emitted schema and the store-side check say so."""
+    item = study._quiz_grading_schema().schema["properties"]["questions"]["items"]
+    contract = item["properties"]["grading"]  # type: ignore[index]
+    null_flag = {**_choice_rubric(), "partial_understanding_accepted": None}
+    null_list = {**_choice_rubric(), "contradictions": None}
+    for broken in (null_flag, null_list):
+        assert _schema_violation(broken, contract) is not None  # type: ignore[arg-type]
+        assert study._grading_problem(broken) is not None
+    # And the instruction's own mcq/true_false shape is exactly what both accept.
+    assert _schema_violation(_choice_rubric(), contract) is None  # type: ignore[arg-type]
+    assert study._grading_problem(_choice_rubric()) is None
 
 
 @pytest.mark.parametrize(

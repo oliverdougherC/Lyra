@@ -261,7 +261,10 @@ No endpoint configured, an endpoint refusal, an unreadable reply, or a pass no l
 all land on `uncertain`. Unresolved answers are reported, never scored: the finish tally
 carries an `unresolved` count beside `score`/`total`, per-topic breakdowns separate settled
 answers from unresolved ones, and the interface offers a recheck for an unsettled fill-blank
-instead of a confident wrong.
+instead of a confident wrong. The results screen follows the same rule: with every answer
+settled it reports `You scored S out of T`, but as soon as any answer is unresolved it makes
+no score claim at all and reports how much was answered, `You answered A of T`, with the
+unresolved tally beneath — `total` stays the true question count either way.
 
 The raw response survives reload, retry, and attempt history: a re-posted identical submission
 replays its stored result instead of charging for another judgment, a different response
@@ -273,21 +276,44 @@ judgment about different words. An `uncertain` verdict never replays — retryin
 answer is exactly how a failed provider judgment recovers, and it re-grades in place without a
 new attempt.
 
-Concurrent duplicates are bounded to one judgment: a claim marks the row in flight, a second
-identical submission waits for the first judgment, and a late arrival for an *older* answer is
-refused rather than overwriting a newer one. Grading runs outside any write transaction (the
-algebra subprocess and the judge may each take many seconds), and the publish transaction
-revalidates the attempt and the question content before writing the answer row; a late result
-after a restart or regeneration is refused with a conflict, so a judgment in flight can never
-contaminate a new attempt.
+Concurrent duplicates are bounded to one judgment. A claim marks the row in flight, and the
+marker is stamped with a unique claim token that the publish transaction must still match:
+the slow A→B→A ordering (two different answers, then the first re-arrived) can never write
+the older judgment into the row the newer one claimed. A second identical submission waits
+for the first judgment rather than charging it again, and a late arrival for an *older*
+answer is refused rather than overwriting a newer one. A duplicate that read the row as
+absent just before the first judgment published is re-checked inside the claim transaction:
+it replays the settled result it missed, not a fresh regrade, and it shares a terminal
+result even when that terminal result is `uncertain`. A claim older than the longest
+judgment has lost its owner and is reclaimed, so a restart cannot strand an answer forever.
+
+The wait is prompt in both directions. It returns the moment any terminal state for this
+exact submission is visible — settled *or* uncertain, once the row's stored digest still
+matches the question's current content — and it stops immediately, without polling to a
+deadline, when the attempt dies or is abandoned, the question's content changes, a newer
+distinct answer takes the row, or a replay would surface against a no-longer-live attempt.
+Grading runs outside any write transaction (the algebra subprocess and the judge may each
+take many seconds), and the publish transaction revalidates the attempt and the question
+content before writing the answer row; a late result after a restart or regeneration is
+refused with a conflict, so a judgment in flight can never contaminate a new attempt.
+
+A reload resumes at the earliest answer that still needs the student, not merely the first
+unanswered one: an answer that was recorded but left unresolved carries its raw words and
+its retry, so a reload with an unsettled first question and an unanswered second returns to
+the first, restores the recorded response into the neutral reveal, and keeps the recheck
+available.
 
 Generation writes the hidden grading contract — `answer_kind`, `tolerance`, `units`,
 `acceptable_alternatives`, `required_ideas`, `common_misconceptions`, `contradictions`,
 `partial_understanding_accepted` — into fill-blank questions through the quiz schema, whose
 `grading` property is a complete JSON Schema (typed object, required fields, no additions)
-that mirrors the store-side validation applied when the question is written. The contract is
-stripped from every public read of a question; the student sees the verdict, the reference
-answer, and the explanation only.
+that mirrors the store-side validation applied when the question is written. Instruction,
+schema, and validator agree on one nullability shape: the nullable scalars
+(`answer_kind`, `tolerance`, `units`) are `null` and the four lists are empty where the
+question type does not use them — a multiple-choice or true/false question grades a chosen
+option, so its contract says exactly that — and `partial_understanding_accepted` is the
+boolean `false`, never absent. The contract is stripped from every public read of a
+question; the student sees the verdict, the reference answer, and the explanation only.
 
 Honest limits: the algebra's "shown different" rests on sampling the difference at fixed
 rational points, so a difference that vanishes at all sample points, or one over six free

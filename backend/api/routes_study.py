@@ -14,6 +14,7 @@ and these are the study tools' view of it.
 
 import json
 import logging
+import secrets
 import sqlite3
 import time
 from collections.abc import Callable
@@ -995,15 +996,23 @@ def _claim_in_flight(
     selected_index: int,
     *,
     supersede: bool,
-) -> bool:
+    previously_seen: sqlite3.Row | None = None,
+) -> str | None:
     """Record that this submission is being graded, or report that one already is.
 
     One short `begin immediate` transaction revalidates the attempt and the question,
-    then upserts the in-flight marker - verdict NULL under the current contract - or,
-    when an identical submission already holds a fresh marker, rolls back and tells the
-    caller to wait instead of charging a second judgment. A marker older than the
-    longest judgment has lost its owner and is reclaimed, so a restart cannot strand
-    an answer forever.
+    then upserts the in-flight marker - verdict NULL under the current contract, stamped
+    with a unique claim token - or tells the caller to wait rather than charge a second
+    judgment. It returns the claim token on success and None when the caller should wait.
+
+    Waiting happens when the row already carries this submission's own result: a fresh
+    in-flight claim of this exact question (its judgment is running), a settled result
+    for the question's current content (replayed by the wait), or a fresh `uncertain`
+    this request raced into - `previously_seen` is the row this request read before
+    claiming, and if it saw no row, or one still in flight, this request is a duplicate
+    of the judgment that just published, not a deliberate retry of it, so it shares the
+    terminal result. A marker older than the longest judgment has lost its owner and is
+    reclaimed, so a restart cannot strand an answer forever.
 
     `supersede` is the ordering rule: a freshly arrived submission always supersedes
     what the row holds (an older in-flight judgment loses, its publish will no-op); a
@@ -1033,19 +1042,42 @@ def _claim_in_flight(
             "select * from quiz_answers where attempt_id = ? and part_id = ?",
             (int(attempt["id"]), part_id),
         ).fetchone()
+        current_digest = grading.question_digest(question_content)
         if row is not None:
             if _same_submission(row, response_text, selected_index):
                 age = _marker_seconds_ago(row) or 0.0
-                if row["verdict"] is None and age < _STALE_CLAIM_SECONDS:
-                    # A fresh grading of this exact submission owns the row: wait.
+                if row["verdict"] is None:
+                    if age < _STALE_CLAIM_SECONDS and _row_digest(row) == current_digest:
+                        # A fresh claim of this exact question owns the row: wait (or,
+                        # on a reclaim, refuse - a live claim is never stolen).
+                        conn.rollback()
+                        return None
+                    # A stale marker (the owner vanished) or a claim graded against
+                    # different content: regrade.
+                elif _replayable(row, question_content):
+                    # Already settled against this question's current content: replay
+                    # it. Wait returns the stored read; do not overwrite and regrade.
                     conn.rollback()
-                    return False
-                # A stale marker (the owner vanished) or a settled `uncertain`
-                # (a transient failure worth retrying): regrade.
+                    return None
+                elif (
+                    row["verdict"] == "uncertain"
+                    and age < _STALE_CLAIM_SECONDS
+                    and supersede
+                    and (previously_seen is None or previously_seen["verdict"] is None)
+                ):
+                    # This request read no row, or one still in flight: it is a
+                    # duplicate racing the judgment that just published its failure,
+                    # not a deliberate retry. Wait shares the terminal result.
+                    conn.rollback()
+                    return None
+                # A deliberate retry of an `uncertain` (the request saw it settled), a
+                # stale result of any kind, or a settled result graded against different
+                # content: regrade.
             elif not supersede and int(row["grading_version"]) == grading.GRADING_VERSION:
                 # A different submission owns the row: this one is the older, slower
                 # judgment, and it does not get to write over a newer answer.
                 raise ConflictError(QUIZ_CHANGED_MESSAGE)
+        token = secrets.token_hex(16)
         conn.execute(
             "insert into quiz_answers "
             "(attempt_id, part_id, selected_index, correct, response_text, verdict, "
@@ -1063,14 +1095,17 @@ def _claim_in_flight(
                 selected_index,
                 response_text,
                 json.dumps(
-                    {"question_digest": grading.question_digest(question_content)},
+                    {
+                        "question_digest": grading.question_digest(question_content),
+                        "claim_token": token,
+                    },
                     ensure_ascii=False,
                 ),
                 grading.GRADING_VERSION,
             ),
         )
         conn.commit()
-        return True
+        return token
     except Exception:
         if conn.in_transaction:
             conn.rollback()
@@ -1079,28 +1114,61 @@ def _claim_in_flight(
 
 def _wait_for_verdict(
     conn: sqlite3.Connection,
-    attempt_id: int,
+    attempt: sqlite3.Row,
     part_id: int,
     response_text: str | None,
     selected_index: int,
     question: dict[str, object],
+    question_content: str,
 ) -> dict[str, object] | None:
-    """The bounded single-flight: the result an identical in-flight submission
-    publishes, or None when the wait ends without one (the owner died; reclaim)."""
+    """The bounded single-flight: the terminal result this submission's claim carries,
+    or None when this claim can no longer own the row.
+
+    Waiters for the same in-flight claim share its terminal result - a settled verdict
+    or an `uncertain` one, which an explicit retry may later regrade. Every poll
+    revalidates what it would otherwise return against: the attempt still live, the
+    question still carrying the content it was claimed against, and the row still
+    holding this exact submission under the current grading contract. A finish, a
+    restart, a regeneration, or a newer distinct answer each stops the wait at once
+    (within one poll), so a duplicate never sleeps out the full bound when the state
+    that would have been returned is already known gone. None sends the route to the
+    reclaim, which revalidates under lock and conflicts or regrades.
+    """
+    attempt_id = int(attempt["id"])
+    current_digest = grading.question_digest(question_content)
     deadline = time.monotonic() + _WAIT_FOR_VERDICT_SECONDS
     while True:
+        live = conn.execute(
+            "select finished_at, abandoned from quiz_attempts where id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if live is None or live["finished_at"] is not None or int(live["abandoned"] or 0) == 1:
+            return None  # The attempt is gone: stop, and let the reclaim conflict.
+        part_now = conn.execute(
+            "select artifact_id, kind, content from artifact_parts where id = ?",
+            (part_id,),
+        ).fetchone()
+        if (
+            part_now is None
+            or int(part_now["artifact_id"]) != int(attempt["artifact_id"])
+            or part_now["kind"] != artifacts.QUIZ_QUESTION
+            or str(part_now["content"]) != question_content
+        ):
+            return None  # The question changed or left the quiz: stop.
         row = conn.execute(
             "select * from quiz_answers where attempt_id = ? and part_id = ?",
             (attempt_id, part_id),
         ).fetchone()
-        if (
-            row is not None
-            and row["verdict"] is not None
-            and row["verdict"] != "uncertain"
-            and row["response_text"] == response_text
-            and int(row["selected_index"]) == selected_index
-        ):
-            return _stored_answer_read(question, row)
+        if row is None or int(row["grading_version"]) != grading.GRADING_VERSION:
+            return None
+        if row["response_text"] != response_text or int(row["selected_index"]) != selected_index:
+            return None  # A newer distinct answer took the row: superseded.
+        if row["verdict"] is not None:
+            if _row_digest(row) == current_digest:
+                # Terminal for this question's current content - settled or uncertain:
+                # share it. An explicit retry may grade again later.
+                return _stored_answer_read(question, row)
+            return None  # Settled against different content: stale, reclaim regrades.
         if time.monotonic() >= deadline:
             return None
         time.sleep(0.25)
@@ -1122,14 +1190,21 @@ def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dic
     question's current content - replays its stored result: no regrade, no second
     semantic judgment. A stored `uncertain` never replays, so a transient failure can
     be retried without a new attempt. A second in-flight grading of the same submission
-    waits for the first's published result instead of charging the judge twice.
+    waits for the first's published result - settled or `uncertain` - instead of
+    charging the judge twice. The claim the first request took carries a unique token
+    in its marker; a superseded or reclaimed judgment must present that token to
+    publish, so an older slow judgment can never land in a newer claim's row.
     """
-    # Read.
+    # Read. The replay fast path below returns a stored result, so the attempt must be
+    # validated live before any read is served - a finished or abandoned attempt has
+    # no current answers to replay.
     attempt = conn.execute("select * from quiz_attempts where id = ?", (attempt_id,)).fetchone()
     if attempt is None:
         raise NotFoundError(NOT_AN_ATTEMPT_MESSAGE)
     if attempt["finished_at"] is not None:
         raise ConflictError(ATTEMPT_FINISHED_MESSAGE)
+    if int(attempt["abandoned"] or 0) == 1:
+        raise ConflictError(QUIZ_CHANGED_MESSAGE)
     snapshot = (
         json.loads(str(attempt["question_part_ids"])) if attempt["question_part_ids"] else None
     )
@@ -1174,8 +1249,10 @@ def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dic
         return _stored_answer_read(question, existing)
 
     # Single-flight: an identical submission that is already being graded owns the row;
-    # a bounded wait returns its result instead of charging a second judgment.
-    if not _claim_in_flight(
+    # a bounded wait returns its result instead of charging a second judgment. The
+    # claim token the marker carries is what the publish below must present, so a
+    # superseded judgment can never land in a newer claim's pending row.
+    token = _claim_in_flight(
         conn,
         attempt,
         payload.part_id,
@@ -1183,15 +1260,18 @@ def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dic
         stored_text,
         selected_index,
         supersede=True,
-    ):
+        previously_seen=existing,
+    )
+    if token is None:
         waited = _wait_for_verdict(
-            conn, attempt_id, payload.part_id, stored_text, selected_index, question
+            conn, attempt, payload.part_id, stored_text, selected_index, question, content
         )
         if waited is not None:
             return waited
-        # The owner vanished without publishing; reclaim the stale marker and grade -
-        # but never over a submission that took the row in the meantime.
-        if not _claim_in_flight(
+        # The wait ended without a terminal result: the owner died, or the state moved.
+        # Reclaim and grade - but never over a submission that took the row in the
+        # meantime (which conflicts, not regrades).
+        token = _claim_in_flight(
             conn,
             attempt,
             payload.part_id,
@@ -1199,7 +1279,9 @@ def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dic
             stored_text,
             selected_index,
             supersede=False,
-        ):
+            previously_seen=existing,
+        )
+        if token is None:
             raise ConflictError(QUIZ_CHANGED_MESSAGE)
 
     # Grade, outside any write transaction.
@@ -1210,9 +1292,9 @@ def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dic
     detail = dict(result.detail)
     detail["question_digest"] = grading.question_digest(content)
 
-    # Publish: the result lands only while this claim still holds the row, the attempt
-    # is still the same live attempt, and the question still carries the content it was
-    # graded against.
+    # Publish: the result lands only while this claim still holds the row - the marker
+    # still carries this claim's token - the attempt is still the same live attempt,
+    # and the question still carries the content it was graded against.
     try:
         conn.execute("begin immediate")
         live = conn.execute(
@@ -1236,7 +1318,8 @@ def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dic
             "update quiz_answers set selected_index = ?, correct = ?, verdict = ?, "
             "grade_detail = ?, grading_version = ?, answered_at = datetime('now') "
             "where attempt_id = ? and part_id = ? and grading_version = ? "
-            "and verdict is null and response_text is ? and selected_index = ?",
+            "and verdict is null and response_text is ? and selected_index = ? "
+            "and json_extract(grade_detail, '$.claim_token') = ?",
             (
                 selected_index,
                 int(result.correct),
@@ -1248,11 +1331,12 @@ def answer_question(attempt_id: int, payload: AnswerCreate, conn: DbConn) -> dic
                 grading.GRADING_VERSION,
                 stored_text,
                 selected_index,
+                token,
             ),
         )
         if updated.rowcount != 1:
-            # The claim moved on: a newer distinct submission took the row, or the
-            # attempt no longer matches. The result is discarded, not written.
+            # The claim moved on: a newer submission took the row, or the attempt no
+            # longer matches. The result is discarded, not written.
             raise ConflictError(QUIZ_CHANGED_MESSAGE)
         conn.commit()
     except Exception:

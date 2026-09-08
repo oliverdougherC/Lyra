@@ -266,6 +266,19 @@ describe('QuizRunner', () => {
     // weakness: the summary carries the unresolved tally and an unresolved-only topic
     // stays neutral (no red flag, no "go over this" handoff).
     mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]))
+    vi.mocked(api.submitAnswer)
+      .mockResolvedValueOnce({
+        correct: true,
+        uncertain: false,
+        correct_index: 1,
+        explanation: 'Because the definition says so.',
+      })
+      .mockResolvedValueOnce({
+        correct: false,
+        uncertain: true,
+        correct_index: 0,
+        explanation: 'Because the definition says so.',
+      })
     vi.spyOn(api, 'finishAttempt').mockResolvedValue({
       score: 1,
       total: 2,
@@ -286,14 +299,74 @@ describe('QuizRunner', () => {
     await screen.findByText('The capital of France is ...')
     await userEvent.type(screen.getByLabelText('Your answer'), 'Lyon')
     await userEvent.click(screen.getByRole('button', { name: 'Check' }))
-    await screen.findByText('Not quite.')
+    await screen.findByText("Let's compare.")
     await userEvent.click(screen.getByRole('button', { name: 'See results' }))
 
-    expect(await screen.findByText('You scored 1 out of 2')).toBeInTheDocument()
+    // The heading claims only what is settled: an unresolved answer is never "0 of N".
+    expect(await screen.findByText('You answered 2 of 2')).toBeInTheDocument()
+    expect(screen.queryByText(/You scored/)).not.toBeInTheDocument()
     expect(screen.getByText(/1 answer left unresolved, not counted as wrong/)).toBeInTheDocument()
+    // The topic ratio shows settled answers only, with the unresolved tally beside it.
+    expect(screen.getByText('1 of 1')).toBeInTheDocument()
     expect(screen.getByText(/0 of 0 · 1 unresolved/)).toBeInTheDocument()
     // The unresolved-only topic is reported, never flagged weak.
     expect(screen.queryByRole('link', { name: /Go over this with Lyra/ })).not.toBeInTheDocument()
+  })
+
+  it('reports an all-unresolved attempt as answered, not scored', async () => {
+    // Every answer left unsettled: the results screen makes no score claim at all -
+    // how much was answered, and that the rest is unresolved, not wrong.
+    mockAttemptLifecycle(quizWith([FILL_BLANK]))
+    vi.mocked(api.submitAnswer).mockResolvedValue({
+      correct: false,
+      uncertain: true,
+      correct_index: 0,
+      explanation: 'Because the definition says so.',
+    })
+    vi.spyOn(api, 'finishAttempt').mockResolvedValue({
+      score: 0,
+      total: 1,
+      answered: 1,
+      unresolved: 1,
+      by_topic: [{ topic: 'Geography', correct: 0, total: 0, unresolved: 1 }],
+    })
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    await screen.findByText('The capital of France is ...')
+    await userEvent.type(screen.getByLabelText('Your answer'), 'a big city in France')
+    await userEvent.click(screen.getByRole('button', { name: 'Check' }))
+    await screen.findByText("Let's compare.")
+    await userEvent.click(screen.getByRole('button', { name: 'See results' }))
+
+    expect(await screen.findByText('You answered 1 of 1')).toBeInTheDocument()
+    expect(screen.queryByText(/You scored/)).not.toBeInTheDocument()
+    expect(screen.getByText(/1 answer left unresolved, not counted as wrong/)).toBeInTheDocument()
+  })
+
+  it('resumes at the earliest unsettled answer, restoring its words for a retry', async () => {
+    // A reload returns to the earliest answer that still needs the student. An
+    // unresolved first question with an unanswered second resumes at the first - not
+    // the second: its recorded words are restored into the reveal, and the retry stays
+    // available.
+    mockAttemptLifecycle(quizWith([FILL_BLANK, MCQ]), [
+      {
+        part_id: 22,
+        selected_index: -1,
+        correct: false,
+        uncertain: true,
+        response_text: 'a big city in France',
+      },
+    ])
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    expect(await screen.findByText('The capital of France is ...')).toBeInTheDocument()
+    // The unresolved reveal is restored, with its words and its retry.
+    expect(screen.getByText("Let's compare.")).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Your answer' })).toHaveValue('a big city in France')
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument()
+    expect(api.submitAnswer).not.toHaveBeenCalled()
   })
 
   it('resumes at the first unanswered question when the attempt already has answers', async () => {

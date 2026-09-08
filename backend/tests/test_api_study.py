@@ -1260,6 +1260,597 @@ def test_an_older_submission_cannot_overwrite_a_newer_one(
     assert row["verdict"] == "correct"
 
 
+def test_a_duplicate_claiming_after_publish_replays_rather_than_regrades(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scheduling window: a duplicate read the row as absent before the first
+    request's publish landed. Its claim then finds the row already settled and
+    identical - it must not overwrite the settled result with a fresh marker and
+    charge a second judgment; the wait returns the stored result instead."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        return grading.GradingResult(
+            grading.VERDICT_CORRECT, {"grader": "judge-fixture", "reason": response}
+        )
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    words = "the carbon oxidation cycle"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": words}
+
+    # The duplicate's read: the row does not exist yet (it ran before the first
+    # request's publish committed).
+    assert (
+        db.execute(
+            "select * from quiz_answers where attempt_id = ? and part_id = ?",
+            (attempt_id, part_id),
+        ).fetchone()
+        is None
+    )
+
+    # The first request grades and publishes through the real route.
+    first = client.post(endpoint, json=body)
+    assert first.status_code == 200
+    settled = db.execute(
+        "select * from quiz_answers where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert settled["verdict"] == "correct"
+    settled_detail = settled["grade_detail"]
+
+    # The duplicate's claim lands after the publish: it must not take the row.
+    attempt = db.execute("select * from quiz_attempts where id = ?", (attempt_id,)).fetchone()
+    part = artifacts.get_part(db, part_id)
+    content = str(part["content"])
+    claimed = routes_study._claim_in_flight(
+        db, attempt, part_id, content, words, -1, supersede=True
+    )
+    assert claimed is None
+    row = db.execute(
+        "select * from quiz_answers where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["verdict"] == "correct"  # not overwritten with a NULL marker
+    assert row["grade_detail"] == settled_detail  # the settled result stands intact
+
+    # ...and the duplicate's wait returns the stored result without a second judgment.
+    read = routes_study._wait_for_verdict(
+        db, attempt, part_id, words, -1, json.loads(content), content
+    )
+    assert read is not None
+    assert read["correct"] is True and read["uncertain"] is False
+    assert calls == [words]  # still one judgment
+
+
+def test_a_superseded_claim_cannot_publish_into_a_newer_claim(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ABA: A1's slow judgment, a superseding answer, then a newer claim carrying A1's
+    own words again. Identical text and version no longer identify the claim - the
+    claim token does: A1's late publish must not land in the newest claim's pending
+    row, and the newest judgment is the one that stands."""
+    a1_entered = threading.Event()
+    a1_release = threading.Event()
+    a2_entered = threading.Event()
+    a2_release = threading.Event()
+    calls: list[str] = []
+    older_calls = 0
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        nonlocal older_calls
+        calls.append(response)
+        if response == "the older answer":
+            older_calls += 1
+            if older_calls == 1:
+                a1_entered.set()
+                assert a1_release.wait(timeout=20)
+            else:
+                a2_entered.set()
+                assert a2_release.wait(timeout=20)
+        return grading.GradingResult(
+            grading.VERDICT_CORRECT, {"grader": "judge-fixture", "order": len(calls)}
+        )
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+
+    a1_outcome: dict[str, object] = {}
+    a2_outcome: dict[str, object] = {}
+
+    def submit_older() -> None:
+        a1_outcome["response"] = client.post(
+            endpoint,
+            json={"part_id": part_id, "selected_index": -1, "response_text": "the older answer"},
+        )
+
+    def submit_older_again() -> None:
+        a2_outcome["response"] = client.post(
+            endpoint,
+            json={"part_id": part_id, "selected_index": -1, "response_text": "the older answer"},
+        )
+
+    a1 = threading.Thread(target=submit_older)
+    a1.start()
+    assert a1_entered.wait(timeout=15)  # A1 claimed and is judging
+    # A newer, distinct answer supersedes the in-flight claim.
+    newer = client.post(
+        endpoint,
+        json={"part_id": part_id, "selected_index": -1, "response_text": "the newer answer"},
+    )
+    assert newer.status_code == 200
+    # Then the student returns to the older wording: a fresh claim with A1's own text.
+    a2 = threading.Thread(target=submit_older_again)
+    a2.start()
+    assert a2_entered.wait(timeout=15)  # A2 claimed the row and is judging
+
+    # A1's late judgment now publishes: its text matches the pending row, but its
+    # claim token does not - the stale owner's result is discarded.
+    a1_release.set()
+    a1.join(timeout=30)
+    assert a1_outcome["response"].status_code == 409  # type: ignore[union-attr]
+    # The newest judgment is the one that stands.
+    a2_release.set()
+    a2.join(timeout=30)
+    assert a2_outcome["response"].status_code == 200  # type: ignore[union-attr]
+    assert calls == ["the older answer", "the newer answer", "the older answer"]
+    row = db.execute(
+        "select response_text, verdict, grade_detail from quiz_answers where part_id = ?",
+        (part_id,),
+    ).fetchone()
+    assert row["response_text"] == "the older answer"
+    assert row["verdict"] == "correct"
+    assert json.loads(str(row["grade_detail"]))["order"] == 3  # A2's judgment, not A1's
+
+
+def test_a_stale_claim_is_reclaimed_and_the_dead_owner_cannot_publish(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An in-flight marker older than the bound has lost its owner. An identical
+    duplicate reclaims it, and the dead owner's late judgment cannot publish into the
+    reclaiming claim - again the token, not the matching text, decides."""
+    a1_entered = threading.Event()
+    a1_release = threading.Event()
+    a2_entered = threading.Event()
+    a2_release = threading.Event()
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        if len(calls) == 1:
+            a1_entered.set()
+            assert a1_release.wait(timeout=20)
+        else:
+            a2_entered.set()
+            assert a2_release.wait(timeout=20)
+        return grading.GradingResult(
+            grading.VERDICT_CORRECT, {"grader": "judge-fixture", "order": len(calls)}
+        )
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+
+    a1_outcome: dict[str, object] = {}
+    a2_outcome: dict[str, object] = {}
+
+    def submit() -> dict[str, object]:
+        return client.post(
+            endpoint,
+            json={"part_id": part_id, "selected_index": -1, "response_text": "the same words"},
+        )
+
+    a1 = threading.Thread(target=lambda: a1_outcome.update(response=submit()))
+    a1.start()
+    assert a1_entered.wait(timeout=15)  # A1 claimed and is judging
+    # The owner vanished: the marker is now older than the staleness bound.
+    db.execute(
+        "update quiz_answers set answered_at = datetime('now', '-190 seconds') "
+        "where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    )
+    db.commit()
+    # An identical duplicate arrives and reclaims the dead claim.
+    a2 = threading.Thread(target=lambda: a2_outcome.update(response=submit()))
+    a2.start()
+    assert a2_entered.wait(timeout=15)  # A2 holds the reclaimed claim and is judging
+
+    # The dead owner's judgment now lands: same text, same version, wrong token.
+    a1_release.set()
+    a1.join(timeout=30)
+    assert a1_outcome["response"].status_code == 409  # type: ignore[union-attr]
+    a2_release.set()
+    a2.join(timeout=30)
+    assert a2_outcome["response"].status_code == 200  # type: ignore[union-attr]
+    row = db.execute(
+        "select verdict, grade_detail from quiz_answers where part_id = ?", (part_id,)
+    ).fetchone()
+    assert row["verdict"] == "correct"
+    assert json.loads(str(row["grade_detail"]))["order"] == 2  # A2's judgment stands
+
+
+def test_a_fresh_claim_cannot_be_stolen_by_a_waiting_duplicate(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A reclaim never takes a live claim: while the owner's marker is fresh, an
+    identical duplicate's reclaim is refused (the route turns it into a conflict)
+    rather than overwriting the in-flight judgment."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    attempt = db.execute("select * from quiz_attempts where id = ?", (attempt_id,)).fetchone()
+    content = str(artifacts.get_part(db, part_id)["content"])
+
+    owner = routes_study._claim_in_flight(
+        db, attempt, part_id, content, "words", -1, supersede=True
+    )
+    assert owner is not None
+    steal = routes_study._claim_in_flight(
+        db, attempt, part_id, content, "words", -1, supersede=False
+    )
+    assert steal is None
+    row = db.execute(
+        "select verdict, grade_detail from quiz_answers where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["verdict"] is None
+    # The owner's token is untouched: its publish will still succeed.
+    assert json.loads(str(row["grade_detail"]))["claim_token"] == owner
+
+
+def test_a_waiting_duplicate_shares_a_failed_judgment_end_to_end(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate that enters its wait while the first judgment is still in flight
+    shares that judgment's terminal result when it fails to the uncertain floor -
+    one provider call, both clients see the same unsettled result."""
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        assert len(calls) == 1  # a second judgment would be a contract violation
+        entered.set()
+        assert release.wait(timeout=20)
+        raise RuntimeError("the provider is down")
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "a carbon cycle"}
+
+    outcomes: list[object] = []
+
+    def submit() -> None:
+        outcomes.append(client.post(endpoint, json=body))
+
+    a = threading.Thread(target=submit)
+    a.start()
+    assert entered.wait(timeout=15)  # the first judgment is in flight
+    # The duplicate arrives while the first is still judging: it waits.
+    b = threading.Thread(target=submit)
+    b.start()
+    time.sleep(0.6)  # the duplicate has entered its wait by now
+    release.set()  # the first judgment fails and publishes its uncertain result
+    a.join(timeout=30)
+    b.join(timeout=30)
+
+    assert [outcome.status_code for outcome in outcomes] == [200, 200]
+    assert calls == ["a carbon cycle"]  # the failed judgment ran once
+    row = db.execute(
+        "select verdict from quiz_answers where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["verdict"] == "uncertain"
+
+
+def test_a_waiting_duplicate_shares_the_uncertain_terminal_result(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """The scheduling contract itself, deterministically: a duplicate that read the
+    in-flight marker must not take a row whose only terminal state is `uncertain`;
+    its wait returns that terminal result (uncertain included), and a later deliberate
+    retry - one that saw the row already settled - is the only path that regrades."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    attempt = db.execute("select * from quiz_attempts where id = ?", (attempt_id,)).fetchone()
+    part = artifacts.get_part(db, part_id)
+    content = str(part["content"])
+    words = "a carbon cycle"
+
+    # The owner's claim: in flight.
+    owner_token = routes_study._claim_in_flight(
+        db, attempt, part_id, content, words, -1, supersede=True
+    )
+    assert owner_token is not None
+    # The duplicate reads the in-flight marker...
+    seen = db.execute(
+        "select * from quiz_answers where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert seen is not None and seen["verdict"] is None
+    # ...and the owner's judgment fails and publishes its uncertain terminal result
+    # before the duplicate's claim runs.
+    detail = json.dumps(
+        {"question_digest": grading.question_digest(content), "grader": "judge-fixture"},
+        ensure_ascii=False,
+    )
+    db.execute(
+        "update quiz_answers set verdict = 'uncertain', correct = 0, grade_detail = ?, "
+        "grading_version = ?, answered_at = datetime('now') "
+        "where attempt_id = ? and part_id = ?",
+        (detail, grading.GRADING_VERSION, attempt_id, part_id),
+    )
+    db.commit()
+    # The duplicate's claim must not take the row: it read no settled result, so it is
+    # a duplicate of the judgment that just published, not a deliberate retry.
+    claimed = routes_study._claim_in_flight(
+        db, attempt, part_id, content, words, -1, supersede=True, previously_seen=seen
+    )
+    assert claimed is None
+    # The duplicate's wait shares the terminal result: uncertain, not a regrade.
+    read = routes_study._wait_for_verdict(
+        db, attempt, part_id, words, -1, json.loads(content), content
+    )
+    assert read is not None
+    assert read["uncertain"] is True
+    # A request that saw the row already settled is a deliberate retry: it regrades.
+    settled_seen = db.execute(
+        "select * from quiz_answers where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    retried = routes_study._claim_in_flight(
+        db,
+        attempt,
+        part_id,
+        content,
+        words,
+        -1,
+        supersede=True,
+        previously_seen=settled_seen,
+    )
+    assert retried is not None  # the retry takes the row to regrade
+
+
+def test_a_restart_stops_a_waiting_duplicate_promptly(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate waiting on an in-flight judgment must stop at once when the attempt
+    is restarted (the owner's result would belong to an abandoned attempt), not sleep
+    out the wait bound. The restart's publish is refused as well."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        entered.set()
+        assert release.wait(timeout=20)
+        return grading.GradingResult(grading.VERDICT_CORRECT, {"grader": "judge-fixture"})
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "the same words"}
+
+    owner_outcome: dict[str, object] = {}
+    waiter_outcome: dict[str, object] = {}
+    waiter_elapsed: list[float] = []
+
+    def owner() -> None:
+        owner_outcome["response"] = client.post(endpoint, json=body)
+
+    def waiter() -> None:
+        started = time.monotonic()
+        waiter_outcome["response"] = client.post(endpoint, json=body)
+        waiter_elapsed.append(time.monotonic() - started)
+
+    a = threading.Thread(target=owner)
+    a.start()
+    assert entered.wait(timeout=15)  # the owner claimed and is judging
+    b = threading.Thread(target=waiter)
+    b.start()
+    time.sleep(0.6)  # the duplicate has claimed the wait by now
+    fresh = client.post(f"/api/quizzes/{quiz_id}/attempts?restart=true").json()
+    assert fresh["attempt_id"] != attempt_id  # the waiting attempt is abandoned
+
+    b.join(timeout=30)
+    release.set()
+    a.join(timeout=30)
+
+    assert waiter_outcome["response"].status_code == 409  # type: ignore[union-attr]
+    assert waiter_elapsed[0] < 10  # stopped by the restart, not the 150s bound
+    assert owner_outcome["response"].status_code == 409  # type: ignore[union-attr]
+
+
+def test_a_regenerated_question_stops_a_waiting_duplicate_promptly(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A duplicate waiting on an in-flight judgment must stop at once when the
+    question is regenerated under it: the owner's judgment is about different content,
+    and neither it nor the wait can serve a result from the old question."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        entered.set()
+        assert release.wait(timeout=20)
+        return grading.GradingResult(grading.VERDICT_CORRECT, {"grader": "judge-fixture"})
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "the same words"}
+
+    owner_outcome: dict[str, object] = {}
+    waiter_outcome: dict[str, object] = {}
+    waiter_elapsed: list[float] = []
+
+    def owner() -> None:
+        owner_outcome["response"] = client.post(endpoint, json=body)
+
+    def waiter() -> None:
+        started = time.monotonic()
+        waiter_outcome["response"] = client.post(endpoint, json=body)
+        waiter_elapsed.append(time.monotonic() - started)
+
+    a = threading.Thread(target=owner)
+    a.start()
+    assert entered.wait(timeout=15)
+    b = threading.Thread(target=waiter)
+    b.start()
+    time.sleep(0.6)  # the duplicate has claimed the wait by now
+    # The question is regenerated in place: same stem, a different reference.
+    part_row = db.execute("select content from artifact_parts where id = ?", (part_id,)).fetchone()
+    stored = json.loads(str(part_row["content"]))
+    stored["options"] = ["a renamed reference"]
+    db.execute(
+        "update artifact_parts set content = ? where id = ?",
+        (json.dumps(stored), part_id),
+    )
+    db.commit()
+    # The duplicate must surface promptly, and the owner's late result must be refused.
+    b.join(timeout=30)
+    release.set()
+    a.join(timeout=30)
+
+    assert waiter_outcome["response"].status_code == 409  # type: ignore[union-attr]
+    assert waiter_elapsed[0] < 10
+    assert owner_outcome["response"].status_code == 409  # type: ignore[union-attr]
+    row = db.execute("select verdict from quiz_answers where part_id = ?", (part_id,)).fetchone()
+    assert row["verdict"] is None  # nothing judged against the old content stands
+
+
+def test_a_finish_stops_a_waiting_duplicate_promptly(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finishing the attempt while a duplicate waits: the wait stops at once (the
+    attempt no longer has live answers to serve), and the in-flight owner's late
+    publish is refused into a finished attempt."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        entered.set()
+        assert release.wait(timeout=20)
+        return grading.GradingResult(grading.VERDICT_CORRECT, {"grader": "judge-fixture"})
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "the same words"}
+
+    owner_outcome: dict[str, object] = {}
+    waiter_outcome: dict[str, object] = {}
+    waiter_elapsed: list[float] = []
+
+    def owner() -> None:
+        owner_outcome["response"] = client.post(endpoint, json=body)
+
+    def waiter() -> None:
+        started = time.monotonic()
+        waiter_outcome["response"] = client.post(endpoint, json=body)
+        waiter_elapsed.append(time.monotonic() - started)
+
+    a = threading.Thread(target=owner)
+    a.start()
+    assert entered.wait(timeout=15)
+    b = threading.Thread(target=waiter)
+    b.start()
+    time.sleep(0.6)  # the duplicate has claimed the wait by now
+    finished = client.post(f"/api/attempts/{attempt_id}/finish").json()
+    # The in-flight judgment is unresolved at finish time, not a wrong answer.
+    assert finished["unresolved"] == 1
+    assert finished["score"] == 0
+
+    b.join(timeout=30)
+    release.set()
+    a.join(timeout=30)
+
+    assert waiter_outcome["response"].status_code == 409  # type: ignore[union-attr]
+    assert waiter_elapsed[0] < 10
+    assert owner_outcome["response"].status_code == 409  # type: ignore[union-attr]
+
+
+def test_a_replay_never_survives_its_attempt(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The replay fast path serves a stored result: it may only do so for a live
+    attempt. After a restart the old attempt is abandoned, and an identical resubmission
+    to it is a conflict, not a replay."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "the same words"}
+
+    first = client.post(endpoint, json=body)
+    assert first.status_code == 200
+    fresh = client.post(f"/api/quizzes/{quiz_id}/attempts?restart=true").json()
+    assert fresh["attempt_id"] != attempt_id
+    replay = client.post(endpoint, json=body)
+    assert replay.status_code == 409  # the settled result is never replayed into a dead attempt
+
+
 def test_an_unresolved_answer_is_reported_not_wrong_at_finish(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:
