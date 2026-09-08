@@ -652,8 +652,17 @@ def read_owned_bytes(path: Path, *, root: Path, max_bytes: int) -> bytes:
             os.close(parent_fd)
 
 
-def read_private_text(path: Path, *, encoding: str = "utf-8") -> str:
-    """Read a private regular file without following a final-component symlink."""
+def read_private_text(path: Path, *, encoding: str = "utf-8", max_chars: int | None = None) -> str:
+    """Read a private regular file without following a final-component symlink.
+
+    `max_chars` bounds the read to that many decoded characters: a caller serving a
+    preview of a large file asks the stream for a prefix and never runs it to EOF.
+    The bound is characters, not bytes, so UTF-8 buffering may pull one bounded
+    decoder buffer past it but never the whole file. Left unset the entire file is
+    read, which is what the small owned state files this reader was written for are.
+    """
+    if max_chars is not None and max_chars < 0:
+        raise ValueError(f"max_chars must not be negative, got {max_chars}")
     if not _POSIX:
         _refuse_existing_symlink(path)
     try:
@@ -667,7 +676,9 @@ def read_private_text(path: Path, *, encoding: str = "utf-8") -> str:
         _fchmod_owned(descriptor, FILE_MODE, path)
         with os.fdopen(descriptor, "r", encoding=encoding) as handle:
             owns_descriptor = True
-            return handle.read()
+            if max_chars is None:
+                return handle.read()
+            return handle.read(max_chars)
     finally:
         if not owns_descriptor:
             os.close(descriptor)
