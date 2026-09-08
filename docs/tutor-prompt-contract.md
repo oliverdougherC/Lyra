@@ -182,3 +182,16 @@ a transcript retains a false or unresolved comparison, even if the model says it
 a fresh coherent check is needed rather than inferring that a later unrelated success resolved it.
 This conservative rule also downgrades some valid floating-point-to-rational retries, recorded
 for human review. Guide language still requires semantic evaluation and is not mechanically certified.
+
+## Contract follow-up — September 8
+
+The [PLA-461 local Guide quality pass](local-guide-quality-20260908.md) rewrites two Guide
+bullets without moving the contract: a simpler explanation now shows the same mechanism in
+one small concrete example, and attempt diagnosis checks what a student's step actually does
+to the expression before naming it wrong, never explaining an error with an invented stricter
+rule. Both were measured on the production class_chat loop with the previously failing
+attempt-diagnosis and simpler-explanation cases, a fresh held-out variant, and Show/full-solution
+controls. Contract version stays 2; the corpus and rubrics are unchanged. This is a
+candidate change for parent integration (not yet built): the parent's independent reading of
+the retained terminal text found residual issues in the attempt and simpler cases, the
+same-model scores are supporting only, and PLA-461 stays open.

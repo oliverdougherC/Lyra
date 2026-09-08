@@ -1,0 +1,2841 @@
+{
+  "cases": [
+    {
+      "run": "baseline",
+      "source_state": "pristine 07ad451 (no working diff)",
+      "case_id": "attempt-where-did-i-go-wrong",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+        "history": [
+          {
+            "role": "user",
+            "content": "Compute y(t) = x(t) * h(t) where x(t) = u(t) - u(t-1) and h(t) = e^{-t} u(t)."
+          },
+          {
+            "role": "assistant",
+            "content": "Write it as the convolution integral: (f*g)(t) = integral of f(tau) g(t-tau) d(tau). With x the pulse on [0,1] and h causal, the limits depend on where t falls relative to that interval."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Names the actual error: h(t-tau) = e^{-(t-tau)} u(t-tau), so the integrand retains the factor e^{tau}. It is valid to pull e^{-t} outside an integral over tau, but invalid to drop e^{tau}.",
+          "Acknowledges what the attempt gets right - setting up the integral and the limits for 0 <= t <= 1 - before or alongside the correction"
+        ],
+        "must_not": [
+          "Starts a fresh method from the top without addressing the attempt",
+          "Praises the attempt with no diagnosis of the error"
+        ],
+        "notes": "The attempt treats e^{-(t-tau)} as e^{-t}. Correctly: for 0 <= t <= 1, y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}; for t >= 1 the integral runs 0 to 1, giving e^{-t}(e - 1)."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 29.18,
+        "generated_at": "2026-09-08T18:57:24+00:00",
+        "toolless": false,
+        "response": "Your setup is right \u2014 the convolution integral with lower limit 0 (from $u(\\tau)$) is correct. The first invalid step is the integrand: you wrote $h(t-\\tau)$ as $e^{-t}$, but\n\n$$h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$$\n\nso the $\\tau$ dependence was lost. Pulling $e^{-t}$ out of the integral is only legal if the integrand is constant in $\\tau$; it isn't.\n\nThere's a second issue in your limits: $x(\\tau) = u(\\tau) - u(\\tau-1)$ is nonzero only on $0 \\le \\tau \\le 1$, so the upper limit is $\\min(t, 1)$, not $t$. Your answer $t e^{-t}$ would also be wrong for $t > 1$ even with the correct integrand.\n\nCorrected, piece by piece:\n\n- **$0 < t < 1$:** limits $0$ to $t$,\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = 1 - e^{-t}$$\n\n- **$t > 1$:** limits $0$ to $1$,\n$$y(t) = \\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{1-t} - e^{-t}$$\n\n- **$t < 0$:** $y(t) = 0$ (the pulse hasn't started).\n\nI checked both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = e^{1-t} - e^{-t}$.\n\nSo the fix in your own method is: keep the $\\tau$ in the exponent, and cap the upper limit at 1.",
+        "tool_calls": [
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": true,
+              "result": "1 - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "exp(1 - t) - exp(-t)",
+              "definite": true
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "dd659a2be434fff2ce59f5345aad51b4857a9e90e7d2f5ca5b195096ae53c73c",
+          "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+          "system_prompt_tokens": 1382,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "fail",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "It answers the student's 'where did I go wrong' request immediately by naming the invalid integrand and then the limit issue."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The reply gives the needed diagnosis plus a complete corrected piecewise result without an unrelated lecture."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "It does not delay the requested diagnosis with extra prerequisite material about convolution."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "There are no questions to the student in place of the requested correction."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The actual error and the corrected result are both stated outright rather than withheld as a hint or exercise."
+            },
+            "correctness": {
+              "score": 1,
+              "note": "The final piecewise formulas are correct, but the claim that pulling e^{-t} out is only legal when the integrand is constant in \u03c4 misstates a basic rule."
+            },
+            "pedagogical_usefulness": {
+              "score": 1,
+              "note": "It gives an actionable fix and correct results, but the flawed statement about extracting e^{-t} may leave a misleading mental model."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": false,
+              "why": "It identifies the lost \u03c4 dependence in h(t\u2212\u03c4), but it does not explicitly say the integrand retains e^\u03c4 and instead incorrectly frames pulling e^{-t} outside as invalid unless the integrand is constant."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It says \u201cYour setup is right\u201d and, in the corrected case 0<t<1, uses the attempt's limits 0 to t, thereby acknowledging the setup and limits are correct in that interval."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It explicitly addresses the student's attempt by pointing to the integrand and limits rather than starting a fresh method from the top."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "It praises the setup only briefly and immediately diagnoses the integrand error, so the praise is not without diagnosis."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "baseline",
+      "source_state": "pristine 07ad451 (no working diff)",
+      "case_id": "explain-that-more-simply",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Explain that more simply.",
+        "history": [
+          {
+            "role": "user",
+            "content": "Explain the convolution integral."
+          },
+          {
+            "role": "assistant",
+            "content": "For a continuous-time system, the output at time t is y(t) = integral from -infinity to infinity of x(tau) h(t-tau) d(tau): the input x, decomposed into weighted impulses, each convolved with the system's response h, so the output sums the contribution of every past input value, weighted by how the system responds to it."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Simplifies the same material - the overlap / sliding-window picture in plainer words, ideally with one concrete small example",
+          "Stays on the same topic at a lower level of abstraction rather than a different topic"
+        ],
+        "must_not": [
+          "Restates the formal definition at the same or a higher level of abstraction",
+          "Introduces new formalism (such as the frequency domain) to make the explanation 'simpler'",
+          "Turns the reply into a quiz"
+        ],
+        "notes": "A good simpler version: convolution measures, at each output moment, how much of the input overlaps a flipped copy of the system's response - like sliding one shape along the other and measuring the overlap at each position."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 1,
+        "duration_seconds": 9.39,
+        "generated_at": "2026-09-08T18:57:34+00:00",
+        "toolless": false,
+        "response": "Convolution is just a way of saying: **the output at any moment is a weighted sum of everything the input has done so far.**\n\nHere's the mechanism, in plain words:\n\n1. **Find the system's fingerprint.** Give the system one brief push (an impulse) and record how it reacts. That reaction is the impulse response, $h$.\n\n2. **The input is a string of tiny pushes.** The signal $x$ is really a long run of small pushes, each with its own size and its own moment.\n\n3. **Each push leaves a copy of the fingerprint.** Every tiny push makes the system respond with a copy of $h$ \u2014 scaled by how big the push was, and shifted to when the push happened.\n\n4. **Add all the copies up.** The output at time $t$ is the sum of every one of those copies.\n\nThat's the whole integral: it's just doing that summing, continuously, over all past times. The weight each past input value gets is \"how much the system still remembers it\" \u2014 a push from a long time ago contributes less than a recent one, because $h$ has faded.\n\nSo convolution = *smear each input value out over time using the system's fingerprint, then add the smears together.*",
+        "tool_calls": [],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "04024df444ccdc44b894731b0da1c6d77fd240c6aa6b265ea78d1f022222528f",
+          "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+          "system_prompt_tokens": 1382,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "fail",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately gives a plain-language simplification of convolution instead of detouring."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The level of detail is appropriate to the request for a simpler explanation."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "There is no unnecessary prerequisite lecture before the main idea."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply contains no questions directed at the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The requested simpler explanation is provided outright rather than deferred or turned into a test."
+            },
+            "correctness": {
+              "score": 1,
+              "note": "It presents convolution as summing only past inputs and assumes h fades with age, which are not true for every convolution system, though they are common simplifying assumptions."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The fingerprint metaphor is organized, explains the mechanism, and gives the student a usable mental model."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": false,
+              "why": "The reply simplifies convolution, but it uses a fingerprint/copy/smeared-response picture rather than the requested overlap/sliding-window picture, and it gives no concrete small example."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It stays on the same time-domain convolution idea and lowers the abstraction by replacing integral mechanics with plain-language pushes, copies, and adding."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It does not restate the formal integral definition at the same or higher level of abstraction."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "It introduces no new formalism such as frequency-domain methods."
+            },
+            {
+              "index": 3,
+              "violated": false,
+              "why": "The reply is expository and does not turn into a quiz."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "baseline",
+      "source_state": "pristine 07ad451 (no working diff)",
+      "case_id": "show-convolution-worked",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "show",
+        "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+        "history": [],
+        "context": [],
+        "must": [
+          "Delivers the complete worked result: y(t) is 0 for t < 0, 1 - e^{-t} for 0 <= t <= 1, and e^{-t}(e - 1) for t >= 1, with every step shown in order",
+          "Names the rule or definition each step relies on: the integral form, where the integrand is nonzero, and the evaluation of the integral"
+        ],
+        "must_not": [
+          "Withholds the final result or leaves it as an exercise",
+          "Turns the reply into a quiz for the student"
+        ],
+        "notes": "x(t) = u(t) - u(t-1) is 1 on [0,1]. For 0 <= t <= 1: y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}. For t >= 1: the integral runs 0 to 1, giving e^{-t}(e - 1). For t < 0 the integrand is zero by causality."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 29.87,
+        "generated_at": "2026-09-08T18:58:04+00:00",
+        "toolless": false,
+        "response": "# Convolution of the unit pulse with $e^{-t}u(t)$\n\n**The answer first:**\n\n$$(x * h)(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ e^{1-t} - e^{-t}, & t > 1 \\end{cases}$$\n\nwhere $x(t) = u(t) - u(t-1)$ is the unit pulse on $[0,1]$ and $h(t) = e^{-t}u(t)$.\n\n## Step 1 \u2014 Write the convolution integral\n\nBy definition,\n\n$$(x * h)(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\, h(t - \\tau)\\, d\\tau$$\n\nSubstitute the two signals:\n\n$$= \\int_{-\\infty}^{\\infty} \\big[u(\\tau) - u(\\tau-1)\\big]\\, e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau$$\n\n## Step 2 \u2014 Find where the integrand is nonzero\n\nThe integrand is a product of three factors, each of which kills the integral in a different region:\n\n- $u(\\tau) - u(\\tau-1)$ is $1$ only for $0 \\le \\tau \\le 1$ (the pulse),\n- $u(t - \\tau)$ requires $\\tau \\le t$,\n- $e^{-(t-\\tau)}$ is just the exponential, never zero.\n\nSo the integral survives only where $0 \\le \\tau \\le 1$ **and** $\\tau \\le t$, i.e. over $0 \\le \\tau \\le \\min(1, t)$. That condition splits into three cases:\n\n- **$t < 0$:** no $\\tau$ satisfies both conditions \u2192 integral is $0$.\n- **$0 \\le t \\le 1$:** the upper limit is $t$ (since $t < 1$).\n- **$t > 1$:** the upper limit is $1$ (since $1 < t$).\n\n## Step 3 \u2014 Evaluate each case\n\n**Case $t < 0$:**\n\n$$(x*h)(t) = 0$$\n\n**Case $0 \\le t \\le 1$:**\n\n$$(x*h)(t) = \\int_0^{t} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}$$\n\n**Case $t > 1$:**\n\n$$(x*h)(t) = \\int_0^{1} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = e^{-t}(e - 1) = e^{1-t} - e^{-t}$$\n\n## Step 4 \u2014 Sanity checks\n\n- **Continuity at $t = 1$:** from the left, $1 - e^{-1}$; from the right, $e^{1-1} - e^{-1} = 1 - e^{-1}$. \u2713 They match.\n- **Continuity at $t = 0$:** both sides give $0$. \u2713\n- **Numerical spot check at $t = 0.5$:** $1 - e^{-0.5} \\approx 0.3935$, which agrees with directly integrating $e^{-(0.5-\\tau)}$ from $0$ to $0.5$. \u2713\n- **At $t = 2$:** $e^{-1} - e^{-2} \\approx 0.2325$. \u2713\n\n## The idea to carry forward\n\nThe whole computation is really about **the limits of integration**: the pulse restricts $\\tau$ to $[0,1]$, the step $u(t-\\tau)$ restricts $\\tau$ to $(-\\infty, t]$, and the overlap of those two windows is $[0, \\min(1,t)]$. The \"knee\" at $t = 1$ is exactly where the limiting factor switches from $t$ to $1$. This same window-overlap picture works for any convolution of a finite-duration signal with a causal one \u2014 you just redraw the overlap as $t$ slides.",
+        "tool_calls": [
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": true,
+              "result": "1 - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "exp(1 - t) - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(2 - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(2 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "-exp(-2) + exp(-1)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(0.5 - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "0.5"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(0.5 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"0.5\"}",
+            "result": {
+              "ok": true,
+              "result": "0.393469340287367",
+              "definite": true
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "1b284f8a92736627130440d6697de9b92c1a447ce024ef8657b2a58f0f48632e",
+          "assembled_system_prompt_sha256": "5d8f37194d5487b7e81f664777087a12f7fd10fba6de237bf4a2e250d0e32258",
+          "system_prompt_tokens": 1046,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately gives the requested convolution result and then proceeds to the step-by-step computation."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The detail is focused on the requested computation, with only brief sanity checks and a compact takeaway that remain relevant."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "It introduces the needed signal definitions and convolution integral without adding unnecessary background."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "No questions are posed to the student; the requested explanation is given directly."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The final result is stated up front and every case is fully evaluated rather than left for the student."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The piecewise result and all integrals match the correct convolution of the unit pulse with e^{-t}u(t)."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The reply organizes the computation around the key idea of integration limits and explains why the cases split, leaving the student with a reusable method."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It gives the complete piecewise result\u20140 for t<0, 1-e^{-t} for 0<=t<=1, and e^{1-t}-e^{-t}=e^{-t}(e-1) for t>1\u2014and works through the integral setup, case split, and evaluation in order."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "Step 1 names the convolution integral definition, Step 2 identifies where the integrand is nonzero, and Step 3 explicitly evaluates the integral in each case."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The final result is provided immediately and no part of the computation is left as an exercise."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "The reply is a worked explanation with no quiz-like questions or prompts requiring the student to solve for the answer."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "baseline-heldout",
+      "source_state": "pristine 07ad451 (no working diff)",
+      "case_id": "attempt-sum-constant",
+      "case": {
+        "corpus": "heldout-variant.json",
+        "mode": "guide",
+        "user": "I need the sum from k=1 to n of (k+1). I wrote sum(k+1) = sum(k) + 1 = n(n+1)/2 + 1. Where did I go wrong?",
+        "history": [],
+        "context": [],
+        "must": [
+          "Identifies the first invalid transition: the constant 1 appears once in each of the n terms, so its sum over k=1 to n is n, not 1, and the corrected value is n(n+1)/2 + n",
+          "Acknowledges that splitting the sum by linearity and computing sum of k as n(n+1)/2 were valid moves, before or alongside the correction"
+        ],
+        "must_not": [
+          "Claims that a constant term may not be separated from the sum, or that the student's split of the sum was itself the error",
+          "Restarts the problem with a different method without addressing the student's step"
+        ],
+        "notes": "sum_{k=1}^{n} (k+1) = sum_{k=1}^{n} k + sum_{k=1}^{n} 1 = n(n+1)/2 + n = n(n+3)/2. The linearity split is a valid operation; the error is treating the n individual constant terms as a single 1. A reply that says a constant cannot be factored out or separated at all states a false rule and fails item 1 of must_not."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 5,
+        "duration_seconds": 19.85,
+        "generated_at": "2026-09-08T18:58:46+00:00",
+        "toolless": false,
+        "response": "The slip is in this step:\n\n$$\\sum_{k=1}^{n}(k+1) = \\sum_{k=1}^{n} k + 1$$\n\nThe $+1$ isn't added once \u2014 it's added **once per term**, and there are $n$ terms. So the constant comes out as $n$, not $1$:\n\n$$\\sum_{k=1}^{n}(k+1) = \\sum_{k=1}^{n} k + \\sum_{k=1}^{n} 1 = \\frac{n(n+1)}{2} + n = \\frac{n(n+3)}{2}$$\n\nQuick check with $n=5$: the sum is $2+3+4+5+6 = 20$, and $\\frac{5\\cdot 8}{2} = 20$. Your version gives $\\frac{5\\cdot 6}{2}+1 = 16$, which is short by exactly $n-1 = 4$ \u2014 the number of terms you forgot to count the $1$ in.\n\nThe general rule: $\\sum (a_k + c) = \\sum a_k + nc$, for a constant $c$.",
+        "tool_calls": [
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "sum(k+1, k, 1, n)",
+              "compare_to": "n*(n+3)/2"
+            },
+            "raw_arguments": "{\"expression\": \"sum(k+1, k, 1, n)\", \"compare_to\": \"n*(n+3)/2\"}",
+            "result": {
+              "ok": true,
+              "equal": false,
+              "difference": "-n*(n + 3)/2 + sum(k + 1, k, 1, n)",
+              "certain": false,
+              "note": "Not settled either way: the difference did not reduce to zero, and could not be shown to be nonzero either. This is not a disagreement, and the two expressions may well be equal.",
+              "comparison_status": "unresolved",
+              "interpretation": "The computation ran, but equality of the submitted expressions is unresolved. This establishes neither agreement nor disagreement. Do not claim verification from this result."
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "sum(k, k, 1, n) + n",
+              "compare_to": "n*(n+3)/2"
+            },
+            "raw_arguments": "{\"expression\": \"sum(k, k, 1, n) + n\", \"compare_to\": \"n*(n+3)/2\"}",
+            "result": {
+              "ok": true,
+              "equal": false,
+              "difference": "-n**2/2 - n/2 + sum(k, k, 1, n)",
+              "certain": false,
+              "note": "Not settled either way: the difference did not reduce to zero, and could not be shown to be nonzero either. This is not a disagreement, and the two expressions may well be equal.",
+              "comparison_status": "unresolved",
+              "interpretation": "The computation ran, but equality of the submitted expressions is unresolved. This establishes neither agreement nor disagreement. Do not claim verification from this result."
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "sum(k+1, k, 1, 5)",
+              "compare_to": "5*(5+3)/2"
+            },
+            "raw_arguments": "{\"expression\": \"sum(k+1, k, 1, 5)\", \"compare_to\": \"5*(5+3)/2\"}",
+            "result": {
+              "ok": true,
+              "equal": false,
+              "difference": "sum(k + 1, k, 1, 5) - 20",
+              "certain": false,
+              "note": "Not settled either way: the difference did not reduce to zero, and could not be shown to be nonzero either. This is not a disagreement, and the two expressions may well be equal.",
+              "comparison_status": "unresolved",
+              "interpretation": "The computation ran, but equality of the submitted expressions is unresolved. This establishes neither agreement nor disagreement. Do not claim verification from this result."
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "n*(n+1)/2 + n",
+              "compare_to": "n*(n+3)/2"
+            },
+            "raw_arguments": "{\"expression\": \"n*(n+1)/2 + n\", \"compare_to\": \"n*(n+3)/2\"}",
+            "result": {
+              "ok": true,
+              "equal": true,
+              "difference": "0",
+              "certain": true,
+              "comparison_status": "matched",
+              "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "a036feb4e5e3f66c7bf44c8cf956726a2219e7d7993e5a18d18691235376968d",
+          "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+          "system_prompt_tokens": 1382,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "167865510b515b3c89a08cb8d889d19b098f907d35dd71c803c4347e61d9fc66",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "b398c3367cab52cc09fb12731995ce65bd1defb2c01206ab864976f0a3f893a6",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately points to the student's specific invalid step and explains what went wrong."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The explanation, check, and short general rule are all directly responsive to the request without unnecessary expansion."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "There is no unnecessary prerequisite lecture before addressing the student's error."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply asks no questions and directly provides the correction."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The requested correction and explanation are fully given, including the corrected sum and the reason behind the error."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The corrected expression, numeric check, and general constant-sum rule are all mathematically correct."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The reply teaches the reason for the error, verifies it with a concrete example, and generalizes the rule so the student can continue independently."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "The reply states that the +1 is added once per term, so the constant sum is n, and gives the corrected value n(n+1)/2 + n = n(n+3)/2."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It treats the linearity split and the n(n+1)/2 sum as the correct parts, using them in the corrected expression and saying the student's version is short only by n-1."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The reply does not say a constant cannot be separated; it corrects the constant from 1 to n and shows sum 1 = n."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "The reply directly addresses the student's step and uses the same linearity method rather than restarting with a different method."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-1",
+      "source_state": "candidate v1 (intermediate; not adopted)",
+      "case_id": "attempt-where-did-i-go-wrong",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+        "history": [
+          {
+            "role": "user",
+            "content": "Compute y(t) = x(t) * h(t) where x(t) = u(t) - u(t-1) and h(t) = e^{-t} u(t)."
+          },
+          {
+            "role": "assistant",
+            "content": "Write it as the convolution integral: (f*g)(t) = integral of f(tau) g(t-tau) d(tau). With x the pulse on [0,1] and h causal, the limits depend on where t falls relative to that interval."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Names the actual error: h(t-tau) = e^{-(t-tau)} u(t-tau), so the integrand retains the factor e^{tau}. It is valid to pull e^{-t} outside an integral over tau, but invalid to drop e^{tau}.",
+          "Acknowledges what the attempt gets right - setting up the integral and the limits for 0 <= t <= 1 - before or alongside the correction"
+        ],
+        "must_not": [
+          "Starts a fresh method from the top without addressing the attempt",
+          "Praises the attempt with no diagnosis of the error"
+        ],
+        "notes": "The attempt treats e^{-(t-tau)} as e^{-t}. Correctly: for 0 <= t <= 1, y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}; for t >= 1 the integral runs 0 to 1, giving e^{-t}(e - 1)."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 3,
+        "duration_seconds": 19.14,
+        "generated_at": "2026-09-08T19:04:31+00:00",
+        "toolless": false,
+        "response": "Your setup is right \u2014 the convolution integral is correct. The first thing that goes wrong is the **upper limit**. You wrote the integral from 0 to $t$, but $x(\\tau) = u(\\tau) - u(\\tau-1)$ is only nonzero on $[0,1]$. So the upper limit should be $\\min(t, 1)$, not $t$.\n\nThere's a second slip in the same step: you replaced $e^{-(t-\\tau)}$ with $e^{-t}$ and pulled it out of the integral. But the integrand is $h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$, and the $\\tau$ in the exponent means it's **not** constant with respect to $\\tau$ \u2014 it can't come out.\n\nCorrected, in your method:\n\n**For $0 < t < 1$:** the pulse and the causal $h$ overlap on $[0, t]$:\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = 1 - e^{-t}$$\n\n**For $t > 1$:** the overlap is the whole pulse, $[0, 1]$:\n$$y(t) = \\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{1-t} - e^{-t}$$\n\n(Both integrals check out: the first is $[-e^{-(t-\\tau)}]_0^t = 1 - e^{-t}$, the second is $[-e^{-(t-\\tau)}]_0^1 = e^{1-t} - e^{-t}$.)\n\nAnd of course $y(t) = 0$ for $t < 0$, since both signals are causal.\n\nSo the full answer is:\n$$y(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 < t < 1 \\\\ e^{1-t} - e^{-t}, & t > 1 \\end{cases}$$\n\nNotice the shape: the response rises while the pulse is still on ($1 - e^{-t}$), then decays exponentially once the pulse turns off \u2014 which is exactly what you'd expect from a decaying exponential being \"fed\" for one second and then left alone.",
+        "tool_calls": [
+          {
+            "name": "cas_integrate",
+            "ok": false,
+            "arguments": {
+              "expression": "e^{-(t-tau)}",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"e^{-(t-tau)}\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": false,
+              "error": "expression contains characters that are not mathematical notation."
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": false,
+            "arguments": {
+              "expression": "e^{-(t-tau)}",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"e^{-(t-tau)}\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": false,
+              "error": "expression contains characters that are not mathematical notation."
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": true,
+              "result": "1 - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "exp(1 - t) - exp(-t)",
+              "definite": true
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "9500a8ec6ed7228370086b9486b6d3c4497de65926581e9d28f03e3b563db8e7",
+          "assembled_system_prompt_sha256": "8b8412a80f56e0d49d127ed1d5a0cd82e1aa51496d3601cdd5921be5356a761e",
+          "system_prompt_tokens": 1411,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "55f1ab5a3fa97583a1c5a0c73b10434478c2cd6863f212b07262bb6328f2999e",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "fail",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately addresses the student's attempted computation and states the two issues."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The detail is a focused correction plus the completed piecewise result, appropriate to the convolution request."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "It does not add unnecessary background before correcting the attempt."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "It asks no questions."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "It gives the corrected integral evaluation and full piecewise answer rather than withholding it."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The mathematical cases and integrals are correct; the only diagnostic gap is that it does not explicitly factor e^{-(t-\\tau)} as e^{-t}e^{\\tau}."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It is organized around the overlap intervals and gives the reason for the rise-then-decay shape."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": false,
+              "why": "It identifies that e^{-(t-\u03c4)} is not constant in \u03c4, but it does not explicitly state the e^{\u03c4} factor or that e^{-t} alone is valid to pull out."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It says the setup is right and then uses the 0-to-t overlap for 0<t<1, acknowledging the correct limits in that range alongside the correction."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It directly engages the attempt with 'Your setup is right' and 'in your method' rather than restarting."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "It gives a diagnosis of the upper-limit and exponential mistakes rather than only praise."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-1",
+      "source_state": "candidate v1 (intermediate; not adopted)",
+      "case_id": "explain-that-more-simply",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Explain that more simply.",
+        "history": [
+          {
+            "role": "user",
+            "content": "Explain the convolution integral."
+          },
+          {
+            "role": "assistant",
+            "content": "For a continuous-time system, the output at time t is y(t) = integral from -infinity to infinity of x(tau) h(t-tau) d(tau): the input x, decomposed into weighted impulses, each convolved with the system's response h, so the output sums the contribution of every past input value, weighted by how the system responds to it."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Simplifies the same material - the overlap / sliding-window picture in plainer words, ideally with one concrete small example",
+          "Stays on the same topic at a lower level of abstraction rather than a different topic"
+        ],
+        "must_not": [
+          "Restates the formal definition at the same or a higher level of abstraction",
+          "Introduces new formalism (such as the frequency domain) to make the explanation 'simpler'",
+          "Turns the reply into a quiz"
+        ],
+        "notes": "A good simpler version: convolution measures, at each output moment, how much of the input overlaps a flipped copy of the system's response - like sliding one shape along the other and measuring the overlap at each position."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 4,
+        "duration_seconds": 44.83,
+        "generated_at": "2026-09-08T19:05:16+00:00",
+        "toolless": false,
+        "response": "The output at any moment is just a **weighted sum of the input's past values**.\n\nHere's the mechanism. The system has a response $h$: $h(s)$ tells you how much a single poke still shows up in the output $s$ seconds later. The real input isn't one poke \u2014 it's a poke at every moment $\\tau$, with strength $x(\\tau)$. At time $t$, the poke from moment $\\tau$ is $(t-\\tau)$ seconds old, so it contributes $x(\\tau)\\,h(t-\\tau)$. Add up the contributions from every past moment and that's the output:\n\n$$y(t) = \\int x(\\tau)\\,h(t-\\tau)\\,d\\tau$$\n\nThe \"flip\" (the $t-\\tau$) is just this: you're asking each past input value *\"how old are you right now?\"* and weighting it by how much the system still remembers something that old.\n\n**Concrete example.** Make the system a 1-second averager: $h(s)=1$ for $0\\le s\\le 1$, else $0$. Then the output is just the sum of the input over the last second, $y(t)=\\int_{t-1}^{t} x(\\tau)\\,d\\tau$. Feed it a 1-second blip ($x=1$ for one second, $0$ otherwise) and the output is a triangle: it ramps up as the blip slides into the averaging window, peaks at $1$ when the blip is fully inside, and ramps back down as it slides out.",
+        "tool_calls": [
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "integrate((u(tau) - u(tau - 1)) * (u(t - tau) - u(t - tau - 1)), tau, -oo, oo)"
+            },
+            "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * (u(t - tau) - u(t - tau - 1)), tau, -oo, oo)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "Integral((Heaviside(tau) - Heaviside(tau - 1))*(Heaviside(t - tau) - Heaviside(t - tau - 1)), (tau, -oo, oo))"
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "integrate((u(tau) - u(tau - 1)) * (u(1 - tau) - u(1 - tau - 1)), tau, -oo, oo)"
+            },
+            "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * (u(1 - tau) - u(1 - tau - 1)), tau, -oo, oo)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "Integral(-(Heaviside(-tau) - Heaviside(1 - tau))*(Heaviside(tau) - Heaviside(tau - 1)), (tau, -oo, oo))"
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "integrate((u(tau) - u(tau - 1)) * (u(0.5 - tau) - u(0.5 - tau - 1)), tau, -oo, oo)"
+            },
+            "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * (u(0.5 - tau) - u(0.5 - tau - 1)), tau, -oo, oo)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "0.500000000000000"
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "integrate((u(tau) - u(tau - 1)) * (u(1.5 - tau) - u(1.5 - tau - 1)), tau, -oo, oo)"
+            },
+            "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * (u(1.5 - tau) - u(1.5 - tau - 1)), tau, -oo, oo)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "0.500000000000000"
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "integrate((u(tau) - u(tau - 1)) * (u(2.5 - tau) - u(2.5 - tau - 1)), tau, -oo, oo)"
+            },
+            "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * (u(2.5 - tau) - u(2.5 - tau - 1)), tau, -oo, oo)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "0"
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "integrate(1, tau, 0, 1)"
+            },
+            "raw_arguments": "{\"expression\": \"integrate(1, tau, 0, 1)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "1"
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "105a099741e7d56d0a6dae8ad714f6574050bcae8beae7bffea28527e2e67c2e",
+          "assembled_system_prompt_sha256": "8b8412a80f56e0d49d127ed1d5a0cd82e1aa51496d3601cdd5921be5356a761e",
+          "system_prompt_tokens": 1411,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "55f1ab5a3fa97583a1c5a0c73b10434478c2cd6863f212b07262bb6328f2999e",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately answers with a simpler weighted-sum framing and then explains the mechanism without detour."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The amount of detail matches a request for a simpler explanation, using a concrete small example rather than a lecture."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "The brief restatement of what h(s) means is needed to make the mechanism clear and does not delay the substance."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "No questions are asked of the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The requested simpler explanation and a concrete illustration are fully provided without deferral."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The 1-second averager and one-second blip triangle example are mathematically correct for the stated causal impulse response."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It organizes the idea around the mechanism of weighting past inputs and gives a concrete picture the student can reuse."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It simplifies the material with a plain weighted-sum/sliding-window story and includes a concrete 1-second averager example whose output is a triangle."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It remains on convolution and system output, lowering the abstraction to 'pokes', 'age', and an averaging window rather than changing topics."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The integral appears only as a compact notation for the just-explained plain weighted sum, not as the reply's main restatement of the formal definition."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "No new formalism such as the frequency domain is introduced."
+            },
+            {
+              "index": 3,
+              "violated": false,
+              "why": "The reply is explanatory and contains no quiz questions directed at the student."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-1",
+      "source_state": "candidate v1 (intermediate; not adopted)",
+      "case_id": "show-convolution-worked",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "show",
+        "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+        "history": [],
+        "context": [],
+        "must": [
+          "Delivers the complete worked result: y(t) is 0 for t < 0, 1 - e^{-t} for 0 <= t <= 1, and e^{-t}(e - 1) for t >= 1, with every step shown in order",
+          "Names the rule or definition each step relies on: the integral form, where the integrand is nonzero, and the evaluation of the integral"
+        ],
+        "must_not": [
+          "Withholds the final result or leaves it as an exercise",
+          "Turns the reply into a quiz for the student"
+        ],
+        "notes": "x(t) = u(t) - u(t-1) is 1 on [0,1]. For 0 <= t <= 1: y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}. For t >= 1: the integral runs 0 to 1, giving e^{-t}(e - 1). For t < 0 the integrand is zero by causality."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 20.64,
+        "generated_at": "2026-09-08T19:05:36+00:00",
+        "toolless": false,
+        "response": "# Convolution of the unit pulse with $e^{-t}u(t)$\n\n**The answer first:**\n\n$$(x * h)(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ e^{1-t} - e^{-t}, & t > 1 \\end{cases}$$\n\nwhere $x(t) = u(t) - u(t-1)$ is the unit pulse on $[0,1]$ and $h(t) = e^{-t}u(t)$.\n\n## Step 1 \u2014 Write the convolution integral\n\nBy definition,\n\n$$(x * h)(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\, h(t - \\tau)\\, d\\tau$$\n\nSubstitute the two signals:\n\n$$= \\int_{-\\infty}^{\\infty} \\big[u(\\tau) - u(\\tau-1)\\big]\\, e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau$$\n\n## Step 2 \u2014 Find where the integrand is nonzero\n\nThe integrand is a product of three factors, each of which kills the integral in a different region:\n\n- $u(\\tau) - u(\\tau-1)$ is $1$ only for $0 \\le \\tau \\le 1$ (the pulse),\n- $u(t - \\tau)$ requires $\\tau \\le t$,\n- $e^{-(t-\\tau)}$ is just the exponential, never zero.\n\nSo the integral survives only where $0 \\le \\tau \\le 1$ **and** $\\tau \\le t$, i.e. over $0 \\le \\tau \\le \\min(1, t)$. That condition splits into three cases:\n\n- **$t < 0$:** no $\\tau$ satisfies both conditions \u2192 integral is $0$.\n- **$0 \\le t \\le 1$:** the upper limit is $t$ (since $t < 1$).\n- **$t > 1$:** the upper limit is $1$ (since $1 < t$).\n\n## Step 3 \u2014 Evaluate each case\n\n**Case $t < 0$:**\n\n$$(x*h)(t) = 0$$\n\n**Case $0 \\le t \\le 1$:**\n\n$$(x*h)(t) = \\int_0^{t} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}$$\n\n**Case $t > 1$:**\n\n$$(x*h)(t) = \\int_0^{1} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = e^{-t}(e - 1) = e^{1-t} - e^{-t}$$\n\n## Step 4 \u2014 Sanity checks\n\n- **Continuity at $t = 1$:** from the left, $1 - e^{-1}$; from the right, $e^{1-1} - e^{-1} = 1 - e^{-1}$. \u2713 They match.\n- **Continuity at $t = 0$:** both sides give $0$. \u2713\n- **Numerical spot check at $t = 0.5$:** $1 - e^{-0.5} \\approx 0.3935$, which agrees with directly integrating $e^{-(0.5-\\tau)}$ from $0$ to $0.5$. \u2713\n- **At $t = 2$:** $e^{-1} - e^{-2} \\approx 0.2325$. \u2713\n\n## The idea to carry forward\n\nThe whole computation is really about **the limits of integration**: the pulse restricts $\\tau$ to $[0,1]$, the step $u(t-\\tau)$ restricts $\\tau$ to $(-\\infty, t]$, and the overlap of those two windows is $[0, \\min(1,t)]$. The \"knee\" at $t = 1$ is exactly where the limiting factor switches from $t$ to $1$. This same window-overlap picture works for any convolution of a finite-duration signal with a causal one \u2014 you just redraw the overlap as $t$ slides.",
+        "tool_calls": [
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": true,
+              "result": "1 - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "exp(1 - t) - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(2 - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(2 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "-exp(-2) + exp(-1)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(0.5 - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "0.5"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(0.5 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"0.5\"}",
+            "result": {
+              "ok": true,
+              "result": "0.393469340287367",
+              "definite": true
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "1b284f8a92736627130440d6697de9b92c1a447ce024ef8657b2a58f0f48632e",
+          "assembled_system_prompt_sha256": "5d8f37194d5487b7e81f664777087a12f7fd10fba6de237bf4a2e250d0e32258",
+          "system_prompt_tokens": 1046,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "55f1ab5a3fa97583a1c5a0c73b10434478c2cd6863f212b07262bb6328f2999e",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately gives the requested convolution result and then walks through the step-by-step computation."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The level of detail matches a step-by-step worked computation, with only brief extra sanity checks."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "No unnecessary prerequisite lecture is introduced before the requested convolution computation."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply does not ask the student any questions."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The final piecewise result is stated up front and then derived in full."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The integral limits and evaluated cases match the ground-truth result, including e^{-t}(e-1) for t >= 1."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It explains why the integration limits split by the overlap of the pulse window and the causal exponential window, giving a reusable method."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "The reply gives the complete piecewise result and then shows the integral setup, nonzero-region analysis, and evaluation for each case in order."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It explicitly names the convolution integral definition, identifies where the integrand is nonzero, and then evaluates the integral case by case."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The final result is given in the first section rather than withheld or left as an exercise."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "The reply is a full worked explanation and contains no quiz questions to the student."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-2",
+      "source_state": "candidate v2 (retained candidate)",
+      "case_id": "attempt-where-did-i-go-wrong",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+        "history": [
+          {
+            "role": "user",
+            "content": "Compute y(t) = x(t) * h(t) where x(t) = u(t) - u(t-1) and h(t) = e^{-t} u(t)."
+          },
+          {
+            "role": "assistant",
+            "content": "Write it as the convolution integral: (f*g)(t) = integral of f(tau) g(t-tau) d(tau). With x the pulse on [0,1] and h causal, the limits depend on where t falls relative to that interval."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Names the actual error: h(t-tau) = e^{-(t-tau)} u(t-tau), so the integrand retains the factor e^{tau}. It is valid to pull e^{-t} outside an integral over tau, but invalid to drop e^{tau}.",
+          "Acknowledges what the attempt gets right - setting up the integral and the limits for 0 <= t <= 1 - before or alongside the correction"
+        ],
+        "must_not": [
+          "Starts a fresh method from the top without addressing the attempt",
+          "Praises the attempt with no diagnosis of the error"
+        ],
+        "notes": "The attempt treats e^{-(t-tau)} as e^{-t}. Correctly: for 0 <= t <= 1, y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}; for t >= 1 the integral runs 0 to 1, giving e^{-t}(e - 1)."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 23.56,
+        "generated_at": "2026-09-08T19:10:01+00:00",
+        "toolless": false,
+        "response": "Your setup is right \u2014 the error is in the upper limit. You wrote the integral from 0 to $t$, but $x(\\tau) = u(\\tau) - u(\\tau-1)$ is only 1 on $0 \\le \\tau \\le 1$. So the upper limit is $\\min(t, 1)$, not $t$. That mistake only shows up once $t > 1$: for $0 < t < 1$ your limits happen to be correct, but the integrand still isn't $e^{-t}$.\n\nThe corrected integral is\n\n$$y(t) = \\int_0^{\\min(t,1)} e^{-(t-\\tau)}\\, d\\tau$$\n\nwhich splits into cases:\n\n- **$t < 0$:** $y(t) = 0$ (the pulse hasn't started)\n- **$0 \\le t \\le 1$:** $y(t) = \\int_0^t e^{-(t-\\tau)}\\, d\\tau = 1 - e^{-t}$\n- **$t > 1$:** $y(t) = \\int_0^1 e^{-(t-\\tau)}\\, d\\tau = (e-1)e^{-t}$\n\nI checked both definite integrals symbolically and they match.\n\nNotice the shape: the output rises as $1 - e^{-t}$ while the pulse is still feeding in, then decays as $(e-1)e^{-t}$ after the pulse ends \u2014 the classic \"charge up, then ring down\" of a pulse through a first-order system. Your $t e^{-t}$ would be the answer if $x(t)$ were a unit impulse at the origin, not a unit pulse.",
+        "tool_calls": [
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "e**(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"e**(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": true,
+              "result": "Piecewise((1/log(e) - 1/(e**t*log(e)), (e > 0) & Ne(e, 1)), (t, True))",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "e**(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"e**(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "Piecewise((e**(1 - t)/log(e) - 1/(e**t*log(e)), (e > 0) & Ne(e, 1)), (1, True))",
+              "definite": true
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "8b84aaf40e8362d14d708ac3216745f617c9300232f28c888f741f5e56e9a660",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "It opens by addressing the submitted attempt and immediately identifies the limit and integrand issues before giving the corrected result."
+            },
+            "proportionality": {
+              "score": 1,
+              "note": "The corrected cases are appropriate, but the extra shape commentary and unit-impulse analogy make it a bit more than the error check asked for."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "No unnecessary review of convolution or step-function definitions delays the diagnosis."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply contains no question to the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The corrected integral and the full piecewise result are given outright."
+            },
+            "correctness": {
+              "score": 1,
+              "note": "The piecewise convolution values are correct, but the claim that t e^{-t} would result from a unit impulse is false; that convolution would give e^{-t}u(t)."
+            },
+            "pedagogical_usefulness": {
+              "score": 1,
+              "note": "It is largely useful and gives the corrected cases, but the wrong impulse analogy and initial emphasis on the upper limit can leave a misleading mental note."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It says \"the integrand still isn't e^{-t}\" and then writes the corrected integrand e^{-(t-\\tau)}, making the retained tau dependence explicit."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It begins \"Your setup is right\" and explicitly notes \"for 0 < t < 1 your limits happen to be correct\" alongside the correction."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It directly comments on the student's integral and limits rather than restarting from a fresh method."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "The praise is paired with diagnosis: \"Your setup is right \u2014 the error is in the upper limit...\""
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-2",
+      "source_state": "candidate v2 (retained candidate)",
+      "case_id": "explain-that-more-simply",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Explain that more simply.",
+        "history": [
+          {
+            "role": "user",
+            "content": "Explain the convolution integral."
+          },
+          {
+            "role": "assistant",
+            "content": "For a continuous-time system, the output at time t is y(t) = integral from -infinity to infinity of x(tau) h(t-tau) d(tau): the input x, decomposed into weighted impulses, each convolved with the system's response h, so the output sums the contribution of every past input value, weighted by how the system responds to it."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Simplifies the same material - the overlap / sliding-window picture in plainer words, ideally with one concrete small example",
+          "Stays on the same topic at a lower level of abstraction rather than a different topic"
+        ],
+        "must_not": [
+          "Restates the formal definition at the same or a higher level of abstraction",
+          "Introduces new formalism (such as the frequency domain) to make the explanation 'simpler'",
+          "Turns the reply into a quiz"
+        ],
+        "notes": "A good simpler version: convolution measures, at each output moment, how much of the input overlaps a flipped copy of the system's response - like sliding one shape along the other and measuring the overlap at each position."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 1,
+        "duration_seconds": 20.9,
+        "generated_at": "2026-09-08T19:10:22+00:00",
+        "toolless": false,
+        "response": "The output at any moment is a **weighted sum of the input's past values**. Each past value contributes, but older ones contribute less \u2014 the weights say how much of each past input still matters right now. Those weights are exactly the system's impulse response $h$. The integral isn't doing anything mysterious; it's just adding up all those contributions.\n\n**Small concrete example.** Say the system \"remembers\" the input for exactly 1 second, counting every value in that window equally ($h(t)=1$ for $0\\le t\\le 1$, else $0$). Then the output at time $t$ is just the average of the input over the last second:\n\n$$y(t) = \\int_0^1 x(t-\\tau)\\,d\\tau$$\n\nNow feed it a ramp, $x(t)=t$. At $t=3$, the \"last second\" is the interval $[2,3]$, where the input runs from $2$ to $3$. The average of that is $2.5$, and the integral gives the same:\n\n$$y(3) = \\int_0^1 (3-\\tau)\\,d\\tau = 3 - \\tfrac{1}{2} = 2.5$$\n\nSo in one line: **the present output is the weighted sum of the past input, with the weights set by how the system remembers.**",
+        "tool_calls": [],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "96641035278e039fc98276f8b94835283186e8f29c339637b413e922b281ac61",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "It immediately answers the request for a simpler explanation by reframing convolution as a weighted sum of past input values."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The reply gives a short plain-language account plus one small worked example, which matches the request for a simpler explanation."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "It does not add a prerequisite lecture; it uses the already-introduced impulse response and proceeds directly to the intuitive picture."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "There are no questions to the student, and none are needed because the student asked for an explanation."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The requested simpler explanation is provided outright, including an explicit example, rather than being turned into a hint or exercise."
+            },
+            "correctness": {
+              "score": 1,
+              "note": "The weighted-sum interpretation and the worked example are correct, but the unqualified claim that older input values contribute less is not generally true for an arbitrary impulse response."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The sliding one-second averaging example gives the student a concrete mental model and a way to compute the result themselves."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It simplifies convolution to a sliding window of past input values and gives a concrete small example with h=1 over one second and a ramp input."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It stays on the same convolution topic and lowers the level of abstraction by describing the output as a weighted sum over past input."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It does not restate the full formal integral as the main explanation; the only integral shown is a simplified rectangular-window case."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "It introduces no new formalism such as the frequency domain; it remains in time-domain intuition."
+            },
+            {
+              "index": 3,
+              "violated": false,
+              "why": "The reply is explanatory and worked-example based rather than a quiz or chain of questions."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-2",
+      "source_state": "candidate v2 (retained candidate)",
+      "case_id": "show-convolution-worked",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "show",
+        "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+        "history": [],
+        "context": [],
+        "must": [
+          "Delivers the complete worked result: y(t) is 0 for t < 0, 1 - e^{-t} for 0 <= t <= 1, and e^{-t}(e - 1) for t >= 1, with every step shown in order",
+          "Names the rule or definition each step relies on: the integral form, where the integrand is nonzero, and the evaluation of the integral"
+        ],
+        "must_not": [
+          "Withholds the final result or leaves it as an exercise",
+          "Turns the reply into a quiz for the student"
+        ],
+        "notes": "x(t) = u(t) - u(t-1) is 1 on [0,1]. For 0 <= t <= 1: y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}. For t >= 1: the integral runs 0 to 1, giving e^{-t}(e - 1). For t < 0 the integrand is zero by causality."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 32.25,
+        "generated_at": "2026-09-08T19:10:54+00:00",
+        "toolless": false,
+        "response": "# Convolution of the unit pulse with $e^{-t}u(t)$\n\n**The answer first:**\n\n$$(x * h)(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ e^{1-t} - e^{-t}, & t > 1 \\end{cases}$$\n\nwhere $x(t) = u(t) - u(t-1)$ is the unit pulse on $[0,1]$ and $h(t) = e^{-t}u(t)$.\n\n## Step 1 \u2014 Write the convolution integral\n\nBy definition,\n\n$$(x * h)(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\, h(t - \\tau)\\, d\\tau$$\n\nSubstitute the two signals:\n\n$$= \\int_{-\\infty}^{\\infty} \\big[u(\\tau) - u(\\tau-1)\\big]\\, e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau$$\n\n## Step 2 \u2014 Find where the integrand is nonzero\n\nThe integrand is a product of three factors, each of which kills the integral in a different region:\n\n- $u(\\tau) - u(\\tau-1)$ is $1$ only for $0 \\le \\tau \\le 1$ (the pulse),\n- $u(t - \\tau)$ requires $\\tau \\le t$,\n- $e^{-(t-\\tau)}$ is just the exponential, never zero.\n\nSo the integral survives only where $0 \\le \\tau \\le 1$ **and** $\\tau \\le t$, i.e. over $0 \\le \\tau \\le \\min(1, t)$. That condition splits into three cases:\n\n- **$t < 0$:** no $\\tau$ satisfies both conditions \u2192 integral is $0$.\n- **$0 \\le t \\le 1$:** the upper limit is $t$ (since $t < 1$).\n- **$t > 1$:** the upper limit is $1$ (since $1 < t$).\n\n## Step 3 \u2014 Evaluate each case\n\n**Case $t < 0$:**\n\n$$(x*h)(t) = 0$$\n\n**Case $0 \\le t \\le 1$:**\n\n$$(x*h)(t) = \\int_0^{t} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}$$\n\n**Case $t > 1$:**\n\n$$(x*h)(t) = \\int_0^{1} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = e^{-t}(e - 1) = e^{1-t} - e^{-t}$$\n\n## Step 4 \u2014 Sanity checks\n\n- **Continuity at $t = 1$:** from the left, $1 - e^{-1}$; from the right, $e^{1-1} - e^{-1} = 1 - e^{-1}$. \u2713 They match.\n- **Continuity at $t = 0$:** both sides give $0$. \u2713\n- **Numerical spot check at $t = 0.5$:** $1 - e^{-0.5} \\approx 0.3935$, which agrees with directly integrating $e^{-(0.5-\\tau)}$ from $0$ to $0.5$. \u2713\n- **At $t = 2$:** $e^{-1} - e^{-2} \\approx 0.2325$. \u2713\n\n## The idea to carry forward\n\nThe whole computation is really about **the limits of integration**: the pulse restricts $\\tau$ to $[0,1]$, the step $u(t-\\tau)$ restricts $\\tau$ to $(-\\infty, t]$, and the overlap of those two windows is $[0, \\min(1,t)]$. The \"knee\" at $t = 1$ is exactly where the limiting factor switches from $t$ to $1$. This same window-overlap picture works for any convolution of a finite-duration signal with a causal one \u2014 you just redraw the overlap as $t$ slides.",
+        "tool_calls": [
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": true,
+              "result": "1 - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(t - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "exp(1 - t) - exp(-t)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(2 - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(2 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "-exp(-2) + exp(-1)",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "exp(-(0.5 - tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "0.5"
+            },
+            "raw_arguments": "{\"expression\": \"exp(-(0.5 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"0.5\"}",
+            "result": {
+              "ok": true,
+              "result": "0.393469340287367",
+              "definite": true
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "1b284f8a92736627130440d6697de9b92c1a447ce024ef8657b2a58f0f48632e",
+          "assembled_system_prompt_sha256": "5d8f37194d5487b7e81f664777087a12f7fd10fba6de237bf4a2e250d0e32258",
+          "system_prompt_tokens": 1046,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply answers the request immediately by giving the result and then a step-by-step computation."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The detail matches the explicit request for a step-by-step computation, with useful checks rather than unrelated extra material."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "There is no unnecessary prerequisite lecture; the reply states the signals and proceeds directly to the convolution integral."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply contains no questions to the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The complete final result is given at the start and again in the case evaluation, so nothing requested is withheld."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The piecewise result and all integral evaluations are mathematically correct, with the t=1 boundary handled consistently."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It explains the governing window-overlap idea and organizes the computation by integration limits, leaving the student able to apply the method."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "The reply gives the complete piecewise result and evaluates each case in order, including 0 for t<0, 1-e^{-t} for 0<=t<=1, and e^{-t}(e-1) for t>1 with t=1 covered by the middle case."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It explicitly names the integral definition, identifies where the integrand is nonzero, and then evaluates the integral in each case."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The final result is presented upfront under \"The answer first,\" so it is not withheld or left as an exercise."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "The reply is entirely expository and contains no quiz-like questions for the student."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-3",
+      "source_state": "candidate v2 (critical repeat)",
+      "case_id": "attempt-where-did-i-go-wrong",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+        "history": [
+          {
+            "role": "user",
+            "content": "Compute y(t) = x(t) * h(t) where x(t) = u(t) - u(t-1) and h(t) = e^{-t} u(t)."
+          },
+          {
+            "role": "assistant",
+            "content": "Write it as the convolution integral: (f*g)(t) = integral of f(tau) g(t-tau) d(tau). With x the pulse on [0,1] and h causal, the limits depend on where t falls relative to that interval."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Names the actual error: h(t-tau) = e^{-(t-tau)} u(t-tau), so the integrand retains the factor e^{tau}. It is valid to pull e^{-t} outside an integral over tau, but invalid to drop e^{tau}.",
+          "Acknowledges what the attempt gets right - setting up the integral and the limits for 0 <= t <= 1 - before or alongside the correction"
+        ],
+        "must_not": [
+          "Starts a fresh method from the top without addressing the attempt",
+          "Praises the attempt with no diagnosis of the error"
+        ],
+        "notes": "The attempt treats e^{-(t-tau)} as e^{-t}. Correctly: for 0 <= t <= 1, y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}; for t >= 1 the integral runs 0 to 1, giving e^{-t}(e - 1)."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 25.04,
+        "generated_at": "2026-09-08T19:13:13+00:00",
+        "toolless": false,
+        "response": "Your setup is right \u2014 the convolution integral with $x(\\tau)h(t-\\tau)$ is the correct starting point. The first invalid transition is the integrand: you wrote $h(t-\\tau) = e^{-t}$, but that's $h(t)$, not $h(t-\\tau)$.\n\n$$h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$$\n\nThe $\\tau$ in the exponent matters: it's what makes the integrand depend on $\\tau$ at all. With $e^{-t}$ (constant in $\\tau$), you get $te^{-t}$; with the correct $e^{-(t-\\tau)}$, the integral behaves differently.\n\nThere's a second issue in the limits. $x(\\tau) = u(\\tau) - u(\\tau-1)$ is $1$ only on $0 \\le \\tau \\le 1$, so the upper limit is $\\min(t, 1)$, not $t$. Your $[0, t]$ is only valid while $0 < t < 1$.\n\nCorrected, in your method:\n\n- $t < 0$: $y(t) = 0$\n- $0 < t < 1$: $\\displaystyle\\int_0^t e^{-(t-\\tau)}\\,d\\tau = 1 - e^{-t}$\n- $t > 1$: $\\displaystyle\\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{1-t} - e^{-t} = (e-1)e^{-t}$\n\nI checked both integrals symbolically \u2014 they give exactly $1 - e^{-t}$ and $e^{1-t} - e^{-t}$ respectively, and the two pieces match at $t = 1$ (both equal $1 - e^{-1}$), as a convolution of continuous signals should.",
+        "tool_calls": [
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "e**(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "t"
+            },
+            "raw_arguments": "{\"expression\": \"e**(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+            "result": {
+              "ok": true,
+              "result": "Piecewise((1/log(e) - 1/(e**t*log(e)), (e > 0) & Ne(e, 1)), (t, True))",
+              "definite": true
+            }
+          },
+          {
+            "name": "cas_integrate",
+            "ok": true,
+            "arguments": {
+              "expression": "e**(-(t-tau))",
+              "variable": "tau",
+              "lower": "0",
+              "upper": "1"
+            },
+            "raw_arguments": "{\"expression\": \"e**(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+            "result": {
+              "ok": true,
+              "result": "Piecewise((e**(1 - t)/log(e) - 1/(e**t*log(e)), (e > 0) & Ne(e, 1)), (1, True))",
+              "definite": true
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "8b84aaf40e8362d14d708ac3216745f617c9300232f28c888f741f5e56e9a660",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "It immediately identifies the invalid integrand transition and the limits issue in the student's attempt."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The reply stays focused on diagnosing the error and gives the corrected piecewise convolution without an unrelated lecture."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "It does not introduce unnecessary background before addressing the student's attempted calculation."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "No questions are posed in place of the requested diagnosis."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "Both the integrand mistake and the limits restriction are explicitly explained and corrected."
+            },
+            "correctness": {
+              "score": 1,
+              "note": "The convolution results are correct, but the aside that matching pieces is expected \"as a convolution of continuous signals should\" is imprecise because the given signals are not continuous at the steps."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It explains the specific mistake, corrects the integrand and limits, and leaves the student with the full corrected piecewise answer."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It states the correct h(t-\u03c4)=e^{-(t-\u03c4)}u(t-\u03c4) and says the \u03c4 in the exponent matters, diagnosing the error of using a \u03c4-independent e^{-t}."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It says \"Your setup is right\" and later notes \"Your [0, t] is only valid while 0 < t < 1,\" acknowledging the correct setup and range-appropriate limits."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It addresses the student's attempt directly rather than restarting from scratch."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "It praises the setup but immediately diagnoses the actual errors."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-3",
+      "source_state": "candidate v2 (critical repeat)",
+      "case_id": "explain-that-more-simply",
+      "case": {
+        "corpus": "tutor_semantic.json",
+        "mode": "guide",
+        "user": "Explain that more simply.",
+        "history": [
+          {
+            "role": "user",
+            "content": "Explain the convolution integral."
+          },
+          {
+            "role": "assistant",
+            "content": "For a continuous-time system, the output at time t is y(t) = integral from -infinity to infinity of x(tau) h(t-tau) d(tau): the input x, decomposed into weighted impulses, each convolved with the system's response h, so the output sums the contribution of every past input value, weighted by how the system responds to it."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Simplifies the same material - the overlap / sliding-window picture in plainer words, ideally with one concrete small example",
+          "Stays on the same topic at a lower level of abstraction rather than a different topic"
+        ],
+        "must_not": [
+          "Restates the formal definition at the same or a higher level of abstraction",
+          "Introduces new formalism (such as the frequency domain) to make the explanation 'simpler'",
+          "Turns the reply into a quiz"
+        ],
+        "notes": "A good simpler version: convolution measures, at each output moment, how much of the input overlaps a flipped copy of the system's response - like sliding one shape along the other and measuring the overlap at each position."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 1,
+        "duration_seconds": 13.29,
+        "generated_at": "2026-09-08T19:13:26+00:00",
+        "toolless": false,
+        "response": "The output at any moment is a **weighted sum of the input's past values**. Each past value contributes, but older ones contribute less \u2014 the weights say how much of each past input still matters right now. Those weights are exactly the system's impulse response $h$. The integral isn't doing anything mysterious; it's just adding up all those contributions.\n\n**Small concrete example.** Say the system \"remembers\" the input for exactly 1 second, counting every value in that window equally ($h(t)=1$ for $0\\le t\\le 1$, else $0$). Then the output at time $t$ is just the average of the input over the last second:\n\n$$y(t) = \\int_0^1 x(t-\\tau)\\,d\\tau$$\n\nNow feed it a ramp, $x(t)=t$. At $t=3$, the \"last second\" is the interval $[2,3]$, where the input runs from $2$ to $3$. The average of that is $2.5$, and the integral gives the same:\n\n$$y(3) = \\int_0^1 (3-\\tau)\\,d\\tau = 3 - \\tfrac{1}{2} = 2.5$$\n\nSo in one line: **the present output is the weighted sum of the past input, with the weights set by how the system remembers.**",
+        "tool_calls": [],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "96641035278e039fc98276f8b94835283186e8f29c339637b413e922b281ac61",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately recasts the convolution integral in plainer words before adding an example."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "It gives a short intuitive explanation plus one small concrete example, which matches the request for a simpler explanation."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "No extra prerequisite material is introduced before the simplified explanation."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply contains no questions to the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "It directly provides the simpler interpretation and a worked calculation rather than leaving the student to infer it."
+            },
+            "correctness": {
+              "score": 1,
+              "note": "The moving-average example is correct, but the general statement that older input values contribute less is not always true; the weight is just the impulse response."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The reply organizes the idea around past input contributions and makes it actionable with a concrete averaging example."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It simplifies convolution as a weighted sum of past input values and uses a concrete last-second averaging window with a ramp example."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "The reply remains about the convolution integral's output-at-a-time meaning and does not switch to a different topic."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It does not restate the general formal definition at the same or higher level; the integral appears only in a simplified concrete window example."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "No frequency-domain or other new formalism is introduced."
+            },
+            {
+              "index": 3,
+              "violated": false,
+              "why": "The reply is an explanation with an example, not a quiz or series of questions."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "fixed-heldout",
+      "source_state": "candidate v2 (held-out variant repeat)",
+      "case_id": "attempt-sum-constant",
+      "case": {
+        "corpus": "heldout-variant.json",
+        "mode": "guide",
+        "user": "I need the sum from k=1 to n of (k+1). I wrote sum(k+1) = sum(k) + 1 = n(n+1)/2 + 1. Where did I go wrong?",
+        "history": [],
+        "context": [],
+        "must": [
+          "Identifies the first invalid transition: the constant 1 appears once in each of the n terms, so its sum over k=1 to n is n, not 1, and the corrected value is n(n+1)/2 + n",
+          "Acknowledges that splitting the sum by linearity and computing sum of k as n(n+1)/2 were valid moves, before or alongside the correction"
+        ],
+        "must_not": [
+          "Claims that a constant term may not be separated from the sum, or that the student's split of the sum was itself the error",
+          "Restarts the problem with a different method without addressing the student's step"
+        ],
+        "notes": "sum_{k=1}^{n} (k+1) = sum_{k=1}^{n} k + sum_{k=1}^{n} 1 = n(n+1)/2 + n = n(n+3)/2. The linearity split is a valid operation; the error is treating the n individual constant terms as a single 1. A reply that says a constant cannot be factored out or separated at all states a false rule and fails item 1 of must_not."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 3,
+        "duration_seconds": 12.3,
+        "generated_at": "2026-09-08T19:14:59+00:00",
+        "toolless": false,
+        "response": "The slip is in the last step: $\\sum_{k=1}^{n} 1$ is not $1$ \u2014 the constant $1$ appears once **for each term**, so it gets added $n$ times:\n\n$$\\sum_{k=1}^{n} (k+1) = \\sum_{k=1}^{n} k + \\sum_{k=1}^{n} 1 = \\frac{n(n+1)}{2} + n$$\n\nYour split $\\sum(k+1) = \\sum k + \\sum 1$ was correct; only the evaluation of $\\sum 1$ was off.\n\nSo the sum is\n\n$$\\frac{n(n+1)}{2} + n = \\frac{n(n+3)}{2}$$\n\nQuick check with $n=3$: the terms are $2+3+4 = 9$, and $\\frac{3\\cdot 6}{2} = 9$. \u2713",
+        "tool_calls": [
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "integrate(k+1, k, 1, n)"
+            },
+            "raw_arguments": "{\"expression\": \"integrate(k+1, k, 1, n)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "n**2/2 + n - 3/2"
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "n*(n+1)/2 + n",
+              "compare_to": "n*(n+3)/2"
+            },
+            "raw_arguments": "{\"expression\": \"n*(n+1)/2 + n\", \"compare_to\": \"n*(n+3)/2\"}",
+            "result": {
+              "ok": true,
+              "equal": true,
+              "difference": "0",
+              "certain": true,
+              "comparison_status": "matched",
+              "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "93d6dbe4a8d35bd450a1cf9741332a5b1288fa0aed19bcbcc3d14d564c8c0ddd",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "167865510b515b3c89a08cb8d889d19b098f907d35dd71c803c4347e61d9fc66",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately points to the exact step that went wrong and gives the corrected sum."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The detail matches the question, correcting the mistaken constant sum and showing a brief verification."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "There is no unnecessary background lecture before the substance."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply contains no question to the student and does not delay the requested answer."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The requested explanation and corrected value are fully provided rather than deferred."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "All statements match the ground truth: the sum of the constant terms is n, and the final sum is n(n+3)/2."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The reply explains why the error occurred, confirms the valid parts, and leaves the student with the corrected result and check."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It identifies the invalid transition by saying \\(\\sum_{k=1}^{n}1\\) is not 1 but n, giving the corrected expression \\(n(n+1)/2+n\\)."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It explicitly says the student's split \\(\\sum(k+1)=\\sum k+\\sum 1\\) was correct and only the evaluation of \\(\\sum 1\\) was off."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The reply affirms that the split by linearity was correct rather than claiming a constant may not be separated."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "It addresses the student's specific step directly and does not restart the problem with a different method."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "controls-heldout",
+      "source_state": "candidate v2 (controls: start/attempt/concept/full-solution)",
+      "case_id": "start-quadratic",
+      "case": {
+        "corpus": "tutor_beta_heldout.json",
+        "mode": "guide",
+        "user": "I only need help starting, please.",
+        "history": [
+          {
+            "role": "user",
+            "content": "Solve 3x^2 - 12x = 15."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Gives an actionable setup such as divide by 3 and move 5 to the left, with a short reason"
+        ],
+        "must_not": [
+          "Gives the roots or completes the solution without being asked"
+        ],
+        "notes": "x^2-4x-5=0 has roots 5 and -1; these final roots are not requested."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 1,
+        "duration_seconds": 8.59,
+        "generated_at": "2026-09-08T19:15:29+00:00",
+        "toolless": false,
+        "response": "Divide every term by 3 first:\n\n$$x^2 - 4x = 5$$\n\nThat's the move that makes this easy: the leading coefficient becomes 1 and the numbers get small enough to handle by hand.\n\nThen move the 5 over to get standard form:\n\n$$x^2 - 4x - 5 = 0$$\n\nThat's your setup. From here you'd factor \u2014 you're looking for two numbers that multiply to $-5$ and add to $-4$. Give that a try and I'll check your factoring.",
+        "tool_calls": [],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "bc6696e203f4e67b08fb32f62dfd09b5eb6c475b183bdf94f39f3d54be0ccc21",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately gives the requested starting setup instead of delaying it."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "It provides just the initial setup and a brief next-step cue, matching the student's request to start."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "There is no unnecessary prerequisite lecture before the substantive setup."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "Inviting the student to try factoring does not delay or replace the requested starting help."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The requested starting move is fully given without holding back the setup."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "Dividing by 3 and moving 5 to obtain x^2 - 4x - 5 = 0 are all correct."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It explains why the setup helps and tells the student exactly what to look for when factoring."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It gives the actionable setup: \"Divide every term by 3 first\" and \"move the 5 over to get standard form,\" with a short reason that the leading coefficient becomes 1 and the numbers become manageable."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The reply stops at the setup and factoring prompt, without giving the roots or completing the solution."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "controls-heldout",
+      "source_state": "candidate v2 (controls: start/attempt/concept/full-solution)",
+      "case_id": "attempt-distribution",
+      "case": {
+        "corpus": "tutor_beta_heldout.json",
+        "mode": "guide",
+        "user": "I wrote 2(x+3)=10, then 2x+3=10, then x=3.5. Where did my work go wrong?",
+        "history": [],
+        "context": [],
+        "must": [
+          "Identifies the first invalid step: distributing 2 must give 2x+6, not 2x+3",
+          "Explains why the 3 is also multiplied and shows the corrected step"
+        ],
+        "must_not": [
+          "Praises the incorrect answer as right",
+          "Ignores the attempt and starts an unrelated method"
+        ],
+        "notes": "Correct x=2. Full solution allowed but not necessary."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 10.16,
+        "generated_at": "2026-09-08T19:15:39+00:00",
+        "toolless": false,
+        "response": "Your work went wrong at the very first step \u2014 the distribution.\n\nYou wrote $2(x+3) = 2x + 3$, but the $2$ has to multiply **both** terms inside the parentheses, not just the $x$:\n\n$$2(x+3) = 2x + 2\\cdot 3 = 2x + 6$$\n\nThat missing $+3$ is exactly the difference between your expression and the correct one, and it's what threw off everything after it.\n\n**Corrected work:**\n\n$$2(x+3) = 10$$\n$$2x + 6 = 10$$\n$$2x = 4$$\n$$x = 2$$\n\n**Quick check:** plug $x = 2$ back into the original: $2(2+3) = 2(5) = 10$ \u2713\n\nAnd your answer $x = 3.5$ gives $2(3.5+3) = 2(6.5) = 13 \\neq 10$, which is a good sign that something was off.\n\nThe habit to build: when you distribute, write down every term you're multiplying. $2(x+3)$ means $2 \\cdot x$ **and** $2 \\cdot 3$ \u2014 the $2$ doesn't get to pick favorites.",
+        "tool_calls": [
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "2*(x+3)",
+              "compare_to": "2*x+3"
+            },
+            "raw_arguments": "{\"expression\": \"2*(x+3)\", \"compare_to\": \"2*x+3\"}",
+            "result": {
+              "ok": true,
+              "equal": false,
+              "difference": "3",
+              "certain": true,
+              "comparison_status": "mismatched",
+              "interpretation": "The computation ran, but the submitted expressions are not equal. This does not verify the claimed equality. Inspect the difference and the submitted notation; a corrected check must actually match before claiming verification."
+            }
+          },
+          {
+            "name": "cas_solve",
+            "ok": true,
+            "arguments": {
+              "equations": [
+                "2*(x+3) = 10"
+              ],
+              "unknowns": [
+                "x"
+              ]
+            },
+            "raw_arguments": "{\"equations\": [\"2*(x+3) = 10\"], \"unknowns\": [\"x\"]}",
+            "result": {
+              "ok": true,
+              "solutions": [
+                {
+                  "x": "2"
+                }
+              ]
+            }
+          },
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "2*(3.5+3)"
+            },
+            "raw_arguments": "{\"expression\": \"2*(3.5+3)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "13.0000000000000"
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "e3d4b7e628d01f46c35cdd31251e5421bcf92a5d8d8cf90b515ccc743318423b",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately says the error is in the first distribution step."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "It gives the required error correction and allowed full solution without turning it into a long lesson."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "There is no unnecessary prerequisite material before answering the student's question."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply contains no questions to the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The requested explanation of where the work went wrong is fully provided."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The distribution, corrected equation, and solution x=2 are all correct."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It explains the reason for distributing to both terms, shows the corrected work, and reinforces the habit."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "The reply says the work went wrong at distribution and states 2(x+3)=2x+2\u00b73=2x+6, not 2x+3."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It explains that the 2 must multiply both terms inside the parentheses and shows the corrected step 2x+6=10."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "It explicitly shows x=3.5 gives 13, not 10, rather than praising the incorrect answer."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "It directly addresses the student's attempted steps instead of starting an unrelated method."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "controls-heldout",
+      "source_state": "candidate v2 (controls: start/attempt/concept/full-solution)",
+      "case_id": "simpler-osmosis",
+      "case": {
+        "corpus": "tutor_beta_heldout.json",
+        "mode": "guide",
+        "user": "That is too abstract. Explain it in plain words.",
+        "history": [
+          {
+            "role": "user",
+            "content": "What is osmosis?"
+          },
+          {
+            "role": "assistant",
+            "content": "Osmosis is solvent diffusion across a selectively permeable membrane down a water chemical-potential gradient toward higher solute concentration."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Explains water moving through a barrier that lets water pass but holds back dissolved particles",
+          "Explains direction toward the more concentrated solution under ordinary equal-pressure conditions in plain words"
+        ],
+        "must_not": [
+          "Repeats chemical potential or adds equations as the explanation",
+          "Turns the explanation into a quiz"
+        ],
+        "notes": "A simple equal-pressure picture is appropriate; do not claim solute crosses the membrane."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 1,
+        "duration_seconds": 1.49,
+        "generated_at": "2026-09-08T19:15:41+00:00",
+        "toolless": false,
+        "response": "Osmosis is water moving through a membrane to even things out.\n\nImagine a bag made of a material that lets water through but not sugar. Put the bag in a bowl of plain water, with sugar water inside the bag. Water flows into the bag, because there's more water outside than inside. It keeps flowing until the sugar is diluted enough that both sides are equally \"thirsty.\"\n\nThat's the whole idea: water drifts from where it's plentiful to where it's scarce, through a barrier that only water can pass.",
+        "tool_calls": [],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "315e7e3902a1132b64558eb6ee10bd2f462be5e33fc48e2321a09146d24e4df9",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately gives a plain-words explanation of osmosis instead of restating the abstract definition."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The length and detail match a request for a plain, simple explanation."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "No unnecessary background material is introduced before the requested explanation."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "The reply contains no questions to the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The student's requested plain explanation is fully provided rather than withheld behind a hint or exercise."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The explanation says water passes through the membrane while solute is held back and describes water moving toward the more sugary solution, which is consistent with the allowed simple equal-pressure picture."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The bag example organizes the idea around a concrete mechanism and gives the student a usable mental model."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It describes a barrier that \"lets water through but not sugar\" and a \"barrier that only water can pass.\""
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It says water flows into the bag containing sugar water and that water moves from where it is plentiful to where it is scarce, which explains the direction in plain words."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The reply does not use chemical potential or equations."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "The reply is an explanation, not a quiz."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "controls-heldout",
+      "source_state": "candidate v2 (controls: start/attempt/concept/full-solution)",
+      "case_id": "guide-to-worked",
+      "case": {
+        "corpus": "tutor_beta_heldout.json",
+        "mode": "guide",
+        "user": "Now give me the full worked solution, including a check.",
+        "history": [
+          {
+            "role": "user",
+            "content": "Solve 5(x-2)=20."
+          },
+          {
+            "role": "assistant",
+            "content": "First divide both sides by 5, leaving x-2=4."
+          }
+        ],
+        "context": [],
+        "must": [
+          "Finishes with x=6 and explains adding 2 to both sides",
+          "Checks 5(6-2)=20"
+        ],
+        "must_not": [
+          "Withholds the answer behind another hint"
+        ],
+        "notes": "Explicit full solution overrides earlier first-step scope."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 2.76,
+        "generated_at": "2026-09-08T19:15:44+00:00",
+        "toolless": false,
+        "response": "**Solve** $5(x-2)=20$\n\n**Step 1: Divide both sides by 5.**\n$$x-2 = \\frac{20}{5} = 4$$\n\n**Step 2: Add 2 to both sides.**\n$$x = 4 + 2 = 6$$\n\n**Check:** Substitute $x=6$ back into the original equation:\n$$5(6-2) = 5 \\cdot 4 = 20 \\checkmark$$\n\nBoth sides match, so $x = 6$ is the solution.",
+        "tool_calls": [
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "5*(6-2)"
+            },
+            "raw_arguments": "{\"expression\": \"5*(6-2)\"}",
+            "result": {
+              "ok": true,
+              "simplified": "20"
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "028a8927e1bd04781dd094bc245eaf27c03ab01fd866e00b4452378038a8becd",
+          "assembled_system_prompt_sha256": "7c005641efb251c8107dea152a5653146ba33a9a16d2daeeca4d6365e60ea66b",
+          "system_prompt_tokens": 1416,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply immediately gives the full requested solution and check."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "It provides exactly a full worked solution with a check, no extra material."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "No unnecessary prerequisite explanation delays the solution."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "There is no question to the student."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "The final answer and check are fully provided without deferral."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The algebra and verification are correct."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "It models the complete solving process and confirms the result, leaving the student able to continue."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "It ends with \u201cx = 6 is the solution\u201d after stating \u201cAdd 2 to both sides.\u201d"
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "The check explicitly evaluates \u201c5(6-2) = 5 \u00b7 4 = 20\u201d."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The answer is stated directly rather than withheld behind a hint."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    },
+    {
+      "run": "controls-show",
+      "source_state": "candidate v2 (control: Show probability)",
+      "case_id": "transfer-show-probability",
+      "case": {
+        "corpus": "tutor_beta_transfer.json",
+        "mode": "show",
+        "user": "Show the complete calculation: a bag has 3 red and 2 blue balls. Two are drawn without replacement. What is the probability both are red?",
+        "history": [],
+        "context": [],
+        "must": [
+          "States probability3/10 and explains3/5 for first then2/4 conditional probability for second",
+          "Provides the worked multiplication in a self-contained answer"
+        ],
+        "must_not": [
+          "Treats the draws as independent with second probability3/5",
+          "Only reports that a tool check succeeded"
+        ],
+        "notes": "(3/5)*(2/4)=6/20=3/10. An alternative combinations derivation is fine if explained."
+      },
+      "terminal": {
+        "status": "ok",
+        "stopped": "completed",
+        "detail": "",
+        "rounds": 2,
+        "duration_seconds": 8.33,
+        "generated_at": "2026-09-08T19:15:55+00:00",
+        "toolless": false,
+        "response": "**Answer: $\\dfrac{3}{10}$ (or 0.3, or 30%).**\n\nHere's the full calculation, step by step.\n\n**Setup.** The bag holds 3 red and 2 blue balls, so 5 balls total. We draw two balls *without replacement*, meaning the first ball is not put back before the second draw.\n\n**Method 1 \u2014 multiply the two draws (conditional probability).**\n\n- First draw is red: there are 3 red out of 5 total, so\n$$P(\\text{1st red}) = \\frac{3}{5}$$\n\n- Second draw is red *given* the first was red: one red ball is gone, leaving 2 red out of 4 total, so\n$$P(\\text{2nd red} \\mid \\text{1st red}) = \\frac{2}{4}$$\n\n- By the multiplication rule, $P(A \\text{ and } B) = P(A)\\cdot P(B\\mid A)$:\n$$P(\\text{both red}) = \\frac{3}{5}\\cdot\\frac{2}{4} = \\frac{6}{20} = \\frac{3}{10}$$\n\n**Method 2 \u2014 count combinations (a good cross-check).**\n\n- Total ways to choose any 2 balls from 5:\n$$\\binom{5}{2} = 10$$\n\n- Ways to choose 2 red balls from the 3 red ones:\n$$\\binom{3}{2} = 3$$\n\n- So\n$$P(\\text{both red}) = \\frac{3}{10}$$\n\nBoth methods agree, which confirms the result.\n\n**The idea to carry forward:** when you draw *without replacement*, the probabilities change after each draw \u2014 the second draw's fraction uses the reduced totals (2 red left, 4 balls left). That's exactly why the second factor is $\\frac{2}{4}$, not $\\frac{3}{5}$. If the balls had been replaced, it would have been $\\frac{3}{5}\\cdot\\frac{3}{5} = \\frac{9}{25}$ instead.",
+        "tool_calls": [
+          {
+            "name": "cas_evaluate",
+            "ok": true,
+            "arguments": {
+              "expression": "(3/5)*(2/4)",
+              "compare_to": "3/10"
+            },
+            "raw_arguments": "{\"expression\": \"(3/5)*(2/4)\", \"compare_to\": \"3/10\"}",
+            "result": {
+              "ok": true,
+              "equal": true,
+              "difference": "0",
+              "certain": true,
+              "comparison_status": "matched",
+              "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+            }
+          }
+        ],
+        "prompt_identity": {
+          "assembled_prompt_sha256": "b0b8c16450c26b795412d629c7a2887d059c7eff6a00fb0710e5c26f79c90b23",
+          "assembled_system_prompt_sha256": "5d8f37194d5487b7e81f664777087a12f7fd10fba6de237bf4a2e250d0e32258",
+          "system_prompt_tokens": 1046,
+          "tool_schema_tokens": 1266
+        },
+        "provenance": {
+          "app_sha": {
+            "sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+            "dirty": true
+          },
+          "model": "Qwen3.8-27B",
+          "endpoint_locality": "remote",
+          "context_window": 262144,
+          "capabilities": {
+            "stored_tools_supported": true
+          },
+          "hashes": {
+            "corpus": "5900d4c99b9c42368ffd83e40621a79a2a2e805afe838390957d2b3c4d603e80",
+            "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+            "prompts": "0f671ce69fdb7e916594e4dcbd17ea4ec6b2f6049cc977840ae3d9fece23d723",
+            "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+            "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+          }
+        }
+      },
+      "same_model_grade": {
+        "verdict": "pass",
+        "grading": {
+          "dimensions": {
+            "directness": {
+              "score": 2,
+              "note": "The reply gives the requested probability immediately and then shows the full calculation on the student's terms."
+            },
+            "proportionality": {
+              "score": 2,
+              "note": "The amount of detail matches a request for a complete calculation, including a brief cross-check."
+            },
+            "prerequisite_setup": {
+              "score": 2,
+              "note": "Only the necessary setup about the bag and without replacement appears before the calculation."
+            },
+            "questioning": {
+              "score": 2,
+              "note": "No questions to the student are asked."
+            },
+            "withholding": {
+              "score": 2,
+              "note": "All requested explanation is provided directly, including the conditional probabilities and multiplication."
+            },
+            "correctness": {
+              "score": 2,
+              "note": "The calculation matches the ground-truth result, (3/5)*(2/4)=6/20=3/10."
+            },
+            "pedagogical_usefulness": {
+              "score": 2,
+              "note": "The reply explains why the second factor is conditional and contrasts it with replacement, leaving the student able to apply the idea."
+            }
+          },
+          "must": [
+            {
+              "index": 1,
+              "met": true,
+              "why": "The reply states the probability is 3/10 and explicitly gives P(1st red)=3/5 and P(2nd red | 1st red)=2/4."
+            },
+            {
+              "index": 2,
+              "met": true,
+              "why": "It includes the self-contained multiplication 3/5 * 2/4 = 6/20 = 3/10."
+            }
+          ],
+          "must_not": [
+            {
+              "index": 1,
+              "violated": false,
+              "why": "The reply does not use 3/5 for the actual second draw; it correctly uses 2/4 for the without-replacement case."
+            },
+            {
+              "index": 2,
+              "violated": false,
+              "why": "The reply contains the full worked calculation rather than merely reporting that a tool check succeeded."
+            }
+          ]
+        },
+        "note": "same-model self-judging; supporting evidence only"
+      }
+    }
+  ],
+  "runtime_identity": {
+    "model": "Qwen3.8-27B",
+    "endpoint_locality": "remote (non-loopback; URL never retained)",
+    "context_window": 262144,
+    "tools_supported": true,
+    "judge": "same endpoint/model as tutor (supporting evidence only)"
+  },
+  "independent_review": {
+    "reviewer": "parent (Codex) independent reading of retained terminal text",
+    "fixed-2 attempt-where-did-i-go-wrong": "FAIL - false claim 'Your t e^{-t} would be the answer if x(t) were a unit impulse at the origin, not a unit pulse' (delta * h = h, not t e^{-t}); diagnosis leads with the upper limit instead of the dropped tau dependence. Same-model pass is self-judging only.",
+    "fixed-3 attempt-where-did-i-go-wrong": "False impulse claim removed; diagnosis improved. Residual caveats: verification wording ('checked both integrals' over a calculator that treats e as an unresolved symbol) and the step-discontinuous 'continuous signals' aside.",
+    "explain-that-more-simply (fixed-1/2/3)": "Same-model pass, but 'older ones contribute less' is not true for arbitrary impulse responses - independent correctness concern.",
+    "controls-heldout/simpler-osmosis": "Same-model pass, but the explanation confuses amount with concentration ('more water outside than inside') and omits counterpressure - qualified, not an unqualified correctness pass.",
+    "robust_controls": "Show (show-convolution-worked, byte-stable; transfer-show-probability), finite-sum held-out variant (baseline and v2), attempt-distribution, guide-to-worked full solution - independent reading finds them sound.",
+    "overall": "The formerly failing pair is not independently resolved. PLA-461 stays open. All evidence is single-configuration exploratory/qualified; no issue completion is claimed."
+  }
+}
