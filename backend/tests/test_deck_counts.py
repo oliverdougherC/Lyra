@@ -1,11 +1,8 @@
 """Deck count equivalence and boundedness tests for the batched study-list helper.
 
-The production route (`list_study`) still counts each deck through
-`routes_study._deck_counts` until the integration wiring lands; those tests compare the
-new `deck_counts_for_class` output against that per-deck counter on synthetic fixtures -
-empty decks, mixed states, threshold and due-boundary values, lifecycle states, and
-separate classes - and check with a trace callback that the helper's statement count
-does not grow with the number of decks.
+The list route uses the batch helper; the retained single-deck counter provides an
+independent parity oracle. Synthetic fixtures cover scheduler and due-time boundaries,
+class isolation, constant query count, and deletion between inventory and aggregation.
 """
 
 import json
@@ -221,6 +218,66 @@ def test_keeps_the_mastered_threshold_exact(db, class_id) -> None:
     counts = deck_counts.deck_counts_for_class(db, class_id, NOW)
     assert counts[deck_id]["buckets"] == {"new": 0, "learning": 1, "mastered": 2}
     assert counts[deck_id] == routes_study._deck_counts(db, deck_id, NOW)
+
+
+def test_legacy_negative_reps_keeps_scheduler_bucket(db, class_id) -> None:
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    _card(db, deck_id, 1, stability=25.0, reps=-1, state="review")
+    counts = deck_counts.deck_counts_for_class(db, class_id, NOW)
+    assert counts[deck_id] == routes_study._deck_counts(db, deck_id, NOW)
+
+
+def test_list_route_uses_constant_queries_and_preserves_counts(db, class_id, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    class FixedClock:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 9, 8, 12, tzinfo=UTC)
+
+    monkeypatch.setattr(routes_study, "datetime", FixedClock)
+    document_id = _document(db, class_id)
+    statement_counts = []
+    for size in (1, 16):
+        for n in range(size - (1 if statement_counts else 0)):
+            deck_id = _deck(db, class_id, document_id, title=f"Deck {size}-{n}")
+            _card(db, deck_id, 1, due_at=NOW)
+            _card(
+                db, deck_id, 2, due_at="2026-09-08 12:00:01", reps=2, state="review", stability=25
+            )
+        expected = _old_counts(db, class_id)
+        statements = []
+        db.set_trace_callback(statements.append)
+        try:
+            listed = routes_study.list_study(class_id, db)
+        finally:
+            db.set_trace_callback(None)
+        statement_counts.append(len(statements))
+        assert len(listed["decks"]) == size
+        for entry in listed["decks"]:
+            assert {key: entry[key] for key in ("cards_total", "buckets", "due_count")} == expected[
+                entry["id"]
+            ]
+        assert listed["quizzes"] == []
+    assert statement_counts[0] == statement_counts[1]
+    assert statement_counts[1] <= 5
+
+
+def test_list_tolerates_deck_deleted_between_inventory_and_count(db, class_id, monkeypatch) -> None:
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    _card(db, deck_id, 1)
+
+    def delete_before_count(conn, requested_class, now):
+        conn.execute("delete from artifacts where id = ?", (deck_id,))
+        conn.commit()
+        return deck_counts.deck_counts_for_class(conn, requested_class, now)
+
+    monkeypatch.setattr(routes_study, "deck_counts_for_class", delete_before_count)
+    listed = routes_study.list_study(class_id, db)
+    assert listed["decks"][0]["cards_total"] == 0
+    assert listed["decks"][0]["due_count"] == 0
 
 
 def test_keeps_the_due_boundary_exact(db, class_id) -> None:

@@ -9,8 +9,7 @@ The cost grew with the number of decks, so a semester-sized class paid it on eve
 poll.
 
 This doc covers the new bounded batched primitive, [`deck_counts_for_class`](/backend/core/deck_counts.py),
-the evidence that it is equivalent and bounded, and the parent-route wiring that is
-still needed (owned by the integration pass).
+the evidence that it is equivalent and bounded, and its integration into the study-list route.
 
 ## The helper
 
@@ -41,7 +40,7 @@ reimplemented:
 
 - **new** when `reps = 0` or the state is `new` - a card that never graduated is new even
   if its row says `review` (the scheduler checks reviews before state).
-- **mastered** when the state is `review`, the card has been reviewed (`reps > 0`), and
+- **mastered** when the state is `review`, the card has been reviewed (`reps != 0`), and
   `stability >= scheduler.MASTERED_STABILITY_DAYS` (21 days), bound as a SQL parameter so
   the threshold stays defined once.
 - **learning** for everything else (`relearning` and under-threshold `review` included).
@@ -126,7 +125,9 @@ stated iterations):
 | 30 decks, 3700 cards (30 runs) | 31 → 1 | 12.1 ms → 0.39 ms | 43.3 KiB → 3.6 KiB |
 
 The statement count is the load-bearing number: it is 1 for the helper at any deck count,
-while the old path is `1 + (deck count)` - and `list_study` runs that on every 1.5 s poll.
+while the benchmark old path includes one deck-ID query plus one query per deck.
+In the full route, the existing inventory query remains; deck counting adds one aggregate
+instead of one query per deck on every 1.5 s poll.
 The equivalence gate inside the benchmark re-checks old-vs-new on every run and fails the
 process on any mismatch.
 
@@ -134,11 +135,10 @@ These are modest, synthetic, same-machine measurements; they show the shape of t
 improvement (constant statements, no per-deck Python pass) and are not a device or
 fleet claim.
 
-## Still needed: the parent route wiring (integration pass)
+## Study-list integration
 
-The route itself is not edited here; the integration pass makes
-[`list_study`](/backend/api/routes_study.py) use the helper with one batch call before the
-loop:
+[`list_study`](/backend/api/routes_study.py) uses the helper with one batch call before the
+loop when its inventory contains decks:
 
 ```python
 now = scheduler.to_storage(datetime.now(UTC))
@@ -152,7 +152,12 @@ for row in rows:
         ...
 ```
 
-The helper covers every deck the loop can see (same class, same kind, any state), so
-`deck_counts[id]` is always present. The existing per-deck behavior - counts for a single
+The helper covers the same class, kind and states as the inventory. If a deck is deleted
+between inventory and aggregation, the route returns zero counts for that stale inventory
+entry, matching the prior per-deck read. Quiz-only lists skip the aggregate. The existing per-deck behavior - counts for a single
 deck's cards - is unchanged, and no scheduler, polling, cache, or denormalized-counter
 change is part of this work.
+
+Integration tests also compare the complete route counts at 1 and 16 decks, assert constant
+statement count, preserve quiz-only progress queries, and cover concurrent deck deletion.
+Legacy negative review counts retain the existing scheduler bucket behavior.

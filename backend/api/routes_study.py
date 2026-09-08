@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.core import artifacts, scheduler, study
 from backend.core.classes import get_class
+from backend.core.deck_counts import deck_counts_for_class
 from backend.core.errors import ConflictError, NotFoundError
 from backend.llm.prompts import QUIZ_QUESTION_TYPES
 from backend.storage.database import get_db
@@ -387,10 +388,25 @@ def list_study(class_id: int, conn: DbConn) -> dict[str, object]:
     quizzes: list[dict[str, object]] = []
     quiz_progress = _quiz_list_progress(conn, class_id)
     now = scheduler.to_storage(datetime.now(UTC))
+    counts = (
+        deck_counts_for_class(conn, class_id, now)
+        if any(row["kind"] == artifacts.KIND_FLASHCARD_DECK for row in rows)
+        else {}
+    )
     for row in rows:
         entry = dict(row)
         if row["kind"] == artifacts.KIND_FLASHCARD_DECK:
-            entry.update(_deck_counts(conn, int(row["id"]), now))
+            # A deck deleted after the inventory read has no remaining card states.
+            entry.update(
+                counts.get(
+                    int(row["id"]),
+                    {
+                        "cards_total": 0,
+                        "buckets": {"new": 0, "learning": 0, "mastered": 0},
+                        "due_count": 0,
+                    },
+                )
+            )
             decks.append(entry)
         else:
             attempt_id, answered_count = quiz_progress.get(int(row["id"]), (None, 0))

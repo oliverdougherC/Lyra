@@ -41,7 +41,7 @@ _QUERY = """
 select a.id as artifact_id,
        count(cs.part_id) as cards_total,
        sum(case when cs.reps = 0 or cs.state = 'new' then 1 else 0 end) as new_count,
-       sum(case when cs.state = 'review' and cs.stability >= ? and cs.reps > 0
+       sum(case when cs.state = 'review' and cs.stability >= ? and cs.reps != 0
              then 1 else 0 end) as mastered_count,
        sum(case when cs.due_at <= ? then 1 else 0 end) as due_count
 from artifacts a
