@@ -69,9 +69,11 @@ it('closes emphasis around words and math without re-queueing what it holds', ()
   // The first word and the equation were already on the schedule and are not re-queued.
   expect(second[0].at).toBe(1000)
   expect(second[3].at).toBe(1055)
-  // The split-off words are new units: their slots come from now, and they stay in
-  // reading order with each other.
-  expect(second[1].at).toBeGreaterThanOrEqual(1800)
+  // The split-off words sit inside the range the reader already holds, so they inherit
+  // its past moment instead of starting a fresh reveal at now — a fresh start would fade
+  // them out to fade them back in. They still stay in reading order with each other.
+  expect(second[1].at).toBeLessThanOrEqual(1620)
+  expect(second[2].at).toBeLessThanOrEqual(1620)
   expect(second[2].at).toBeGreaterThanOrEqual(second[1].at)
 })
 

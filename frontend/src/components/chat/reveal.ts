@@ -28,12 +28,15 @@
  *    frame, so the DOM node holding a word can be replaced while its reveal is still
  *    pending. Re-applying the class without its delay would jump it to the front of the
  *    queue, which is exactly the artifact this module is here to prevent.
- * 4. **The queue runs in reading order.** A unit's deadline never lands before the unit
- *    ahead of it, no matter how the words are re-anchored on a re-render. The schedule is
- *    reconciled so pending deadlines may move earlier, never later, and a word's identity
- *    is the offset of its core in the raw source it was read from — stable for as long as
- *    the source grows at the end, which is all a stream does, and stable across the
- *    delimiters around it opening or closing.
+ * 4. **The queue runs in reading order, and a source range that is on screen stays on
+ *    screen.** A unit's deadline never lands before the unit ahead of it, no matter how
+ *    the words are re-anchored on a re-render. A word's identity is the offset of its core
+ *    in the raw source — stable for as long as the source grows at the end, which is all a
+ *    stream does, and stable across the delimiters around it opening or closing. When a
+ *    re-parse re-forms the words (an emphasis closes around them, a link or a code fence
+ *    resolves), a unit whose source range sits inside a range that was already revealed —
+ *    or already scheduled — inherits that range's deadline instead of starting a fresh
+ *    reveal: what the reader already saw never fades again.
  *
  * A message may be *re-generated* (a retry replaces its answer in place). The caller then
  * passes a different `generation`, and the schedule is cleared: a retry's words must not
@@ -47,6 +50,13 @@ import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 
 /** Marks one unit of the cascade. Its value is the key the schedule is remembered under. */
 export const REVEAL_ATTRIBUTE = 'data-stream-word'
+
+/**
+ * Marks the raw-source range a unit covers, `start:end` as offsets into the normalized
+ * source. The scheduler reads it to hand a re-formed unit the visibility of the range it
+ * sits inside.
+ */
+export const REVEAL_SRC_ATTRIBUTE = 'data-stream-src'
 
 /** Set on a unit once it has been scheduled; the CSS animation hangs off this. */
 export const REVEAL_VISIBLE_CLASS = 'stream-word-visible'
@@ -79,7 +89,7 @@ type RenderNode = {
   value?: string
   children?: RenderNode[]
   properties?: Record<string, unknown>
-  position?: { start?: { offset?: number } }
+  position?: { start?: { offset?: number }; end?: { offset?: number } }
 }
 
 function tag(node: RenderNode, key: string): void {
@@ -121,7 +131,6 @@ export function rehypeRevealUnits(options?: { rawSource?: string }) {
     // The raw source only grows at the end, so a monotone pointer finds each word at the
     // same offset it first arrived with.
     let rawPointer = 0
-    let positional = 0
     let equationIndex = 0
     let itemIndex = 0
     let codeIndex = 0
@@ -131,6 +140,8 @@ export function rehypeRevealUnits(options?: { rawSource?: string }) {
 
     const splitText = (node: RenderNode, children: RenderNode[]): void => {
       const value = node.value as string
+      const base = node.position?.start?.offset
+      let cursor = base ?? rawPointer
       for (const part of value.split(/(\s+)/)) {
         if (part && !/^\s+$/.test(part)) {
           // The word's core, found at or after the running pointer, is its identity: a
@@ -140,17 +151,66 @@ export function rehypeRevealUnits(options?: { rawSource?: string }) {
           // because of them.
           const core = coreOf(part)
           const at = core !== '' ? rawSource.indexOf(core, rawPointer) : -1
-          const key = at !== -1 ? `stream-${at}` : `streampos-${positional++}`
+          const start = cursor
+          cursor += part.length
+          const key =
+            at !== -1
+              ? `stream-${at}`
+              : // A part with no searchable core (pure punctuation) keys on the range it
+                // covers: a per-frame counter would re-use the same key for different
+                // parts on different frames and hand one of them the other's deadline.
+                `streampos-${start}:${cursor}`
           if (at !== -1) rawPointer = at + core.length
           children.push({
             type: 'element',
             tagName: 'span',
-            properties: { [REVEAL_ATTRIBUTE]: key },
+            properties: {
+              [REVEAL_ATTRIBUTE]: key,
+              [REVEAL_SRC_ATTRIBUTE]: `${start}:${cursor}`,
+            },
             children: [{ type: 'text', value: part }],
           })
         } else if (part) {
+          cursor += part.length
           children.push({ type: 'text', value: part })
         }
+      }
+      // The node's own span in the source ends where the source says it ends, whether or
+      // not the rendered text is the same length (entities decode shorter). Advancing the
+      // pointer to the node's end keeps later words from anchoring inside it.
+      const end = node.position?.end?.offset
+      if (end !== undefined) rawPointer = Math.max(rawPointer, end)
+    }
+
+    /** The TeX a typeset equation was built from, kept in its MathML annotation. */
+    const annotationText = (node: RenderNode): string | null => {
+      for (const child of node.children ?? []) {
+        if (child.type === 'element' && child.tagName === 'annotation') {
+          let text = ''
+          const collect = (n: RenderNode): void => {
+            if (n.type === 'text' && n.value) text += n.value
+            else if (n.children) n.children.forEach(collect)
+          }
+          child.children?.forEach(collect)
+          return text
+        }
+        const found = annotationText(child)
+        if (found !== null) return found
+      }
+      return null
+    }
+
+    /**
+     * A katex element carries no source position: advance the pointer past its TeX,
+     * found in the raw source from where the walk left off. Without this, a later word
+     * that repeats a symbol of the equation would anchor to the typeset copy instead of
+     * to itself.
+     */
+    const advancePastEquation = (node: RenderNode): void => {
+      const tex = annotationText(node)
+      if (tex) {
+        const at = rawSource.indexOf(tex, rawPointer)
+        if (at !== -1) rawPointer = at + tex.length
       }
     }
 
@@ -188,6 +248,7 @@ export function rehypeRevealUnits(options?: { rawSource?: string }) {
           // A typeset equation is one unit: katex-display carries its katex child, so the
           // first match takes the whole equation.
           tag(node, `equation-${equationIndex++}`)
+          advancePastEquation(node)
           return
         }
         if (tagName === 'li') {
@@ -205,6 +266,12 @@ export function rehypeRevealUnits(options?: { rawSource?: string }) {
           return
         }
         visit(child)
+        // An element's source range covers what it rendered from — a code fence's rows,
+        // a table's cells, and, for a link, the destination text after the label, which
+        // never renders as words. Advancing past the end keeps a later word that repeats
+        // text inside those ranges from anchoring to a hidden earlier occurrence.
+        const end = child.type === 'element' ? child.position?.end?.offset : undefined
+        if (end !== undefined) rawPointer = Math.max(rawPointer, end)
         children.push(child)
       })
       node.children = children
@@ -247,6 +314,13 @@ export function useRevealCascade({
   // Key to the wall-clock moment its animation was scheduled to start, so a unit whose DOM
   // node is replaced mid-reveal keeps the slot it was given rather than jumping the queue.
   const scheduleRef = useRef<Map<string, number>>(new Map())
+  // The source range each key covered the last time it was seen, so a unit re-formed by a
+  // re-parse inherits the visibility of a range that is already on screen instead of
+  // starting a fresh reveal.
+  const rangesRef = useRef<Map<string, [number, number]>>(new Map())
+  // The last deadline assigned to each key, kept after the key leaves the screen so an
+  // inherited moment can be read even when the containing unit has merged away.
+  const lastDeadlineRef = useRef<Map<string, number>>(new Map())
   // Wall-clock time the last unit's reveal is scheduled to start.
   const nextRevealAtRef = useRef(0)
   const generationRef = useRef(generation)
@@ -281,6 +355,8 @@ export function useRevealCascade({
 
     if (content.length === 0) {
       scheduleRef.current.clear()
+      rangesRef.current.clear()
+      lastDeadlineRef.current.clear()
       nextRevealAtRef.current = 0
       onDrainedRef.current?.()
       return
@@ -290,6 +366,8 @@ export function useRevealCascade({
       // A new generation of this message: the slots on the books belong to the answer it
       // replaces, and every node of this one would reveal at once.
       scheduleRef.current.clear()
+      rangesRef.current.clear()
+      lastDeadlineRef.current.clear()
       nextRevealAtRef.current = 0
     }
     if (generation !== undefined) generationRef.current = generation
@@ -312,13 +390,57 @@ export function useRevealCascade({
       MAX_REVEAL_BACKLOG_MS / Math.max(1, pending),
     )
 
-    // Pass one: the content units, in reading order. Deadlines come out nondecreasing, so
-    // the cascade can never reveal a word before the one ahead of it.
+    /**
+     * The moment the unit's source range already holds: the deadline of the smallest
+     * previously-seen range that contains it. A range on screen carries a past deadline,
+     * which the unit re-uses exactly — it never re-hides; a pending range carries its
+     * queued slot, so the unit joins the queue where its range sits.
+     */
+    const inheritedDeadline = (range: [number, number], selfKey: string): number | undefined => {
+      let best: { span: number; deadline: number | undefined } | null = null
+      for (const [otherKey, other] of rangesRef.current) {
+        if (otherKey === selfKey) continue
+        if (other[0] <= range[0] && range[1] <= other[1]) {
+          const span = other[1] - other[0]
+          if (best === null || span < best.span) {
+            best = {
+              span,
+              deadline: scheduleRef.current.get(otherKey) ?? lastDeadlineRef.current.get(otherKey),
+            }
+          }
+        }
+      }
+      return best?.deadline
+    }
+
+    // Pass one: the content units, in reading order.
     let prev = now
     let assigned = false
+    const assignedUnits: { node: HTMLElement; key: string; deadline: number }[] = []
     for (const node of units) {
       const key = node.dataset.streamWord
       if (!key) continue
+      const src = node.dataset.streamSrc
+      const range: [number, number] | null =
+        src !== undefined && src.length > 2
+          ? ((): [number, number] | null => {
+              const sep = src.indexOf(':')
+              return sep > 0 && sep < src.length - 1
+                ? [Number(src.slice(0, sep)), Number(src.slice(sep + 1))]
+                : null
+            })()
+          : null
+      if (range !== null && Number.isFinite(range[0]) && Number.isFinite(range[1])) {
+        // A re-parse can shrink the range a key covers — `a**b*c` becomes the bare `a`
+        // when the emphasis resolves — but the reader saw the wider extent, and that
+        // is the evidence later splits inherit from. Keep the union of what the key
+        // has covered.
+        const seen = rangesRef.current.get(key)
+        rangesRef.current.set(
+          key,
+          seen === undefined ? range : [Math.min(seen[0], range[0]), Math.max(seen[1], range[1])],
+        )
+      }
       const remembered = scheduleRef.current.get(key)
       let deadline: number
       if (remembered !== undefined && remembered <= now) {
@@ -326,14 +448,39 @@ export function useRevealCascade({
         deadline = remembered
       } else {
         // A pending deadline may move earlier — that is how the queue drains — and the
-        // reading-order floor keeps the queue nondecreasing.
+        // reading-order floor keeps the queue nondecreasing. A brand-new unit inside a
+        // range the reader already holds takes that range's moment instead of the queue
+        // tail: visible ranges keep their exact past deadline, so a re-formed word never
+        // fades out to fade back in.
         const fresh = assigned ? prev + interval : now
-        deadline = remembered !== undefined ? Math.max(Math.min(remembered, fresh), prev) : fresh
+        const inherited =
+          remembered === undefined && range !== null ? inheritedDeadline(range, key) : undefined
+        if (inherited !== undefined) {
+          deadline = inherited <= now ? inherited : Math.max(inherited, prev)
+        } else {
+          deadline = remembered !== undefined ? Math.max(Math.min(remembered, fresh), prev) : fresh
+        }
         assigned = true
       }
+      assignedUnits.push({ node, key, deadline })
+      if (deadline > prev) prev = deadline
+    }
+
+    // Reading order with past evidence: a unit that the reader already holds carries a
+    // deadline in the past, and it stays put — re-hiding it to keep the queue flat would
+    // be the very flash this cascade exists to prevent. When the unit ahead of it is
+    // still pending, that unit moves earlier instead, which its queue always allows.
+    for (let i = assignedUnits.length - 1; i > 0; i -= 1) {
+      const earlier = assignedUnits[i - 1]
+      const later = assignedUnits[i]
+      if (earlier.deadline > later.deadline && earlier.deadline > now) {
+        earlier.deadline = later.deadline
+      }
+    }
+
+    for (const { node, key, deadline } of assignedUnits) {
       scheduleRef.current.set(key, deadline)
       reveal(node, deadline, now)
-      if (deadline > prev) prev = deadline
     }
 
     // Pass two: each list marker takes the deadline of the first content unit inside it.
@@ -349,6 +496,12 @@ export function useRevealCascade({
       const deadline = contentDeadline ?? scheduleRef.current.get(key) ?? prev
       scheduleRef.current.set(key, deadline)
       reveal(item, deadline, now)
+    }
+
+    // Remember where each key's deadline ended up, so a range the reader holds can be
+    // read back on a later frame even after the unit that covered it merged away.
+    for (const [key, deadline] of scheduleRef.current) {
+      lastDeadlineRef.current.set(key, deadline)
     }
 
     nextRevealAtRef.current = Math.max(

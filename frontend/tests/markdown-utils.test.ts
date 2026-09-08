@@ -62,7 +62,7 @@ describe('normalizeMarkdownForRender', () => {
       // whole line is wrapped, which is what this function does to a line of mathematics;
       // `repairLabelMath` is the one that wraps spans and leaves words alone.
       expect(repairUndelimitedMath('about ~10 terms, so \\frac{1}{2}')).toBe(
-        '$about ~10 terms, so \\frac{1}{2}$',
+        '$$about ~10 terms, so \\frac{1}{2}$$',
       )
     })
   })
@@ -129,29 +129,31 @@ describe('normalizeMarkdownForRender', () => {
     })
   })
 
-  describe('inline math promotion', () => {
+  describe('explicit inline math is always inline', () => {
+    // Review of the first streaming round: promoting a closed `$...$` span to display when
+    // its line ended flipped a completed inline span into a block at every later chunk and
+    // at the terminal handoff. Display is what the model delimited as display.
+
     it('keeps a short quantity inline', () => {
       expect(normalizeMarkdownForRender('where $x$ is')).toBe('where $x$ is')
     })
 
-    it('promotes inline math carrying a display command', () => {
-      expect(normalizeMarkdownForRender('$\\frac{1}{2}$')).toBe('$$\n\\frac{1}{2}\n$$\n\n')
+    it('keeps a span carrying a display command inline', () => {
+      expect(normalizeMarkdownForRender('$\\frac{1}{2}$')).toBe('$\\frac{1}{2}$')
     })
 
-    it('promotes inline math longer than the inline ceiling', () => {
+    it('keeps a long span inline', () => {
       const long = 'a'.repeat(33)
-      expect(normalizeMarkdownForRender(`$${long}$`)).toBe(`$$\n${long}\n$$\n\n`)
+      expect(normalizeMarkdownForRender(`$${long}$`)).toBe(`$${long}$`)
     })
 
     it('always treats double dollars as display', () => {
       expect(normalizeMarkdownForRender('$$x$$')).toBe('$$\nx\n$$\n\n')
     })
 
-    it('promotes an equation the sentence ends on', () => {
+    it('keeps an equation the sentence ends on inline', () => {
       const long = 'a'.repeat(33)
-      expect(normalizeMarkdownForRender(`Therefore $${long}$.`)).toBe(
-        `Therefore \n\n$$\n${long}\\text{.}\n$$\n\n`,
-      )
+      expect(normalizeMarkdownForRender(`Therefore $${long}$.`)).toBe(`Therefore $${long}$.`)
     })
 
     it('leaves an equation inline when the sentence carries on past it', () => {
@@ -164,6 +166,24 @@ describe('normalizeMarkdownForRender', () => {
       const long = 'a'.repeat(33)
       const source = `(a) $x$; (b) $${long}$.`
       expect(normalizeMarkdownForRender(source)).toBe(source)
+    })
+
+    it('never flips a closed span at any cut starting at its closing delimiter', () => {
+      // The span is closed the moment its final `$` arrives; every later cut — the newline,
+      // the sentence continuing, or the stream finishing without a newline — must render it
+      // the same inline span.
+      const source = '- First $\\frac{1}{2}$'
+      for (let end = source.length - 1; end <= source.length; end += 1) {
+        const cut = source.slice(0, end)
+        expect(
+          normalizeMarkdownForRender(cut, true),
+          `flip at cut ${end}: ${JSON.stringify(cut)}`,
+        ).not.toContain('$$')
+      }
+      expect(normalizeMarkdownForRender(source + '\n', true)).not.toContain('$$')
+      expect(normalizeMarkdownForRender(source + '\n- Second $x$')).not.toContain('$$')
+      expect(normalizeMarkdownForRender(source)).not.toContain('$$')
+      expect(normalizeMarkdownForRender(source + '\n')).toBe(source + '\n')
     })
   })
 
@@ -236,31 +256,33 @@ describe('normalizeMarkdownForRender', () => {
       expect(full).toContain('$\\frac{1}{2}$')
     })
 
-    it('still promotes a sentence-final equation once the answer is settled', () => {
+    it('stays inline once the answer is settled', () => {
       // Settlement is when the stream has stopped growing: the line end is real, so the
-      // documented sentence-end promotion applies and the container is still preserved.
+      // span the model closed is still the inline span it was the moment it closed.
       expect(normalizeMarkdownForRender('Therefore $\\frac{1}{2}$.')).toBe(
-        'Therefore \n\n$$\n\\frac{1}{2}\\text{.}\n$$\n\n',
+        'Therefore $\\frac{1}{2}$.',
       )
     })
 
-    it('promotes a closed equation only after its line break has arrived', () => {
-      // The newline is the structural boundary, and once received it never un-arrives.
+    it('stays inline after its line break has arrived', () => {
+      // The newline is the structural boundary, and once received it never un-arrives:
+      // it ends the line, not the span.
       const open = '- Use $\\frac{1}{2}$'
       const withBreak = '- Use $\\frac{1}{2}$\n'
       expect(normalizeMarkdownForRender(open, true)).toBe(open)
-      expect(normalizeMarkdownForRender(withBreak, true)).toBe(
-        '- Use \n\n  $$\n  \\frac{1}{2}\n  $$\n\n',
-      )
+      expect(normalizeMarkdownForRender(withBreak, true)).toBe(withBreak)
+      expect(normalizeMarkdownForRender(withBreak)).toBe(withBreak)
     })
   })
 
   describe('display math stays inside the list and blockquote that holds it', () => {
-    // PLA-500 R2: an equation lifted out of a list item used to land at root level, which
-    // closed the first list and started a second one around it.
+    // PLA-500 R2: a display block lifted out of a list item used to land at root level,
+    // which closed the first list and started a second one around it. The containment
+    // rule applies to the display the model delimited itself; an explicit inline span
+    // never leaves the line it is on.
 
-    it('keeps a promoted equation inside the list item', () => {
-      const source = '- First $\\frac{1}{2}$\n- Second $x$'
+    it('keeps a display equation inside the list item', () => {
+      const source = '- First\n  $$\n  \\frac{1}{2}\n  $$\n- Second $x$'
       for (const streaming of [true, false]) {
         const normalized = normalizeMarkdownForRender(source, streaming)
         // Both items survive on their markers, and the display block is indented into the
@@ -278,29 +300,29 @@ describe('normalizeMarkdownForRender', () => {
     it('renders as one list, not two', () => {
       // The containment is what the browser and CommonMark see: the normalized output of a
       // two-item list must not contain a root-level display block between the items.
-      const source = '- First $\\frac{1}{2}$\n- Second $x$'
+      const source = '- First\n  $$\n  \\frac{1}{2}\n  $$\n- Second $x$'
       const normalized = normalizeMarkdownForRender(source, true)
-      expect(normalized).toBe('- First \n\n  $$\n  \\frac{1}{2}\n  $$\n\n- Second $x$')
+      expect(normalized).toBe('- First\n\n  $$\n  \\frac{1}{2}\n  $$\n\n- Second $x$')
     })
 
-    it('keeps a promoted equation inside a blockquoted list item', () => {
-      const source = '> - item $\\frac{1}{2}$'
+    it('keeps a display equation inside a blockquoted list item', () => {
+      const source = '> - item\n>   $$\n>   \\frac{1}{2}\n>   $$'
       const normalized = normalizeMarkdownForRender(source, false)
       // Every line of the lifted equation carries the blockquote marker, so the blockquote
       // and the list inside it survive.
-      expect(normalized).toBe('> - item \n>\n>   $$\n>   \\frac{1}{2}\n>   $$\n>\n')
+      expect(normalized).toBe('> - item\n>\n>   $$\n>   \\frac{1}{2}\n>   $$\n>\n')
     })
 
-    it('keeps a promoted equation inside a nested list item', () => {
-      const source = '- one\n  - two $\\frac{1}{2}$\n- three'
+    it('keeps a display equation inside a nested list item', () => {
+      const source = '- one\n  - two\n    $$\n    \\frac{1}{2}\n    $$\n- three'
       const normalized = normalizeMarkdownForRender(source, false)
-      expect(normalized).toBe('- one\n  - two \n\n    $$\n    \\frac{1}{2}\n    $$\n\n- three')
+      expect(normalized).toBe('- one\n  - two\n\n    $$\n    \\frac{1}{2}\n    $$\n\n- three')
     })
 
-    it('keeps a promoted equation inside an ordered list item', () => {
-      const source = '1. alpha $\\frac{1}{2}$\n2. beta $x$'
+    it('keeps a display equation inside an ordered list item', () => {
+      const source = '1. alpha\n   $$\n   \\frac{1}{2}\n   $$\n2. beta $x$'
       const normalized = normalizeMarkdownForRender(source, false)
-      expect(normalized).toBe('1. alpha \n\n   $$\n   \\frac{1}{2}\n   $$\n\n2. beta $x$')
+      expect(normalized).toBe('1. alpha\n\n   $$\n   \\frac{1}{2}\n   $$\n\n2. beta $x$')
     })
   })
 
@@ -433,7 +455,7 @@ describe('normalizeMarkdownForRender', () => {
 describe('repairUndelimitedMath', () => {
   it('wraps a bare expression, keeping its label outside the math', () => {
     expect(repairUndelimitedMath('(b) x(t) = \\frac{1}{2\\pi(2-jt)}')).toBe(
-      '(b) $x(t) = \\frac{1}{2\\pi(2-jt)}$',
+      '(b) $$x(t) = \\frac{1}{2\\pi(2-jt)}$$',
     )
   })
 
@@ -441,7 +463,7 @@ describe('repairUndelimitedMath', () => {
     const source = '(a) x(t) = \\frac{1}{t}\n(b) x(t) = \\cos(\\pi t)'
 
     expect(repairUndelimitedMath(source)).toBe(
-      '(a) $x(t) = \\frac{1}{t}$\n(b) $x(t) = \\cos(\\pi t)$',
+      '(a) $$x(t) = \\frac{1}{t}$$\n(b) $$x(t) = \\cos(\\pi t)$$',
     )
   })
 
@@ -471,11 +493,56 @@ describe('repairUndelimitedMath', () => {
 
     expect(repairUndelimitedMath(source)).toBe(source)
   })
+  it('keeps a multi-line environment with interior commands intact', () => {
+    // An open environment owns its interior lines: they are not prose to repair, even
+    // when they carry the commands the repair looks for. The environment stays open
+    // across lines until its closing arrives.
+    const source = [
+      'Start here.',
+      '\\begin{align}',
+      'x &= \\frac{1}{2}\\\\',
+      'y &= \\sqrt{2}',
+      '\\end{align}',
+      'End here.',
+    ].join('\n')
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('keeps an open multi-line environment intact while streaming', () => {
+    // The interior line is complete and the environment is still open: it belongs to the
+    // environment, not to the repairer.
+    const source = 'Start.\n\\begin{align}\nx &= \\frac{1}{2}\nmore interior'
+    expect(repairUndelimitedMath(source, { completeLinesOnly: true })).toBe(source)
+  })
+
+  it('leaves a same-line closed environment alone', () => {
+    const source = 'a \\begin{equation} y = \\frac{1}{2} \\end{equation} b'
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('keeps a quoted fence and its interior intact', () => {
+    // A fence inside a blockquote is still a fence: the marker run precedes it the way it
+    // precedes its closing row, and the interior is code, not prose to repair.
+    const source = '> ```js\n> const x = \\frac{1}{2}\n> ```'
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('keeps a quoted list-item fence and its interior intact', () => {
+    const source = '> - item\n>     ```js\n>     const x = \\frac{1}{2}\n>     ```'
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('keeps a nested-list fence and its interior intact', () => {
+    // The fence is indented to the item content column, past the three-space limit of an
+    // indented code block; the interior is code either way.
+    const source = '- item\n    ```js\n    const x = \\frac{1}{2}\n    ```'
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
 
   it('leaves a line with no mathematics untouched inside an answer that has some', () => {
     const source = 'Both parts converge.\n(a) x = \\frac{1}{2}'
 
-    expect(repairUndelimitedMath(source)).toBe('Both parts converge.\n(a) $x = \\frac{1}{2}$')
+    expect(repairUndelimitedMath(source)).toBe('Both parts converge.\n(a) $$x = \\frac{1}{2}$$')
   })
 })
 

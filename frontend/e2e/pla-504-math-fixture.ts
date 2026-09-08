@@ -52,7 +52,8 @@ export const STREAM_TWIN = [
   '  still inside the item',
   '- Third',
   '  - inner with $y=2$',
-  '> - Quoted item with $\\zeta=\\frac{1}{2}$',
+  '> - Quoted item',
+  '>   $$\\zeta=\\frac{1}{2}$$',
   '1. Ordered first with $\\alpha_1$',
   '2. Ordered second',
   '',
@@ -73,6 +74,67 @@ export const STREAM_TWIN = [
 ].join('\n')
 
 export const TWIN_QUESTION = 'Show the full shape set: lists, quotes, code, a table, and the rest.'
+
+/**
+ * The real-incremental streaming fixture (review round 2): the content the real SSE server
+ * feeds the page in delayed chunks. It carries the cases the review asks the live renderer
+ * to prove: a pair of prices that must stay prose, a closed emphasis that must not re-hide
+ * its words when it closes, a display block inside a list item, digit-led mathematics that
+ * stays mathematics, an atomic code block, and an unfinished equation at the tail.
+ */
+export const VISUAL_SESSION_ID = 7
+export const VISUAL_MESSAGE_ID = 41
+export const VISUAL_STREAM = [
+  'The cost line: It costs $5 and $10 today.',
+  '',
+  '- **bold words** in a list item',
+  '- a list item with a display fraction',
+  '  $$\\frac{1}{s+2}$$',
+  '',
+  'It costs $5x$ per unit and $2+2$ total.',
+  '',
+  '```js',
+  'const rate = 1 / (s + 2)',
+  '```',
+  '',
+  'The limit is $\\frac{1}{',
+].join('\n')
+
+export const VISUAL_SESSION = {
+  id: VISUAL_SESSION_ID,
+  class_id: CLASS_ID,
+  title: 'Real incremental streaming',
+  mode: 'guide',
+  artifact_part_id: null,
+  created_at: '2026-09-08T09:00:00Z',
+}
+
+export const VISUAL_MESSAGES = [
+  {
+    id: 40,
+    session_id: VISUAL_SESSION_ID,
+    role: 'user',
+    content: 'Walk through the costs and the limit.',
+    thinking: '',
+    thinking_ms: 0,
+    retrieval_trimmed: false,
+    omitted_document_count: 0,
+    tool_activity: [],
+    created_at: '2026-09-08T09:00:00Z',
+  },
+  {
+    id: VISUAL_MESSAGE_ID,
+    session_id: VISUAL_SESSION_ID,
+    role: 'assistant',
+    content: VISUAL_STREAM,
+    thinking: '',
+    thinking_ms: 0,
+    retrieval_trimmed: false,
+    omitted_document_count: 0,
+    tool_activity: [],
+    created_at: '2026-09-08T09:00:30Z',
+  },
+]
 
 export const TWIN_MESSAGES = [
   {

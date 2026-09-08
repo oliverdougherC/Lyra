@@ -324,25 +324,30 @@ reply is the page's main content, so it gets the page.
   with the first word of its item
 - **Math that has not finished arriving is withheld rather than typeset.** Code and prose grow a
   character at a time and read fine doing it; an equation does not. Closing `$\frac{1}{2` on the
-  reader's behalf draws a fraction with one arm, and a fragment long enough to look like display
-  math is centred on its own line only to snap back inline when the closing delimiter lands. That
-  is what made equations look like they populated ahead of the sentences holding them: they were
-  being drawn out of the text flow before the text existed. The rule is drawn at the line, not the
-  buffer: the unclosed tail of an *open* line is withheld; a line that *ends* with an equation
-  that never closes is repaired into a display block; and a closed equation is promoted to display
-  only when its line actually ends, so a finished equation at the tail of the stream stays inline,
-  in its sentence, until the newline proves otherwise
-- **A promoted display equation keeps the containment it was written in.** It is indented to the
+  reader's behalf draws a fraction with one arm. The rule is drawn at the line, not the buffer: the
+  unclosed tail of an *open* line is withheld; a line that *ends* with a span that never closes is
+  repaired into a display block — the repair wraps it in `$$...$$`, so the display contract is
+  carried by explicit delimiters, not by a promotion pass; and an explicit `$...$` span stays
+  inline wherever it sits, in every later chunk and at the terminal handoff — there is no line-end
+  promotion, so a closed inline equation can never jump to its own line
+- **A `$$...$$` display block keeps the containment it was written in.** It is indented to the
   content column of its line, so a fraction inside a list item or a blockquote stays on that
-  line's layer; a bare `$` that reads as currency (a digit, a space, or a line end behind it) is
-  never treated as math; and the settled render of a finished answer is the same text the stream
-  ends with
+  line's layer. A bare `$` that reads as currency — a digit, a space, or a line end behind it —
+  is escaped for rendering and never opened as math, while the raw text keeps the unescaped
+  dollar for copy and storage; when another unescaped `$` follows on the same line, the escape
+  is also the mispairing guard, because the real parser would otherwise pair the two dollars
+  into one bogus span. Digit-led spans like `$5x$` and `$2+2$` still render as mathematics;
+  the settled render of a finished answer is the same text the stream ends with
 - A unit's place in the cascade survives a re-render. Markdown is re-parsed on every frame, so the
   node holding a word can be replaced while its reveal is still pending, and re-applying the reveal
   without its delay would jump it ahead of every word queued in front of it. A word's identity is
   the offset of its core in the source it was read from — stable while the stream grows at the end
   and across the delimiters that open and close around it — and a pending deadline may move
-  earlier but never later, so the cascade reads in order no matter how the parse reshuffles. The
+  earlier but never later, so the cascade reads in order no matter how the parse reshuffles. A
+  range the reader already holds is remembered as the union of the extents its units have covered;
+  a brand-new unit born inside that range — a split-off half of a word that used to be one — takes
+  the range's past moment instead of the queue tail, and a pending unit that sits ahead of a held
+  past moment moves earlier to keep reading order, because a visible span never re-hides. The
   cascade lives in `components/chat/reveal.ts` and is shared by every surface that shows written
   work; a regenerated message arrives with a new `generation` identity that clears the schedule,
   so a retry's words do not inherit the slots of the answer they replace (the lifecycle that owns

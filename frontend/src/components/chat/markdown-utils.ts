@@ -10,18 +10,19 @@
  *   line gets its interpretation the moment the line has fully arrived. The settled render
  *   applies the same per-line rule, so completing a turn never switches on a new
  *   answer-wide interpretation under the reader's eyes.
- * - **A line end is the only fact a stream can establish.** Inline math is promoted to
- *   display only when the line has actually ended (a received newline, or the stream being
- *   finished). The end of the buffer is not a line end while the stream is open, so a
- *   closed inline span never becomes a display block just because its line has not
- *   continued yet.
- * - **Lifted math stays in the block that contains it.** An equation moved onto its own
- *   rows is indented (and, inside a blockquote, marker-prefixed) to the content column of
- *   its line, so lists and quotes keep their structure.
+ * - **Explicit inline math is always inline.** A `$...$` or `\(...\)` span the model wrote
+ *   closed stays inline at every later chunk and at the terminal handoff: a newline after
+ *   it, or the stream finishing, never re-sorts it into a display block. Display equations
+ *   are the ones the model delimited as display (`$$`, `\[...\]`, an environment), and
+ *   they are what the lifting rule applies to — moved onto their own rows they are indented
+ *   (and, inside a blockquote, marker-prefixed) to the content column of their line, so
+ *   lists and quotes keep their structure.
  * - **A lone dollar is a currency, not a ghost.** An unescaped `$` never opens a span when
- *   a space follows it (the parser's own rule), when a digit follows it (a price), or when
- *   its line has closed without a closer (inline math cannot cross a line break). Only an
- *   unclosed equation at the very tail of an open line is withheld, and then only that line.
+ *   a space follows it (the parser's own rule), and a `$` followed by a digit is a price: it
+ *   is escaped in the render copy, because otherwise the parser pairs it with the next
+ *   price's dollar and typesets the prose between them as an equation. A settled line that
+ *   closed without a valid closer is left literal, and an unclosed equation at the very
+ *   tail of an open line is withheld — only that line.
  */
 
 const DISPLAY_ENVIRONMENTS = [
@@ -46,8 +47,6 @@ const DISPLAY_ENVIRONMENT_PATTERN = new RegExp(
   `^\\\\begin\\{(${DISPLAY_ENVIRONMENTS.join('|').replaceAll('*', '\\*')})\\}`,
 )
 
-const DISPLAY_COMMAND_PATTERN = /\\(?:frac|int|sum|prod|lim|partial|sqrt|begin)(?:\b|\s|\{)/
-
 /** The block a display equation sits in: the blockquote run, and where content starts. */
 type Container = {
   /** The blockquote markers at the start of the line, e.g. `> ` or `> > `. */
@@ -71,18 +70,39 @@ function isEscaped(source: string, index: number): boolean {
   return slashes % 2 === 1
 }
 
+/**
+ * The column at which a fence may start on a line: past the block's own markers, the way a
+ * content column is found. A quote's `>` run (each optionally followed by a space) and a
+ * list item's marker both precede the fence that opens its code block, and they precede
+ * the line that closes it just the same.
+ */
+function fenceContentCol(source: string, lineStart: number): number {
+  let cursor = lineStart
+  let indent = 0
+  while (indent < 3 && source[cursor] === ' ') {
+    cursor += 1
+    indent += 1
+  }
+  while (source[cursor] === '>') {
+    cursor += 1
+    if (source[cursor] === ' ') cursor += 1
+  }
+  while (source[cursor] === ' ') cursor += 1
+  const marker = LIST_MARKER_PATTERN.exec(source.slice(cursor))
+  if (marker) {
+    cursor += marker[0].length
+    while (source[cursor] === ' ') cursor += 1
+  }
+  return cursor
+}
+
 function lineStartsFence(
   source: string,
   index: number,
 ): { end: number; char: '`' | '~'; length: number } | null {
   if (index > 0 && source[index - 1] !== '\n') return null
 
-  let cursor = index
-  let indent = 0
-  while (indent < 3 && source[cursor] === ' ') {
-    cursor += 1
-    indent += 1
-  }
+  const cursor = fenceContentCol(source, index)
   const char = source[cursor]
   if (char !== '`' && char !== '~') return null
 
@@ -103,12 +123,7 @@ function findFenceEnd(
   lineStart += 1
 
   while (lineStart < source.length) {
-    let cursor = lineStart
-    let indent = 0
-    while (indent < 3 && source[cursor] === ' ') {
-      cursor += 1
-      indent += 1
-    }
+    const cursor = fenceContentCol(source, lineStart)
 
     let run = 0
     while (source[cursor + run] === char) run += 1
@@ -155,6 +170,14 @@ function findDollarClosing(source: string, start: number, end: number): number |
     cursor = found + 1
   }
   return null
+}
+
+/** Whether another unescaped `$` sits in `[from, to)` — the one a parser would pair against. */
+function hasUnescapedDollar(source: string, from: number, to: number): boolean {
+  for (let at = source.indexOf('$', from); at !== -1 && at < to; at = source.indexOf('$', at + 1)) {
+    if (!isEscaped(source, at)) return true
+  }
+  return false
 }
 
 /** A list marker: `- ` `* ` `+ `, `1. `, `1) `, or `(1) `, possibly at the end of the line. */
@@ -236,49 +259,6 @@ function formatDisplayMath(content: string, container: Container): string {
     .join('\n')
 }
 
-function shouldPromoteInlineMath(content: string): boolean {
-  return content.length > 32 || DISPLAY_COMMAND_PATTERN.test(content)
-}
-
-/** Nothing after an equation but the punctuation that ends the sentence it closed. */
-const ONLY_PUNCTUATION = /^\s*[.,;:!?]*\s*$/
-
-/** Whether an unescaped `$` — the start of other mathematics — sits in `[from, to)`. */
-function hasMathBefore(source: string, from: number, to: number): boolean {
-  for (let at = source.indexOf('$', from); at !== -1 && at < to; at = source.indexOf('$', at + 1)) {
-    if (!isEscaped(source, at)) return true
-  }
-  return false
-}
-
-/**
- * Whether the span between `start` and `end` has its line to itself.
- *
- * Promotion moves an equation out of the paragraph and onto a row of its own, which is right
- * when the equation is the point of the line and wrong when it is a phrase inside a sentence.
- * An answer reading `(a) $y = ...$; (b) $y = ...$; (c) ...` is the case that made this
- * necessary: one of the five ran past the inline ceiling, so one of the five was lifted out,
- * centred, and left the sentence broken around it while its siblings stayed in the text.
- *
- * Two conditions, and the second is what keeps a list from being singled out by its last
- * member: nothing may follow the span on its line but the punctuation that ends the sentence,
- * and no other mathematics may precede it there. A sentence that simply ends on an equation —
- * `Therefore $y(t) = ...$.` — satisfies both and is still given its own row.
- *
- * The third input is the line's completion: only a line that has actually ended — a newline
- * received, or the stream finished — can decide this, because the end of an open buffer is
- * not a line end.
- */
-function ownsItsLine(source: string, start: number, end: number, lineEnded: boolean): boolean {
-  const lineStart = source.lastIndexOf('\n', start - 1) + 1
-  const lineEnd = source.indexOf('\n', end)
-  // While the stream is open, the end of the received buffer is not a line end: the line
-  // may simply not have continued yet.
-  if (!lineEnded && lineEnd === -1) return false
-  const after = source.slice(end, lineEnd === -1 ? source.length : lineEnd)
-  return ONLY_PUNCTUATION.test(after) && !hasMathBefore(source, lineStart, start)
-}
-
 /** LaTeX commands common enough in an answer that seeing one means mathematics. */
 const MATH_COMMAND =
   /\\(?:d?frac|int|iint|oint|sum|prod|sqrt|left|right|cdot|times|div|infty|partial|nabla|lim|log|ln|sin|cos|tan|sec|csc|cot|sinh|cosh|tanh|exp|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Sigma|Phi|Psi|Omega|neq|leq|geq|ll|gg|approx|equiv|propto|pm|mp|to|rightarrow|Rightarrow|text|mathrm|mathbb|hat|bar|tilde|vec|overline|underline|langle|rangle|lfloor|rfloor|quad|qquad)\b/
@@ -343,14 +323,17 @@ export function repairUndelimitedMath(
         return line
       }
       if (inEnv) {
-        if (line.includes(`\\end{${inEnv}}`)) inEnv = null
+        // Interior lines belong to the environment until its closing arrives; none of
+        // them is prose to repair.
+        if (content.includes(`\\end{${inEnv}}`)) inEnv = null
         return line
       }
-      const env = /\\begin\{([A-Za-z*]+)\}/.exec(line)
+      const env = /\\begin\{([A-Za-z*]+)\}/.exec(content)
       if (env) {
-        // An environment already delimits itself and the tokenizer below promotes it.
-        inEnv = env[1]
-        if (!line.slice(env[0].length).includes(`\\end{${env[1]}}`)) inEnv = null
+        // An environment already delimits itself, so it is left exactly as written. The
+        // environment stays open across lines until its closing arrives; a line that
+        // closes it on the spot leaves nothing open behind.
+        inEnv = content.slice(env[0].length).includes(`\\end{${env[1]}}`) ? null : env[1]
         return line
       }
       if (index >= completeThrough) return line
@@ -365,7 +348,10 @@ export function repairUndelimitedMath(
       if (!MATH_COMMAND.test(line)) return line
       const prefix = LEADING_LABEL.exec(line)?.[1] ?? ''
       const rest = line.slice(prefix.length).trim()
-      return rest ? `${prefix}$${rest}$` : line
+      // The repaired line is set as a display block: the whole line is the equation, and
+      // an equation that owns its line is centred, not stranded mid-sentence. The `$$`
+      // delimiters are what the tokenizer lifts into the line's container.
+      return rest ? `${prefix}$$${rest}$$` : line
     })
     .join('\n')
 }
@@ -572,16 +558,7 @@ function appendToken(output: string, token: RenderToken, container?: Container):
  * interpretation of the line that was still arriving — never a switch of the answer-wide
  * rule.
  */
-export function normalizeMarkdownForRender(
-  source: string,
-  streaming = false,
-  { promoteInlineMath = true }: { promoteInlineMath?: boolean } = {},
-): string {
-  // Promotion suits an answer, where a long expression deserves its own line. It does not
-  // suit a problem statement in a list row: `$x(t) = \sin(t)[u(t+1) - u(t-1)]$` is over
-  // the length threshold, and centring it on its own line while its four siblings sit
-  // inline makes one sub-part look like a different kind of thing.
-  const promote = promoteInlineMath ? shouldPromoteInlineMath : () => false
+export function normalizeMarkdownForRender(source: string, streaming = false): string {
   const lineEndings = source.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
   // While streaming, only complete lines are repaired: a half-arrived line is wrapped on
   // the chunk in which it completes, and keeps that interpretation afterwards.
@@ -699,30 +676,42 @@ export function normalizeMarkdownForRender(
           ? findDollarClosing(normalized, cursor + 1, searchEnd)
           : null
       if (closing === null) {
+        const lineHasLaterDollar = hasUnescapedDollar(
+          normalized,
+          cursor + 1,
+          lineEnd === -1 ? normalized.length : lineEnd,
+        )
         if (!streaming) {
-          // Settled: the span never closed, so the dollar is literal.
-          plain += normalized[cursor]
-          cursor += 1
-          continue
-        }
-        // A space after the dollar is final: no span can open there.
-        if (next === ' ' || next === '\n') {
-          plain += normalized[cursor]
+          // Settled: the span never closed, so the dollar is literal — escaped only
+          // where the parser would pair it with a later dollar on the line.
+          plain += lineHasLaterDollar ? '\\$' : '$'
           cursor += 1
           continue
         }
         // A digit after the dollar is a price, not the start of mathematics: reading
         // `$5 and includes shipping` as an unclosed equation would withhold the rest of
-        // the answer for the whole turn.
+        // the answer for the whole turn. The parser, however, opens a span on any
+        // non-space after the dollar, so two prices on one line — `It costs $5 and $10` —
+        // would pair the first dollar with the second and typeset the prose between them
+        // as an equation. A price another unescaped dollar on the line can close against
+        // is therefore escaped in the render copy: the stored text keeps its dollars,
+        // and only the rendered glyphs lose the delimiters.
         if (next !== undefined && /[0-9]/.test(next)) {
+          plain += lineHasLaterDollar ? '\\$' : '$'
+          cursor += 1
+          continue
+        }
+        // A space after the dollar is final: no span can open there.
+        if (next === ' ' || next === '\n' || next === undefined) {
           plain += normalized[cursor]
           cursor += 1
           continue
         }
         // A line that has arrived in full without a closer is final: the dollar is
-        // literal and the rest of the answer shows.
+        // literal — escaped only where the parser would pair it with a later dollar on
+        // the line — and the rest of the answer shows.
         if (lineEnd !== -1) {
-          plain += normalized.slice(cursor, lineEnd + 1)
+          plain += (lineHasLaterDollar ? '\\$' : '$') + normalized.slice(cursor + 1, lineEnd + 1)
           cursor = lineEnd + 1
           continue
         }
@@ -731,19 +720,9 @@ export function normalizeMarkdownForRender(
         cursor = normalized.length
       } else {
         flushPlain()
-        const inner = normalized.slice(cursor + 1, closing)
-        const container = containerAt(normalized, cursor)
-        const lifted =
-          promote(inner) &&
-          // A newline after the span — or a finished stream — is the line end; the end
-          // of the received buffer is not a line end while the stream is open.
-          ownsItsLine(normalized, cursor, closing + 1, lineEnd !== -1 || !streaming)
-        addToken(
-          tokens,
-          lifted ? formatDisplayMath(inner, container) : `$${inner}$`,
-          lifted,
-          lifted ? container : undefined,
-        )
+        // A closed explicit span is inline mathematics, and stays inline: a newline
+        // after it, or the stream finishing, never re-sorts it into a display block.
+        addToken(tokens, `$${normalized.slice(cursor + 1, closing)}$`)
         cursor = closing + 1
       }
       continue

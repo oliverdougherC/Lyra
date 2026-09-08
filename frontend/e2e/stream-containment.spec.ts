@@ -93,9 +93,16 @@ test.describe('renderer containment and ordered reveal', () => {
       }
       const table = root.querySelector('table')
       const firstLi = root.querySelector('li')
+      const firstItem = firstLi
+        ? {
+            inline: firstLi.querySelectorAll('.katex:not(.katex-display)').length,
+            display: firstLi.querySelectorAll('.katex-display').length,
+          }
+        : null
       return {
         displayCount: displays.length,
         displays: displayReport,
+        firstItem,
         lists,
         tableRows: table ? table.querySelectorAll('tr').length : 0,
         tableMath: table ? table.querySelectorAll('.katex').length : 0,
@@ -120,6 +127,12 @@ test.describe('renderer containment and ordered reveal', () => {
     for (const display of p.displays) {
       expect(display.geometry, `display ${display.text} escaped its block`).toBe(true)
     }
+
+    // An explicit inline span stays inline at the terminal handoff: the first item's
+    // equation is set inline in its sentence, with no display block of its own.
+    expect(p.firstItem, 'no first list item').not.toBeNull()
+    expect(p.firstItem!.inline, 'the first item lost its inline equation').toBeGreaterThan(0)
+    expect(p.firstItem!.display, 'the inline span was promoted to display').toBe(0)
 
     // The list groups stay single: one plain list, a nested list inside its item, the
     // blockquote's own list, and one ordered list.

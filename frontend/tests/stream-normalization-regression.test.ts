@@ -62,20 +62,37 @@ describe('chunk boundaries never change a completed equation', () => {
     expect(full).not.toContain('$$')
   })
 
-  it('a list with a lifted equation keeps its structure through every cut', () => {
-    const source = '- First $\\frac{1}{2}$\n- Second $x$'
-    // The first equation closes at offset 20; its line ends at the newline 21, which is
-    // the moment the promotion becomes knowable. Every cut at or after 22 must agree
-    // with the whole; cuts before may withhold, but never show the equation misplaced.
-    assertStableAcrossChunkBoundaries(source, 22)
+  it('a list with a display equation keeps its structure through every cut', () => {
+    const source = '- First\n  $$\n  \\frac{1}{2}\n  $$\n- Second $x$'
+    // The display block is closed the moment its closing `$$` row has arrived; every cut
+    // from the next line on must agree with the whole, and the block must stay indented
+    // into the item, never at the root of the document.
+    assertStableAcrossChunkBoundaries(source, source.indexOf('\n- Second'))
     const full = normalizeMarkdownForRender(source, true)
     const fullPlacements = placements(full)
     expect(fullPlacements).toHaveLength(2)
     expect(fullPlacements[0].display).toBe(true)
     expect(fullPlacements[1].display).toBe(false)
-    // The lifted block is indented into the list item, never root-level.
     for (const line of full.split('\n')) {
       if (line.trim() === '$$') expect(line.startsWith('  ')).toBe(true)
+    }
+  })
+
+  it('a closed inline span never becomes display at a later cut or at settlement', () => {
+    // Review of the first streaming round: promotion at line end flipped a completed
+    // inline span into a block. Every cut at or after the closing delimiter, the trailing
+    // newline, and the terminal handoff must all keep the span inline.
+    const source = '- First $\\frac{1}{2}$'
+    const closesAt = source.lastIndexOf('$') + 1
+    for (let at = closesAt; at <= source.length; at += 1) {
+      expect(
+        normalizeMarkdownForRender(source.slice(0, at), true),
+        `flip at cut ${at}`,
+      ).not.toContain('$$')
+    }
+    for (const final of [source, source + '\n', source + '\n- Second $x$']) {
+      expect(normalizeMarkdownForRender(final), `flip at settlement: ${final}`).not.toContain('$$')
+      expect(normalizeMarkdownForRender(final, true)).not.toContain('$$')
     }
   })
 
@@ -122,8 +139,12 @@ describe('chunk boundaries never change a completed equation', () => {
       const prefix = source.slice(0, at)
       const normalized = normalizeMarkdownForRender(prefix, true)
       // The normalizer never reorders or drops arrived text: it may only withhold a tail
-      // region of an equation that has not finished arriving.
-      expect(prefix.startsWith(normalized), `normalized tail dropped at cut ${at}`).toBe(true)
+      // region of an equation that has not finished arriving, or escape a price dollar in
+      // the render copy (the stored text keeps its dollars).
+      expect(
+        prefix.startsWith(normalized.replaceAll('\\$', '$')),
+        `normalized tail dropped at cut ${at}`,
+      ).toBe(true)
       // Once the first price has arrived it is visible as literal prose.
       if (prefix.includes('$5')) expect(normalized).toContain('$5')
       // Once the equation has closed it is typeset inline and never as a display block.
