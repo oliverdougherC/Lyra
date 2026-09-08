@@ -8,6 +8,7 @@ surface - status codes, guards, and the round-trips a session makes.
 import json
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -392,7 +393,7 @@ def test_an_attempt_grades_answers_and_scores_by_topic(
 
     right = client.post(
         f"/api/attempts/{attempt['attempt_id']}/answers",
-        json={"part_id": first, "selected_index": 0, "response_text": "sifting"},
+        json={"part_id": first, "selected_index": 0},
     )
     assert right.json() == {
         "correct": True,
@@ -413,14 +414,15 @@ def test_an_attempt_grades_answers_and_scores_by_topic(
     body = finished.json()
     assert body["score"] == 1
     assert body["total"] == 2
+    assert body["unresolved"] == 0
     assert body["by_topic"] == [
-        {"topic": "convolution", "correct": 0, "total": 1},
-        {"topic": "delta", "correct": 1, "total": 1},
+        {"topic": "convolution", "correct": 0, "total": 1, "unresolved": 0},
+        {"topic": "delta", "correct": 1, "total": 1, "unresolved": 0},
     ]
 
     again = client.post(
         f"/api/attempts/{attempt['attempt_id']}/answers",
-        json={"part_id": first, "selected_index": 0, "response_text": "sifting"},
+        json={"part_id": first, "selected_index": 0},
     )
     assert again.status_code == 409
 
@@ -434,11 +436,11 @@ def test_reanswering_updates_rather_than_duplicates(
 
     client.post(
         f"/api/attempts/{attempt_id}/answers",
-        json={"part_id": part_id, "selected_index": 3, "response_text": "sampling"},
+        json={"part_id": part_id, "selected_index": 3},
     )
     client.post(
         f"/api/attempts/{attempt_id}/answers",
-        json={"part_id": part_id, "selected_index": 0, "response_text": "sifting"},
+        json={"part_id": part_id, "selected_index": 0},
     )
 
     rows = db.execute("select selected_index, correct from quiz_answers").fetchall()
@@ -458,7 +460,7 @@ def test_an_answer_for_another_quizs_question_is_a_404(
 
     response = client.post(
         f"/api/attempts/{attempt_id}/answers",
-        json={"part_id": foreign_part, "selected_index": 0, "response_text": "sifting"},
+        json={"part_id": foreign_part, "selected_index": 0},
     )
 
     assert response.status_code == 404
@@ -635,9 +637,10 @@ def test_starting_an_attempt_is_idempotent_and_resumes(
     started = client.post(f"/api/quizzes/{quiz_id}/attempts").json()
     client.post(
         f"/api/attempts/{started['attempt_id']}/answers",
-        json={"part_id": first, "selected_index": 0, "response_text": "sifting"},
+        json={"part_id": first, "selected_index": 0},
     )
-    # A second start returns the same attempt with the answer already recorded.
+    # A second start returns the same attempt with the answer already recorded; a legacy
+    # choice body that carries no text is still graded, recording the option it chose.
     resumed = client.post(f"/api/quizzes/{quiz_id}/attempts").json()
     assert resumed["attempt_id"] == started["attempt_id"]
     assert resumed["question_count"] == 2
@@ -663,7 +666,7 @@ def test_current_attempt_read_surface_hides_unearned_keys(
     started = client.post(f"/api/quizzes/{quiz_id}/attempts").json()
     client.post(
         f"/api/attempts/{started['attempt_id']}/answers",
-        json={"part_id": first, "selected_index": 0, "response_text": "sifting"},
+        json={"part_id": first, "selected_index": 0},
     )
 
     current = client.get(f"/api/quizzes/{quiz_id}/attempts/current").json()
@@ -748,13 +751,14 @@ def test_finish_is_idempotent_and_uses_the_full_question_count(
     attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
     client.post(
         f"/api/attempts/{attempt_id}/answers",
-        json={"part_id": first, "selected_index": 0, "response_text": "sifting"},
+        json={"part_id": first, "selected_index": 0},
     )
 
     # Only one of two questions answered: the denominator is still the full count.
     first_finish = client.post(f"/api/attempts/{attempt_id}/finish").json()
     assert first_finish["score"] == 1
     assert first_finish["total"] == 2
+    assert first_finish["unresolved"] == 0
     assert first_finish["answered"] == 1
 
     # A retried finish returns the same stored result without double-counting.
@@ -862,10 +866,14 @@ def test_a_free_response_no_layer_settles_is_uncertain_not_wrong(
     current = client.get(f"/api/quizzes/{quiz_id}/attempts/current").json()["attempt"]
     assert current["answers"][0]["response_text"] == "plants making food from sunlight"
     assert current["answers"][0]["uncertain"] is True
-    # An unsettled answer is not a confident wrong in the score either.
+    # An unsettled answer is not a confident wrong in the score either: it is reported
+    # separately, and the settled total excludes it.
     finished = client.post(f"/api/attempts/{attempt_id}/finish").json()
     assert finished["score"] == 0
+    assert finished["total"] == 1
+    assert finished["unresolved"] == 1
     assert finished["answered"] == 1
+    assert finished["by_topic"] == [{"topic": "biology", "correct": 0, "total": 0, "unresolved": 1}]
 
 
 def test_a_resubmitted_free_response_replays_its_stored_result(
@@ -955,15 +963,23 @@ def test_a_restart_while_a_judgment_is_in_flight_cannot_write_to_the_new_attempt
 
     assert outcome["response"].status_code == 409  # type: ignore[union-attr]
     assert "changed" in str(outcome["response"].json()["detail"])  # type: ignore[union-attr]
-    # Nothing was written to either attempt.
-    assert db.execute("select count(*) from quiz_answers").fetchone()[0] == 0
+    # The old attempt may hold its in-flight marker (the words were stored before the
+    # judgment); no settled answer was written anywhere.
+    rows = db.execute("select attempt_id, verdict, grading_version from quiz_answers").fetchall()
+    assert len(rows) <= 1
+    for row in rows:
+        assert row["attempt_id"] == attempt_id
+        assert row["verdict"] is None
+        assert row["grading_version"] == grading.GRADING_VERSION
 
 
 def test_a_legacy_fill_blank_answer_stays_readable(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:
     """A row written before grading carried responses reads back with the original
-    fields intact, a null response, and no fabricated verdict or certainty."""
+    fields intact, a null response, and no fabricated verdict: a legacy fill-blank miss
+    carried no recoverable words, so it reads as *unresolved*, never as a confident
+    wrong, and stays retryable."""
     quiz_id = _quiz(db, class_id, _document(db, class_id))
     part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
     attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
@@ -981,7 +997,7 @@ def test_a_legacy_fill_blank_answer_stays_readable(
             "part_id": part_id,
             "selected_index": -1,
             "correct": False,
-            "uncertain": False,
+            "uncertain": True,
             "response_text": None,
         }
     ]
@@ -1007,8 +1023,9 @@ def test_a_legacy_fill_blank_answer_stays_readable(
 def test_an_answer_requires_the_response_text_contract(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:
-    """The layered grader needs the student's actual words; a body without them is a
-    contract violation, refused before any grading."""
+    """The layered grader needs the student's actual words: a typed answer without them
+    is refused by the route (422) before any grading, while a choice answer may omit
+    them entirely and still be accepted."""
     quiz_id = _quiz(db, class_id, _document(db, class_id))
     part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
     attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
@@ -1019,6 +1036,304 @@ def test_an_answer_requires_the_response_text_contract(
     )
 
     assert response.status_code == 422
+    assert response.json()["detail"] == "A typed answer needs the student's words."
+
+
+def test_a_legacy_choice_client_omits_the_response_text(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A choice body that predates `response_text` grades exactly as before, and the
+    route records the chosen option's text rather than fabricating one."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _question(db, quiz_id, 1, "delta")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+
+    response = client.post(
+        f"/api/attempts/{attempt_id}/answers",
+        json={"part_id": part_id, "selected_index": 2},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["correct"] is False
+    row = db.execute(
+        "select response_text, verdict from quiz_answers where part_id = ?", (part_id,)
+    ).fetchone()
+    assert row["response_text"] == "shifting"
+    assert row["verdict"] == "incorrect"
+
+
+def test_a_transient_judge_failure_can_be_retried_without_a_new_attempt(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An endpoint that is down records `uncertain` with the words stored, not a wrong;
+    resubmitting the same answer regrades it in place until it settles."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        if len(calls) == 1:
+            raise RuntimeError("endpoint down")
+        return grading.GradingResult(grading.VERDICT_CORRECT, {"grader": "judge-fixture"})
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "a carbon oxidation cycle"}
+
+    first = client.post(endpoint, json=body)
+    assert first.status_code == 200
+    assert first.json()["uncertain"] is True
+    row = db.execute("select verdict, correct, response_text from quiz_answers").fetchone()
+    assert row["verdict"] == "uncertain"
+    assert row["correct"] == 0
+    assert row["response_text"] == "a carbon oxidation cycle"
+
+    retry = client.post(endpoint, json=body)
+    assert retry.status_code == 200
+    assert retry.json()["correct"] is True
+    assert retry.json()["uncertain"] is False
+    assert calls == ["a carbon oxidation cycle", "a carbon oxidation cycle"]
+    row = db.execute("select verdict, correct from quiz_answers").fetchone()
+    assert row["verdict"] == "correct"
+    assert row["correct"] == 1
+
+
+def test_a_regenerated_question_regrades_an_identical_submission(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replay is keyed on the question the verdict was earned against: the same text
+    submitted against regenerated content is a fresh judgment, not a stale replay."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        return grading.GradingResult(grading.VERDICT_CORRECT, {"grader": "judge-fixture"})
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "the carbon oxidation cycle"}
+
+    first = client.post(endpoint, json=body)
+    replay = client.post(endpoint, json=body)
+    assert first.status_code == replay.status_code == 200
+    assert calls == ["the carbon oxidation cycle"]
+
+    # The question is regenerated: same text, new content, new judgment.
+    db.execute(
+        "update artifact_parts set content = ? where id = ?",
+        (
+            json.dumps(
+                {
+                    "type": "fill_blank",
+                    "question": "Express the angular sampling frequency as ___ .",
+                    "options": ["2pi/Ts"],
+                    "correct_index": 0,
+                    "explanation": "The angular sampling frequency.",
+                    "topic": "sampling",
+                    "difficulty": "intermediate",
+                }
+            ),
+            part_id,
+        ),
+    )
+    db.commit()
+
+    regraded = client.post(endpoint, json=body)
+    assert regraded.status_code == 200
+    assert calls == ["the carbon oxidation cycle", "the carbon oxidation cycle"]
+
+
+def test_simultaneous_identical_submissions_charge_one_judgment(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two requests for the same submission race to the judge: one grades, the other
+    waits for the published result, so a retry storm cannot double-charge a judgment."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        time.sleep(0.2)  # Keep the in-flight window open for the second request.
+        return grading.GradingResult(grading.VERDICT_CORRECT, {"grader": "judge-fixture"})
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+    body = {"part_id": part_id, "selected_index": -1, "response_text": "the carbon oxidation cycle"}
+
+    start = threading.Event()
+    results: list[int] = []
+
+    def submit() -> None:
+        start.wait(timeout=15)
+        results.append(client.post(endpoint, json=body).status_code)
+
+    threads = [threading.Thread(target=submit) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.set()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert results == [200, 200]
+    assert calls == ["the carbon oxidation cycle"]
+    rows = db.execute("select verdict, response_text from quiz_answers").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["verdict"] == "correct"
+
+
+def test_an_older_submission_cannot_overwrite_a_newer_one(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow judgment of an older answer publishes into a row a newer answer already
+    took: the older result is discarded (409) and the newer one stands."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        if response == "the older answer":
+            entered.set()
+            release.wait(timeout=20)
+        return grading.GradingResult(grading.VERDICT_CORRECT, {"grader": "judge-fixture"})
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(db, quiz_id, 1, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    endpoint = f"/api/attempts/{attempt_id}/answers"
+
+    outcome: dict[str, object] = {}
+
+    def submit_older() -> None:
+        outcome["response"] = client.post(
+            endpoint,
+            json={"part_id": part_id, "selected_index": -1, "response_text": "the older answer"},
+        )
+
+    worker = threading.Thread(target=submit_older)
+    worker.start()
+    assert entered.wait(timeout=15)
+    # The student improves the answer while the older judgment is still running.
+    newer = client.post(
+        endpoint,
+        json={"part_id": part_id, "selected_index": -1, "response_text": "the newer answer"},
+    )
+    assert newer.status_code == 200
+    release.set()
+    worker.join(timeout=30)
+
+    assert outcome["response"].status_code == 409  # type: ignore[union-attr]
+    row = db.execute(
+        "select response_text, verdict from quiz_answers where part_id = ?", (part_id,)
+    ).fetchone()
+    assert row["response_text"] == "the newer answer"
+    assert row["verdict"] == "correct"
+
+
+def test_an_unresolved_answer_is_reported_not_wrong_at_finish(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """Finishing with an unsettled judgment reports it separately: not in the score,
+    not in the settled totals, not in the topic weakness."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    first = _fill_question(
+        db, quiz_id, 1, "the conversion of light into chemical energy", "biology"
+    )
+    second = _fill_question(db, quiz_id, 2, "the Krebs cycle", "biochemistry")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    for part_id, words in ((first, "plants making food from sunlight"), (second, "a cycle")):
+        response = client.post(
+            f"/api/attempts/{attempt_id}/answers",
+            json={"part_id": part_id, "selected_index": -1, "response_text": words},
+        )
+        assert response.status_code == 200
+        assert response.json()["uncertain"] is True
+
+    finished = client.post(f"/api/attempts/{attempt_id}/finish").json()
+    assert finished["score"] == 0
+    assert finished["total"] == 2
+    assert finished["unresolved"] == 2
+    assert finished["answered"] == 2
+    assert finished["by_topic"] == [
+        {"topic": "biochemistry", "correct": 0, "total": 0, "unresolved": 1},
+        {"topic": "biology", "correct": 0, "total": 0, "unresolved": 1},
+    ]
+
+
+def test_reading_a_quiz_never_carries_the_grading_contract(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """The hidden grading contract stays in the store: the quiz read shape never
+    exposes it, so a client cannot see or steer the grader's hidden reference."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(
+        db,
+        quiz_id,
+        1,
+        "the Krebs cycle",
+        "biochemistry",
+    )
+    stored = json.loads(
+        str(
+            db.execute("select content from artifact_parts where id = ?", (part_id,)).fetchone()[
+                "content"
+            ]
+        )
+    )
+    stored["grading"] = {
+        "answer_kind": "text",
+        "tolerance": None,
+        "units": None,
+        "acceptable_alternatives": ["citric acid cycle"],
+        "required_ideas": ["central carbon oxidation"],
+        "common_misconceptions": [],
+        "contradictions": [],
+        "partial_understanding_accepted": False,
+    }
+    db.execute(
+        "update artifact_parts set content = ? where id = ?",
+        (json.dumps(stored), part_id),
+    )
+    db.commit()
+
+    response = client.get(f"/api/quizzes/{quiz_id}")
+
+    assert response.status_code == 200
+    question = response.json()["questions"][0]
+    assert question["question"]["options"] == ["the Krebs cycle"]
+    assert "grading" not in question["question"]
+    # The grader itself still sees the stored contract.
+    assert "grading" in stored
 
 
 # ---------------------------------------------------------------------------

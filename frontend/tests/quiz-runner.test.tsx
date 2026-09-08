@@ -228,6 +228,7 @@ describe('QuizRunner', () => {
       score: 1,
       total: 2,
       answered: 2,
+      unresolved: 0,
       by_topic: [
         { topic: 'Algebra', correct: 1, total: 1 },
         { topic: 'Geography', correct: 0, total: 1 },
@@ -260,6 +261,41 @@ describe('QuizRunner', () => {
     expect(weakLink).not.toHaveAttribute('target')
   })
 
+  it('reports unresolved answers on the results screen without flagging them', async () => {
+    // An unsettled judgment is reported, never scored as wrong and never a confident
+    // weakness: the summary carries the unresolved tally and an unresolved-only topic
+    // stays neutral (no red flag, no "go over this" handoff).
+    mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]))
+    vi.spyOn(api, 'finishAttempt').mockResolvedValue({
+      score: 1,
+      total: 2,
+      answered: 2,
+      unresolved: 1,
+      by_topic: [
+        { topic: 'Algebra', correct: 1, total: 1 },
+        { topic: 'Geography', correct: 0, total: 0, unresolved: 1 },
+      ],
+    })
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    await screen.findByText('What is the determinant of the identity matrix?')
+    await userEvent.click(screen.getByRole('button', { name: 'One' }))
+    await screen.findByText('Correct.')
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await screen.findByText('The capital of France is ...')
+    await userEvent.type(screen.getByLabelText('Your answer'), 'Lyon')
+    await userEvent.click(screen.getByRole('button', { name: 'Check' }))
+    await screen.findByText('Not quite.')
+    await userEvent.click(screen.getByRole('button', { name: 'See results' }))
+
+    expect(await screen.findByText('You scored 1 out of 2')).toBeInTheDocument()
+    expect(screen.getByText(/1 answer left unresolved, not counted as wrong/)).toBeInTheDocument()
+    expect(screen.getByText(/0 of 0 · 1 unresolved/)).toBeInTheDocument()
+    // The unresolved-only topic is reported, never flagged weak.
+    expect(screen.queryByRole('link', { name: /Go over this with Lyra/ })).not.toBeInTheDocument()
+  })
+
   it('resumes at the first unanswered question when the attempt already has answers', async () => {
     // The active attempt already recorded an answer to the first question, so a reload
     // resumes at the second rather than starting over (PLA-277).
@@ -282,6 +318,7 @@ describe('QuizRunner', () => {
       score: 2,
       total: 2,
       answered: 2,
+      unresolved: 0,
       by_topic: [{ topic: 'Algebra', correct: 2, total: 2 }],
     })
     const { wrapper } = createWrapper()
@@ -332,7 +369,7 @@ describe('QuizRunner remediation', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: 'See results' }))
     expect(screen.getByRole('button', { name: 'Start over' })).toBeDisabled()
-    scoring.resolve({ score: 1, total: 1, answered: 1, by_topic: [] })
+    scoring.resolve({ score: 1, total: 1, answered: 1, unresolved: 0, by_topic: [] })
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'You scored 1 out of 1' })).toHaveFocus(),
     )
@@ -450,6 +487,50 @@ it('compares an unsettled answer instead of judging it wrong', async () => {
   expect(screen.getByText('The answer:')).toBeInTheDocument()
   // The handoff to Lyra stays available: that is the clarification the flow offers.
   expect(screen.getByRole('link', { name: 'Go over this with Lyra' })).toBeInTheDocument()
+})
+
+it('reopens an unsettled fill_blank answer for a reworded recheck in the same reveal', async () => {
+  // An unsettled judgment is not final: the reveal keeps the input editable so the
+  // student can reword and submit again. The server regrades the new words in place -
+  // the same attempt, no new one - and a settled second check closes the input again.
+  mockAttemptLifecycle(quizWith([FILL_BLANK]))
+  const settled = {
+    correct: true,
+    uncertain: false,
+    correct_index: 0,
+    explanation: 'Because the definition says so.',
+  }
+  vi.mocked(api.submitAnswer)
+    .mockResolvedValueOnce({ ...settled, correct: false, uncertain: true })
+    .mockResolvedValueOnce(settled)
+  const { wrapper } = createWrapper()
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+  await screen.findByText('The capital of France is ...')
+  await userEvent.type(screen.getByLabelText('Your answer'), 'a big city in France')
+  await userEvent.click(screen.getByRole('button', { name: 'Check' }))
+  expect(await screen.findByText("Let's compare.")).toBeInTheDocument()
+
+  // The reveal stays open: the input is editable and the check button returns.
+  const field = screen.getByRole('textbox', { name: 'Your answer' })
+  expect(field).not.toBeDisabled()
+  await userEvent.clear(field)
+  await userEvent.type(field, 'Paris')
+  await userEvent.click(screen.getByRole('button', { name: 'Check again' }))
+
+  await waitFor(() =>
+    expect(api.submitAnswer).toHaveBeenLastCalledWith(10, {
+      part_id: 22,
+      selected_index: -1,
+      response_text: 'Paris',
+    }),
+  )
+  expect(await screen.findByText('Correct.')).toBeInTheDocument()
+  // A settled second check closes the retry: the input disables and the button goes.
+  expect(screen.getByRole('textbox', { name: 'Your answer' })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument()
+  // The recheck never opened a second attempt.
+  expect(api.startAttempt).toHaveBeenCalledTimes(1)
 })
 
 it('restores a recorded fill_blank response on reopen', async () => {

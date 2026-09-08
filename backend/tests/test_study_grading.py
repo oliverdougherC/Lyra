@@ -212,10 +212,42 @@ def test_a_list_with_a_wrong_numeric_item_is_a_settled_mismatch() -> None:
     assert result.detail["grader"] == "set"
 
 
-def test_a_shorter_list_is_the_judges_call() -> None:
-    # A student who listed two of three items may have shown most of the understanding;
-    # the set layer does not decide that alone.
-    result = _grade("1, 2, 3", "1, 2")
+def test_a_missing_or_extra_listed_item_is_a_settled_mismatch() -> None:
+    # Complete membership is the rule for a numeric list: an extra item ("1, 2" versus
+    # "1, 2, 999") or a missing one is a wrong answer, not a judgment call.
+    extra = _grade("1, 2", "1, 2, 999")
+    assert extra.verdict == grading.VERDICT_INCORRECT
+    assert extra.detail["grader"] == "set"
+    missing = _grade("1, 2, 3", "1, 2")
+    assert missing.verdict == grading.VERDICT_INCORRECT
+    assert missing.detail["grader"] == "set"
+
+
+def test_a_legacy_prose_list_reorder_is_the_judges_call() -> None:
+    # Nothing declared the list unordered, so a reorder of prose items is not decided by
+    # the set layer; only a declared set contract accepts reordering.
+    assert (
+        _grade("oxygen, carbon dioxide", "carbon dioxide, oxygen").verdict
+        == grading.VERDICT_UNCERTAIN
+    )
+
+
+def test_a_set_contract_permits_reordering_and_decides_membership() -> None:
+    question = _question("oxygen, carbon dioxide", grading={"answer_kind": "set"})
+    reordered = grading.grade_free_response(question, "carbon dioxide, oxygen", judge=None)
+    assert reordered.verdict == grading.VERDICT_CORRECT
+    assert reordered.detail["grader"] == "set"
+    swapped_out = grading.grade_free_response(question, "oxygen, nitrogen", judge=None)
+    assert swapped_out.verdict == grading.VERDICT_INCORRECT
+    assert swapped_out.detail["grader"] == "set"
+
+
+def test_a_text_kind_answer_is_never_settled_by_a_typed_layer() -> None:
+    # The declared kind gates the layers: a `text` answer cannot be settled by unit, set,
+    # or algebra comparison - the judge has the call, or the honest fallback.
+    assert _grade("200", "200.0", judge=None).verdict == grading.VERDICT_CORRECT
+    question = _question("200", grading={"answer_kind": "text"})
+    result = grading.grade_free_response(question, "200.0", judge=None)
     assert result.verdict == grading.VERDICT_UNCERTAIN
 
 
@@ -255,6 +287,40 @@ def test_rubric_alternatives_are_checked_before_the_expensive_layers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Type-aware text: units, factors, and symbols are not punctuation
+# ---------------------------------------------------------------------------
+
+
+def test_case_sensitive_unit_prefixes_are_not_folded() -> None:
+    # `1 mW` and `1 MW` differ by a factor of a million: a casefold is a wrong answer.
+    result = _grade("1 mW", "1 MW")
+    assert result.verdict == grading.VERDICT_INCORRECT
+    assert result.detail["grader"] == "numeric"
+
+
+def test_a_factorial_is_not_a_number_with_trailing_punctuation() -> None:
+    # The `!` is a factorial, not sentence punctuation: `3` is not `3!`.
+    assert _grade("3!", "3").verdict == grading.VERDICT_INCORRECT
+
+
+def test_short_symbolic_tokens_are_not_case_folded() -> None:
+    # `x` and `X`, `Na` and `na` are different tokens. The trivial comparison refuses to
+    # decide them, and no other layer can, so the pass abstains rather than accept.
+    assert _grade("x", "X").verdict == grading.VERDICT_UNCERTAIN
+    assert _grade("Na", "na").verdict == grading.VERDICT_UNCERTAIN
+
+
+def test_alternatives_are_compared_with_the_same_care() -> None:
+    # A rubric alternative is an equivalent form, not a casefold: `1 MW` is not an
+    # alternative form of `1 mW`, while the alternative itself still matches.
+    question = _question(
+        "1 mW", grading={"answer_kind": "numeric", "acceptable_alternatives": ["1 mW"]}
+    )
+    assert grading.grade_free_response(question, "1 mW").verdict == grading.VERDICT_CORRECT
+    assert grading.grade_free_response(question, "1 MW").verdict == grading.VERDICT_INCORRECT
+
+
+# ---------------------------------------------------------------------------
 # The semantic judge: synthetic fixtures only
 # ---------------------------------------------------------------------------
 
@@ -285,19 +351,84 @@ def test_judge_uncertain_is_uncertain() -> None:
 def test_the_judge_verdict_mapping_is_conservative() -> None:
     # The five provider grades onto the flow's three outcomes: partial understanding and
     # a low-confidence wrong are abstentions, never confident wrongs.
-    assert grading._map_judge_verdict("correct", 0.9) == ("correct", None)
-    assert grading._map_judge_verdict("mostly_correct", 0.9) == ("correct", None)
-    assert grading._map_judge_verdict("partially_correct", 0.9) == (
+    assert grading._map_judge_verdict("correct", 0.9, partial_accepted=False) == ("correct", None)
+    assert grading._map_judge_verdict("mostly_correct", 0.9, partial_accepted=False) == (
+        "correct",
+        None,
+    )
+    assert grading._map_judge_verdict("partially_correct", 0.9, partial_accepted=False) == (
         "uncertain",
         "partially correct",
     )
-    assert grading._map_judge_verdict("uncertain", 0.9) == ("uncertain", None)
-    assert grading._map_judge_verdict("incorrect", 0.5) == (
+    # The contract's partial-acceptance policy turns that abstention into credit.
+    assert grading._map_judge_verdict("partially_correct", 0.9, partial_accepted=True) == (
+        "correct",
+        "partial understanding accepted",
+    )
+    assert grading._map_judge_verdict("uncertain", 0.9, partial_accepted=False) == (
+        "uncertain",
+        None,
+    )
+    assert grading._map_judge_verdict("incorrect", 0.5, partial_accepted=False) == (
         "uncertain",
         "incorrect, low confidence",
     )
-    assert grading._map_judge_verdict("incorrect", 0.6) == ("incorrect", None)
-    assert grading._map_judge_verdict("incorrect", 0.9) == ("incorrect", None)
+    assert grading._map_judge_verdict("incorrect", 0.6, partial_accepted=False) == (
+        "incorrect",
+        None,
+    )
+    assert grading._map_judge_verdict("incorrect", 0.9, partial_accepted=False) == (
+        "incorrect",
+        None,
+    )
+
+
+def _complete_that_replies(reply: str):
+    """An LLM `complete` that answers whatever it is asked with one fixed reply."""
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        return reply
+
+    return complete
+
+
+def test_a_malformed_confidence_is_a_malformed_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The confidence is load-bearing (an `incorrect` near the floor abstains), so a
+    # missing, boolean, NaN, or out-of-range value is a malformed reply: the judgment is
+    # refused, never coerced.
+    for reply in (
+        '{"verdict": "incorrect", "reason": "no confidence"}',
+        '{"verdict": "incorrect", "confidence": true}',
+        '{"verdict": "incorrect", "confidence": NaN}',
+        '{"verdict": "incorrect", "confidence": 1.5}',
+        '{"verdict": "incorrect", "confidence": -0.1}',
+    ):
+        monkeypatch.setattr(client, "complete", _complete_that_replies(reply))
+        result = grading.judge_free_response(
+            _config(), question="q", rubric=None, reference="r", response="s"
+        )
+        assert result is None, reply
+
+
+def test_partial_understanding_accepted_by_contract_is_credit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        return '{"verdict": "partially_correct", "confidence": 0.8, "reason": "core idea"}'
+
+    monkeypatch.setattr(client, "complete", fake_complete)
+    result = grading.judge_free_response(
+        _config(),
+        question="q",
+        rubric={"partial_understanding_accepted": True},
+        reference="r",
+        response="s",
+    )
+    assert result is not None
+    assert result.verdict == grading.VERDICT_CORRECT
+    assert result.detail["note"] == "partial understanding accepted"
 
 
 def test_mostly_correct_is_credit() -> None:
@@ -494,6 +625,19 @@ def test_student_input_is_never_evaluated_beyond_the_bounded_layers() -> None:
         assert result.verdict == grading.VERDICT_UNCERTAIN, hostile
         assert result.correct is False
         assert result.uncertain is True
+
+
+def test_powers_beyond_bare_literals_leave_the_numeric_layer() -> None:
+    # Pint would evaluate a power in the parent process, and a computed or chained
+    # exponent - `2**(1000*1000*1000)`, `2**1000**1000` - could force an allocation no
+    # finite check can bound. Such texts are refused before parsing; a plain literal
+    # raised to a plain literal still compares.
+    for hostile in ("2**(1000*1000*1000)", "2**1000**1000", "(2**1000)**1000", "x**2"):
+        assert grading._safe_powers(hostile) is False, hostile
+        assert grading._quantity(hostile) is None, hostile
+    for benign in ("2**10", "2^10", "2**10*3", "2**10+3", "2**1000"):
+        assert grading._safe_powers(benign) is True, benign
+    assert _grade("1024", "2**10").verdict == grading.VERDICT_CORRECT
 
 
 def test_an_oversized_response_is_not_parsed() -> None:

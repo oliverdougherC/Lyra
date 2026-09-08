@@ -24,6 +24,10 @@ a confident "wrong" where the evidence is thin. The layers, cheapest first:
    The verdict is mapped onto the three outcomes the quiz flow can show, and an
    `incorrect` that the judge itself does not state confidently becomes `uncertain`.
 
+The contract's `answer_kind` controls which typed layers may settle the answer: a
+`text` answer is never settled by unit, set, or algebra comparison, and a legacy
+question with no contract infers carefully, layer by layer.
+
 Every layer that cannot decide returns no verdict rather than a wrong one, and the
 fallback is `uncertain`: a recorded "not confidently right, not confidently wrong" that
 the interface renders neutrally. The raw response is stored beside the verdict by the
@@ -217,6 +221,36 @@ def normalize_text(value: str) -> str:
     """
     collapsed = " ".join((value or "").casefold().split())
     return collapsed.rstrip(".?!:;, ")
+
+
+_DIGIT = re.compile(r"[0-9]")
+
+
+def _trivially_equivalent(left: str, right: str) -> bool:
+    """The trivial-equivalence fast path, prose-safe but math-aware.
+
+    Identical words are always the same answer. Beyond that, the text layer folds
+    whitespace, case, and sentence punctuation - but only where folding cannot erase
+    meaning. It refuses to run on anything with a digit (a value, a unit, a factorial:
+    `1 mW` and `1 MW` are not the same answer, neither are `3!` and `3`), any operator
+    or mathematical name (a symbol, a function, a constant), or a lone short identifier
+    where case distinguishes symbols - `x` from `X`, `Na` from `na`. Those texts go to
+    the typed layers, which compare case-sensitively, or to the judge. Benign prose
+    keeps its forgiving comparison.
+    """
+    left_raw = (left or "").strip()
+    right_raw = (right or "").strip()
+    if not left_raw or not right_raw:
+        return False
+    if left_raw == right_raw:
+        return True
+    for raw in (left_raw, right_raw):
+        if _DIGIT.search(raw) or _looks_like_math(raw):
+            return False
+        if " " not in raw and len(raw) <= 2:
+            # A single short word is an identifier in math, where case carries meaning.
+            return False
+    return normalize_text(left_raw) != "" and normalize_text(left_raw) == normalize_text(right_raw)
 
 
 # Unicode a student or a KaTeX-writing model reaches for, mapped to the ASCII notation
@@ -415,17 +449,52 @@ def _finite_float(magnitude: object) -> float | None:
     return value if math.isfinite(value) else None
 
 
+_POWER_LITERAL = re.compile(r"^[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
+
+
+def _safe_powers(text: str) -> bool:
+    """Whether every power in the text is a bare literal raised to a bare literal.
+
+    Pint evaluates whitelisted arithmetic in the parent process, and a power whose base
+    or exponent is anything but a plain number - `2**(1000*1000*1000)`, `2**1000**1000`,
+    `(2**1000)**1000`, `x**2` - could force an astronomical allocation before the
+    finite-magnitude check below ever runs. Such texts leave the numeric layer; the
+    bounded algebra subprocess grades them under its own limits, or the judge does.
+    """
+    t = (text or "").replace("^", "**")
+    for match in re.finditer(r"\*\*", t):
+        # The exponent run: everything after the operator up to the next operator. A
+        # second `**` inside it is a chained power - `2**1000**1000` is `2**(1000**1000)`.
+        end = match.end()
+        while end < len(t) and t[end] not in "+-*/(":
+            end += 1
+        if t[end : end + 2] == "**":
+            return False
+        if not _POWER_LITERAL.match(t[match.end() : end].strip()):
+            return False
+        # The base run: everything before the operator, up to the previous operator.
+        start = match.start() - 1
+        while start >= 0 and t[start] not in "+-*/)":
+            start -= 1
+        if not _POWER_LITERAL.match(t[start + 1 : match.start()].strip()):
+            return False
+    return True
+
+
 def _quantity(text: str) -> "Quantity | None":
     """One text as a pint quantity, or None when it is not a quantity worth checking.
 
     Pint's parser whitelists arithmetic but evaluates it in-process, so the same gates
     `backend/tools/units.py` applies stand in front of it here: a length cap, a character
-    allowlist that ends at unit notation, and a ceiling on any literal exponent.
+    allowlist that ends at unit notation, powers limited to a literal raised to a
+    literal, and a ceiling on any literal exponent.
     """
     t = (text or "").strip()
     if not t or len(t) > _QUANTITY_CAP or "__" in t:
         return None
     if not _QUANTITY_CHARS.match(t):
+        return None
+    if not _safe_powers(t):
         return None
     if any(int(exponent) > _MAX_EXPONENT for exponent in _QUANTITY_EXPONENT.findall(t)):
         return None
@@ -501,9 +570,12 @@ def _split_items(text: str) -> list[str] | None:
 
 
 def _item_equivalent(left: str, right: str, rel_tol: float) -> bool:
-    """Whether one listed item is the other, in any of the layers below it."""
-    left_text, right_text = normalize_text(left), normalize_text(right)
-    if left_text and left_text == right_text:
+    """Whether one listed item is the other, in any of the layers below it.
+
+    The trivial comparison is the math-aware one: item text that carries units, digits,
+    or symbols is never case-folded into equivalence.
+    """
+    if _trivially_equivalent(left, right):
         return True
     left_math, right_math = normalize_math(left), normalize_math(right)
     if left_math is not None and left_math == right_math:
@@ -515,17 +587,25 @@ def _all_numeric(items: list[str]) -> bool:
     return all(_numeric_value(item) is not None for item in items)
 
 
-def _set_verdict(canonical: str, response: str, rel_tol: float) -> str | None:
-    """Order-insensitive comparison of two listed answers."""
+def _set_verdict(canonical: str, response: str, rel_tol: float, *, unordered: bool) -> str | None:
+    """Comparison of two listed answers, complete membership only.
+
+    A list is decisive only where every item settles numerically: there, membership and
+    cardinality are mathematics, so an extra or a missing item is a wrong answer, not a
+    judgment call. A list with prose items is not decided by this layer - whether order
+    matters, or one paraphrased item counts, is the judge's call against the contract.
+    The one exception is a genuine unordered-set contract, where membership *is* the
+    idea: reordering is accepted, and a missing item settles wrong.
+    """
     canonical_items = _split_items(canonical)
     response_items = _split_items(response)
     if canonical_items is None or response_items is None:
         return None
-    decisive = (
-        len(canonical_items) == len(response_items)
-        and _all_numeric(canonical_items)
-        and _all_numeric(response_items)
-    )
+    all_numeric = _all_numeric(canonical_items) and _all_numeric(response_items)
+    decisive = all_numeric or unordered
+    if len(canonical_items) != len(response_items):
+        # An extra or a missing listed item.
+        return VERDICT_INCORRECT if decisive else None
     used: set[int] = set()
     for canonical_item in canonical_items:
         for index, response_item in enumerate(response_items):
@@ -537,7 +617,10 @@ def _set_verdict(canonical: str, response: str, rel_tol: float) -> str | None:
         else:
             # A required item has no equivalent in the response.
             return VERDICT_INCORRECT if decisive else None
-    return VERDICT_CORRECT
+    # Every required item matched, with none left over. For a numeric list or a
+    # declared set that is the answer; for a prose list with no set contract, whether
+    # the order and the exact wording matter is the judge's call.
+    return VERDICT_CORRECT if decisive else None
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +633,11 @@ _MATH_SIGNAL = re.compile(
     r"|abs|factorial|gamma|erf|oo|inf|E|I)\b"
     r"|[\u03b1-\u03c9\u0391-\u03a9\u2211\u2212\u221a\u2248\u2260\u2264\u2265\u221e]"
 )
+
+
+# A normalized expression only counts as mathematical content when it carries a number
+# or an operator: a product of bare words is prose the normalizer happened to parse.
+_MATH_CONTENT = re.compile(r"[0-9+\-*/^=<>!%()]")
 
 
 def _looks_like_math(text: str) -> bool:
@@ -576,6 +664,13 @@ def _symbolic_verdict(canonical: str, response: str) -> str | None:
     canonical_math = normalize_math(canonical)
     response_math = normalize_math(response)
     if canonical_math is None or response_math is None:
+        return None
+    if not (_MATH_CONTENT.search(canonical) and _MATH_CONTENT.search(response)):
+        # One side is bare words with no number and no operator in the raw text - prose
+        # the normalizer happened to parse (its implicit multiplications would otherwise
+        # masquerade as mathematical content). Equating `the carbon oxidation cycle`
+        # with `2*pi/Ts` is a verdict the algebra invented, not a proof: the judge
+        # decides.
         return None
     if canonical_math == response_math:
         return VERDICT_CORRECT
@@ -657,16 +752,22 @@ def _judge_messages(
     ]
 
 
-def _map_judge_verdict(verdict: str, confidence: float) -> tuple[str, str | None]:
+def _map_judge_verdict(
+    verdict: str, confidence: float, *, partial_accepted: bool
+) -> tuple[str, str | None]:
     """The judge's five grades onto the quiz flow's three outcomes.
 
     `partially_correct` is `uncertain`, not `incorrect`: the student showed part of the
     understanding, and the flow's honest rendering of that is a neutral comparison, not a
-    confident wrong. An `incorrect` below the confidence floor is the same abstention.
+    confident wrong - unless the question's contract says partial understanding is
+    accepted, in which case it is credit. An `incorrect` below the confidence floor is
+    the same abstention.
     """
     if verdict in ("correct", "mostly_correct"):
         return VERDICT_CORRECT, None
     if verdict == "partially_correct":
+        if partial_accepted:
+            return VERDICT_CORRECT, "partial understanding accepted"
         return VERDICT_UNCERTAIN, "partially correct"
     if verdict == "uncertain":
         return VERDICT_UNCERTAIN, None
@@ -717,13 +818,18 @@ def judge_free_response(
     verdict = payload.get("verdict")
     if not isinstance(verdict, str) or verdict not in JUDGE_VERDICTS:
         return None
+    # The confidence is load-bearing: an `incorrect` near the floor becomes an abstention,
+    # so a missing, boolean, NaN, or out-of-range value is a malformed reply, not a
+    # number to coerce.
     raw_confidence = payload.get("confidence")
     if isinstance(raw_confidence, bool) or not isinstance(raw_confidence, (int, float)):
-        confidence = 0.5
-    else:
-        confidence = min(1.0, max(0.0, float(raw_confidence)))
+        return None
+    confidence = float(raw_confidence)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return None
     reason = str(payload.get("reason") or "")[:300]
-    mapped, note = _map_judge_verdict(verdict, confidence)
+    partial_accepted = bool(rubric.get("partial_understanding_accepted")) if rubric else False
+    mapped, note = _map_judge_verdict(verdict, confidence, partial_accepted=partial_accepted)
     detail: dict[str, object] = {
         "grader": "judge",
         "judge_verdict": verdict,
@@ -767,28 +873,33 @@ def grade_free_response(
     reference = str(options[0]) if isinstance(options, list) and options else ""
     rubric = parse_rubric(question.get("grading"))
     rel_tol = tolerance_for(rubric)
+    kind = rubric.get("answer_kind") if rubric is not None else None
 
-    if normalize_text(response) == normalize_text(reference) and normalize_text(response):
+    if _trivially_equivalent(response, reference):
         return GradingResult(VERDICT_CORRECT, {"grader": "text"})
 
+    # Rubric alternatives are equivalent forms the generator wrote down with the
+    # question: trust them, compared with the same care a typed layer brings.
     if rubric is not None:
-        alternatives = rubric.get("acceptable_alternatives")
-        if isinstance(alternatives, list):
-            for alternative in alternatives:
-                if isinstance(alternative, str) and _item_equivalent(
-                    response, alternative, rel_tol
-                ):
-                    return GradingResult(VERDICT_CORRECT, {"grader": "alternative"})
+        for alternative in rubric.get("acceptable_alternatives") or []:
+            if isinstance(alternative, str) and _item_equivalent(response, alternative, rel_tol):
+                return GradingResult(VERDICT_CORRECT, {"grader": "alternative"})
 
-    layers: tuple[tuple[str, Callable[[], str | None]], ...] = (
-        ("numeric", lambda: _numeric_verdict(reference, response, rel_tol)),
-        ("set", lambda: _set_verdict(reference, response, rel_tol)),
-        ("symbolic", lambda: _symbolic_verdict(reference, response)),
-    )
-    for name, layer in layers:
-        verdict = layer()
+    # The declared kind controls which typed layers may run: a `text` answer is never
+    # settled by unit, set, or algebra comparison; a question without a contract
+    # (legacy) infers carefully, layer by layer.
+    if kind in (None, "numeric", "symbolic", "set"):
+        verdict = _numeric_verdict(reference, response, rel_tol)
         if verdict is not None:
-            return GradingResult(verdict, {"grader": name})
+            return GradingResult(verdict, {"grader": "numeric"})
+    if kind in (None, "set"):
+        verdict = _set_verdict(reference, response, rel_tol, unordered=kind == "set")
+        if verdict is not None:
+            return GradingResult(verdict, {"grader": "set"})
+    if kind in (None, "symbolic"):
+        verdict = _symbolic_verdict(reference, response)
+        if verdict is not None:
+            return GradingResult(verdict, {"grader": "symbolic"})
 
     if judge is not None:
         try:

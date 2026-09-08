@@ -734,20 +734,61 @@ def _record_card_provenance(
 # The hidden grading contract a question can carry (PLA-496): what actually makes a
 # free-response answer correct, written with the question rather than reconstructed from
 # one reference string after the fact. The layered grader (backend/core/grading.py)
-# consumes it; the interface never shows it. Strict, like QUIZ_SCHEMA: every property
-# required, nothing extra, so the optional values are nulls and empty arrays.
+# consumes it; the interface never shows it. A real JSON Schema, not a field map: the
+# endpoint constrains the reply against it, so it must say object, properties, required,
+# and no additions - the same strictness as QUIZ_SCHEMA, whose question shape it is
+# embedded under. The bounds mirror `_grading_problem`, which still rechecks every reply
+# field by field in code; the schema keeps a conforming endpoint's reply shape honest
+# even when the model's structured output drifts.
 QUIZ_GRADING_CONTRACT: dict[str, object] = {
-    "answer_kind": {
-        "type": ["string", "null"],
-        "enum": ["numeric", "symbolic", "set", "text", None],
+    "type": "object",
+    "properties": {
+        "answer_kind": {
+            "type": ["string", "null"],
+            "enum": ["numeric", "symbolic", "set", "text", None],
+        },
+        "tolerance": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0,
+            "maximum": 0.05,
+        },
+        "units": {
+            "type": ["string", "null"],
+            "maxLength": 100,
+        },
+        "acceptable_alternatives": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "required_ideas": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "common_misconceptions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "contradictions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "partial_understanding_accepted": {"type": "boolean"},
     },
-    "tolerance": {"type": ["number", "null"]},
-    "units": {"type": ["string", "null"]},
-    "acceptable_alternatives": {"type": "array", "items": {"type": "string"}},
-    "required_ideas": {"type": "array", "items": {"type": "string"}},
-    "common_misconceptions": {"type": "array", "items": {"type": "string"}},
-    "contradictions": {"type": "array", "items": {"type": "string"}},
-    "partial_understanding_accepted": {"type": "boolean"},
+    "required": [
+        "answer_kind",
+        "tolerance",
+        "units",
+        "acceptable_alternatives",
+        "required_ideas",
+        "common_misconceptions",
+        "contradictions",
+        "partial_understanding_accepted",
+    ],
+    "additionalProperties": False,
 }
 
 

@@ -210,54 +210,88 @@ these deterministic reliability contracts and from final merged-candidate human 
 
 ## Answer grading (PLA-496)
 
-A submitted answer is the pair `(selected_index, response_text)`: for a choice question the
-index is the graded answer and the text of the chosen option rides along; for a fill-blank the
-index carries its `-1` miss marker and the student's typed words are the answer. The raw
-response persists beside the verdict, and the verdict itself is one of `correct`, `incorrect`,
-or `uncertain` — a recorded "not confidently right, not confidently wrong", never an
-irreversible wrong.
+A submitted answer is the pair `(selected_index, response_text)`. For a choice question the
+index is the graded answer; `response_text` is optional for legacy clients and the server
+records the chosen option's text itself. For a fill-blank the index carries its `-1` miss
+marker and `response_text` is the student's typed words — a fill-blank submitted without words
+is rejected (422), not stored as a miss. The raw response persists beside the verdict, and the
+verdict itself is one of `correct`, `incorrect`, or `uncertain` — a recorded "not confidently
+right, not confidently wrong", never an irreversible wrong.
 
 The layered pass in `backend/core/grading.py` runs cheapest settled layer first, and every
-layer that cannot decide hands to the next rather than calling the student wrong:
+layer that cannot decide hands to the next rather than calling the student wrong. The rubric's
+`answer_kind` gates which typed layers may settle at all — an untyped legacy question runs
+every layer, `text` questions run only the text layers and the judge, and each typed layer is
+conservative about what it accepts:
 
-1. Trivial equivalence: case, whitespace, and punctuation folded away.
-2. Rubric alternatives: acceptable forms the question generator wrote into its hidden grading
-   contract, compared by the same equivalence.
-3. Numeric: magnitudes in base units (units, percentages, scientific notation) with a relative
-   tolerance — 1% by default, up to 5% when the rubric says so.
-4. Sets and lists: order-insensitive item comparison; only same-length lists of settled
-   numeric items yield a decisive result.
-5. Symbolic: both sides normalized to plain notation and compared in the bounded algebra
-   subprocess. The runner's `certain` is the contract: equal-and-settled is correct,
-   different-and-shown is incorrect, not shown abstains.
+1. Trivial equivalence (always): exact match after stripping, or casefold equality, but only
+   when neither side contains a digit or a mathematical token — `x` against `X` is not the
+   text layer's to decide.
+2. Rubric alternatives (always): acceptable forms the question generator wrote into its hidden
+   grading contract, compared by the same equivalence.
+3. Numeric (numeric/symbolic/set kinds): magnitudes in base units (units, percentages,
+   scientific notation) with a relative tolerance — 1% by default, up to 5% when the rubric
+   says so. A unit mismatch is a settled wrong (`1 mW` against `1 MW`), not an abstention; a
+   bare value against a unit-bearing one still abstains to the judge.
+4. Sets and lists (set kind, or untyped): item membership decides — an extra or missing item
+   is a settled mismatch under any contract, while reordering is permitted only by a genuine
+   unordered set contract; a legacy prose list that merely reorders abstains to the judge.
+5. Symbolic (symbolic kind, or untyped): both sides normalized to plain notation and compared
+   in the bounded algebra subprocess. The runner's `certain` is the contract: equal-and-settled
+   is correct, different-and-shown is incorrect, not shown abstains. Only forms that carry a
+   digit or an operator in the raw text ever reach the algebra — a product of bare words is
+   prose, not a formula.
 6. Constrained judge: one small schema-enforced JSON call to the configured tutor endpoint
    carrying the question, its hidden grading contract, the reference answer, and the student's
-   words. The five provider grades map onto the flow's three outcomes conservatively:
-   `correct`/`mostly_correct` are credit; `partially_correct` and an `incorrect` below the
-   confidence floor are `uncertain`; keyword overlap alone is never enough to be right, and an
+   words. The provider's confidence must be a finite number in `[0, 1]`; anything else —
+   missing, non-numeric, out of range — is a malformed reply and the verdict is `uncertain`,
+   never clamped to a default. The five provider grades map onto the flow's three outcomes
+   conservatively: `correct`/`mostly_correct` are credit; `partially_correct` is credit only
+   when the rubric's `partial_understanding_accepted` allows it; an `incorrect` below the
+   confidence floor is `uncertain`. Keyword overlap alone is never enough to be right, and an
    answer containing a stated contradiction is wrong no matter what else it says.
 
+Two hazards are gated before the expensive layers. Numeric parsing first rejects any power
+expression whose base or exponent is not a bare literal — `2**(1000*1000*1000)` and
+`2**1000**1000` are refused, so a computed or chained power can never blow up the unit parser's
+allocation. And the algebra only sees text that already looks mathematical, so prose can never
+settle as an incorrect formula.
+
 No endpoint configured, an endpoint refusal, an unreadable reply, or a pass no layer settles
-all land on `uncertain`. The raw response survives reload, retry, and attempt history: a
-re-posted identical submission replays its stored result instead of charging for another
-judgment, a different response regrades and updates the row, and legacy pre-grading rows
-(`grading_version` 0, null response) always regrade — a legacy `-1` is never read as a
-recoverable original response.
+all land on `uncertain`. Unresolved answers are reported, never scored: the finish tally
+carries an `unresolved` count beside `score`/`total`, per-topic breakdowns separate settled
+answers from unresolved ones, and the interface offers a recheck for an unsettled fill-blank
+instead of a confident wrong.
+
+The raw response survives reload, retry, and attempt history: a re-posted identical submission
+replays its stored result instead of charging for another judgment, a different response
+regrades and updates the row, and legacy pre-grading rows (`grading_version` 0, null response)
+always regrade — a legacy `-1` is never read as a recoverable original response. Replay is
+locked to the question it graded: the stored digest of the question content must still match,
+so a regenerated question regrades even an identical submission rather than reviving a
+judgment about different words. An `uncertain` verdict never replays — retrying an unsettled
+answer is exactly how a failed provider judgment recovers, and it re-grades in place without a
+new attempt.
+
+Concurrent duplicates are bounded to one judgment: a claim marks the row in flight, a second
+identical submission waits for the first judgment, and a late arrival for an *older* answer is
+refused rather than overwriting a newer one. Grading runs outside any write transaction (the
+algebra subprocess and the judge may each take many seconds), and the publish transaction
+revalidates the attempt and the question content before writing the answer row; a late result
+after a restart or regeneration is refused with a conflict, so a judgment in flight can never
+contaminate a new attempt.
 
 Generation writes the hidden grading contract — `answer_kind`, `tolerance`, `units`,
 `acceptable_alternatives`, `required_ideas`, `common_misconceptions`, `contradictions`,
-`partial_understanding_accepted` — into fill-blank questions through the quiz schema, and it is
-revalidated field by field at grading time as well. The contract never reaches the interface;
-the student sees the verdict, the reference answer, and the explanation only.
-
-Grading runs outside any write transaction (the algebra subprocess and the judge may each take
-many seconds), and the publish transaction revalidates the attempt and the question content
-before writing the answer row; a late result after a restart or regeneration is refused with a
-conflict, so a judgment in flight can never contaminate a new attempt.
+`partial_understanding_accepted` — into fill-blank questions through the quiz schema, whose
+`grading` property is a complete JSON Schema (typed object, required fields, no additions)
+that mirrors the store-side validation applied when the question is written. The contract is
+stripped from every public read of a question; the student sees the verdict, the reference
+answer, and the explanation only.
 
 Honest limits: the algebra's "shown different" rests on sampling the difference at fixed
 rational points, so a difference that vanishes at all sample points, or one over six free
-symbols, is not settled and falls to the judge. The numeric layer abstains on a unit
-mismatch — a bare `4.2` against `4.2 Hz` is the judge's call, not a confident wrong. Without a
-configured tutor endpoint no conceptual answer ever settles beyond the typed layers, and that
-is recorded as `uncertain`.
+symbols, is not settled and falls to the judge. The numeric layer abstains on a bare value
+against a unit-bearing one — `4.2` against `4.2 Hz` is the judge's call, not a confident wrong.
+Without a configured tutor endpoint no conceptual answer ever settles beyond the typed layers,
+and that is recorded as `uncertain`.

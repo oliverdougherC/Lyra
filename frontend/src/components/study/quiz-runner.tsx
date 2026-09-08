@@ -254,6 +254,9 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
 
   const payload = current.question
   const revealed = answer !== null
+  // An unsettled fill-blank is a comparison, not a verdict: the student may reword and
+  // submit again, and the server regrades the new words without a new attempt.
+  const retrying = !!answer && answer.uncertain && payload.type === 'fill_blank'
   const isLast = index === questions.length - 1
 
   async function choose(selectedIndex: number) {
@@ -281,7 +284,7 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   }
 
   async function checkFillBlank() {
-    if (revealed || busy.current || !attempt || !fillText.trim()) return
+    if ((revealed && !retrying) || busy.current || !attempt || !fillText.trim()) return
     // The typed words are the answer. The server grades them against the question's
     // reference answer and its hidden grading contract, and stores the student's own
     // text beside the verdict; the index carries no meaning here, so the contract
@@ -378,12 +381,12 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             aria-label="Your answer"
             autoComplete="off"
             placeholder="Type the answer"
-            disabled={revealed || submitting}
+            disabled={submitting || (revealed && !retrying)}
             onChange={(event) => setFillText(event.target.value)}
           />
-          {!revealed ? (
+          {!revealed || retrying ? (
             <Button type="submit" disabled={!fillText.trim() || submitting}>
-              Check
+              {retrying ? 'Check again' : 'Check'}
             </Button>
           ) : null}
         </form>
@@ -525,12 +528,22 @@ function QuizResult({
           You scored {result.score} out of {result.total}
         </h2>
         <p className="text-text-secondary text-sm">Review topics where you scored below 60%.</p>
+        {/* Unsettled judgments are reported, never scored as wrong (PLA-496). */}
+        {result.unresolved > 0 ? (
+          <p className="text-text-tertiary text-xs">
+            {result.unresolved} {result.unresolved === 1 ? 'answer' : 'answers'} left unresolved,
+            not counted as wrong.
+          </p>
+        ) : null}
       </div>
 
       <ul className="flex flex-col gap-3">
         {result.by_topic.map((entry) => {
+          const unresolved = entry.unresolved ?? 0
           const ratio = entry.total > 0 ? entry.correct / entry.total : 0
-          const weak = ratio < 0.6
+          // Only settled answers can make a topic weak. A topic with no settled answers
+          // (only unresolved) is reported, never flagged (PLA-496).
+          const weak = entry.total > 0 && ratio < 0.6
           return (
             <li key={entry.topic} className="flex flex-col gap-1">
               <div className="flex items-baseline justify-between gap-3">
@@ -544,15 +557,20 @@ function QuizResult({
                   )}
                 >
                   {entry.correct} of {entry.total}
+                  {unresolved > 0 ? ` · ${unresolved} unresolved` : ''}
                 </span>
               </div>
               <Progress
                 value={ratio * 100}
-                aria-label={`${entry.topic}: ${entry.correct} of ${entry.total} correct`}
+                aria-label={`${entry.topic}: ${entry.correct} of ${entry.total} correct${
+                  unresolved > 0 ? `, ${unresolved} unresolved` : ''
+                }`}
                 className={weak ? '[&_[data-slot=progress-indicator]]:bg-danger-text' : undefined}
               />
-              {/* A weak topic is a question waiting to be asked. The words travel to the
-                  tutor's composer, where the student can still change them before asking. */}
+              {/* Unsettled answers are reported here; they never become a confident
+                  weakness. A weak topic, by contrast, is a question waiting to be
+                  asked: the words travel to the tutor's composer, where the student can
+                  still change them before asking. */}
               {weak ? (
                 <Link
                   href={chatHandoffUrl(classId, { ask: weakTopicQuestion(entry.topic) })}
@@ -561,6 +579,11 @@ function QuizResult({
                   <MessageSquare aria-hidden className="size-3" />
                   Go over this with Lyra
                 </Link>
+              ) : null}
+              {unresolved > 0 && !weak ? (
+                <p className="text-text-tertiary text-xs">
+                  {unresolved} {unresolved === 1 ? 'answer' : 'answers'} left unresolved.
+                </p>
               ) : null}
             </li>
           )
