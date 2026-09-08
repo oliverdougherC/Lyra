@@ -1202,6 +1202,138 @@ def test_a_version_one_verdict_regrades_under_the_current_contract(
     assert calls == ["plasma membrane, nucleus"]
 
 
+def test_a_version_two_numeric_false_positive_regrades_under_the_current_contract(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The installed version-2 candidate credited tiny numeric mismatches through a fixed
+    base-unit absolute allowance. A stored version-2 `correct` for such an answer never
+    replays under the current contract: resubmitting the same raw words regrades them into
+    a settled `incorrect`, the row is stamped with the current version, and the corrected
+    verdict then replays like any other settled result. The regrade reaches only the
+    resubmitted answer - no sweep of the attempt's other stored results."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        return grading.GradingResult(
+            grading.VERDICT_CORRECT,
+            {"grader": "judge", "judge_verdict": "correct", "confidence": 0.9},
+        )
+
+    monkeypatch.setattr(routes_study, "_judge_for", lambda conn: judge)
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    part_id = _fill_question(
+        db,
+        quiz_id,
+        1,
+        "1e-12",
+        "capacitance",
+        grading={"answer_kind": "numeric", "tolerance": 0.01},
+    )
+    # A second stored result, graded correct and never resubmitted: the correction must
+    # leave it exactly where the old contract wrote it.
+    other_part_id = _fill_question(
+        db,
+        quiz_id,
+        2,
+        "1e-12",
+        "capacitance",
+        grading={"answer_kind": "numeric", "tolerance": 0.01},
+    )
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    content = str(
+        db.execute("select content from artifact_parts where id = ?", (part_id,)).fetchone()[0]
+    )
+    other_content = str(
+        db.execute("select content from artifact_parts where id = ?", (other_part_id,)).fetchone()[
+            0
+        ]
+    )
+    # The version-2 false positive: 500x the reference, inside the old absolute floor.
+    db.execute(
+        "insert into quiz_answers (attempt_id, part_id, selected_index, correct, "
+        "response_text, verdict, grade_detail, grading_version) "
+        "values (?, ?, -1, 1, ?, 'correct', ?, 2)",
+        (
+            attempt_id,
+            part_id,
+            "5e-10",
+            json.dumps({"question_digest": grading.question_digest(content)}),
+        ),
+    )
+    # The other stored result: genuinely inside the tolerance, also written under v2.
+    db.execute(
+        "insert into quiz_answers (attempt_id, part_id, selected_index, correct, "
+        "response_text, verdict, grade_detail, grading_version) "
+        "values (?, ?, -1, 1, ?, 'correct', ?, 2)",
+        (
+            attempt_id,
+            other_part_id,
+            "1.005e-12",
+            json.dumps({"question_digest": grading.question_digest(other_content)}),
+        ),
+    )
+    db.commit()
+
+    response = client.post(
+        f"/api/attempts/{attempt_id}/answers",
+        json={
+            "part_id": part_id,
+            "selected_index": -1,
+            "response_text": "5e-10",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["correct"] is False
+    assert response.json()["uncertain"] is False
+    # The corrected numeric layer settles the regrade outright: no semantic judgment.
+    assert calls == []
+    row = db.execute(
+        "select response_text, verdict, correct, grading_version from quiz_answers "
+        "where attempt_id = ? and part_id = ?",
+        (attempt_id, part_id),
+    ).fetchone()
+    assert row["response_text"] == "5e-10"
+    assert row["verdict"] == "incorrect"
+    assert row["correct"] == 0
+    assert row["grading_version"] == grading.GRADING_VERSION
+    # Resubmission-based invalidation, not a sweep: the other stored result is untouched,
+    # still stamped with the version it was graded under.
+    other = db.execute(
+        "select verdict, correct, grading_version from quiz_answers "
+        "where attempt_id = ? and part_id = ?",
+        (attempt_id, other_part_id),
+    ).fetchone()
+    assert other["verdict"] == "correct"
+    assert other["correct"] == 1
+    assert other["grading_version"] == 2
+
+    # A settled version-3 replay must bypass grading entirely, not merely avoid the judge.
+    def unexpected_regrade(*args: object, **kwargs: object) -> grading.GradingResult:
+        raise AssertionError("A current settled result should replay without regrading")
+
+    monkeypatch.setattr(grading, "grade_free_response", unexpected_regrade)
+    replay = client.post(
+        f"/api/attempts/{attempt_id}/answers",
+        json={
+            "part_id": part_id,
+            "selected_index": -1,
+            "response_text": "5e-10",
+        },
+    )
+    assert replay.status_code == 200
+    assert replay.json()["correct"] is False
+    assert replay.json()["uncertain"] is False
+    assert calls == []
+
+
 def test_a_legacy_fill_blank_answer_stays_readable(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:

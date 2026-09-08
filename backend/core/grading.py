@@ -70,7 +70,12 @@ logger = logging.getLogger(__name__)
 # incorrect (PLA-496 F1), and it no longer lets a greedy item order settle a tolerance
 # match that a different assignment satisfies; version-1 verdicts regrade on
 # resubmission instead of replaying a wrong the new layers would not have made.
-GRADING_VERSION = 2
+# Version 3: the numeric layer no longer credits a fixed base-unit absolute allowance
+# (PLA-496 R1) - a tiny answer is held to the same relative tolerance as a large one, an
+# exact zero is an exact match, and one side zero is a full-scale relative mismatch
+# against the other; version-2 verdicts regrade on resubmission instead of replaying a
+# credit the current layers would not have made.
+GRADING_VERSION = 3
 
 VERDICT_CORRECT = "correct"
 VERDICT_INCORRECT = "incorrect"
@@ -82,7 +87,6 @@ VERDICT_UNCERTAIN = "uncertain"
 # the neighborhood counts".
 DEFAULT_RELATIVE_TOLERANCE = 1e-2
 MAX_RUBRIC_TOLERANCE = 5e-2
-ABSOLUTE_TOLERANCE = 1e-9
 
 # The judge is a single small call; the wall-clock bound is set for an interactive answer,
 # not a background generation.
@@ -533,6 +537,15 @@ def _numeric_verdict(canonical: str, response: str, rel_tol: float) -> str | Non
     A dimensionality mismatch - `4.2 Hz` against `4.2` - is a None, not a verdict:
     whether an omitted unit is acceptable is the judge's call against the rubric, not
     dimensional analysis'.
+
+    The check is relative to the larger magnitude, at the tolerance the question sets:
+    a small answer is held to the same relative standard as a large one, so `1 pF` is
+    not within one percent of `500 pF` although the two differ by less than any fixed
+    base-unit allowance would suggest. Exact zero is explicit - two exact zeros match
+    with nothing left for a tolerance to cover, and one side zero is a full-scale
+    relative mismatch against the other. Each side is normalized by the larger
+    magnitude before the difference is taken, so the comparison itself cannot overflow
+    at the largest finite scales or underflow at the smallest.
     """
     left = _numeric_value(canonical)
     right = _numeric_value(response)
@@ -544,10 +557,9 @@ def _numeric_verdict(canonical: str, response: str, rel_tol: float) -> str | Non
         return None
     scale = max(abs(left_value), abs(right_value))
     if scale == 0.0:
-        if abs(left_value - right_value) <= ABSOLUTE_TOLERANCE:
-            return VERDICT_CORRECT
-        return VERDICT_INCORRECT
-    if abs(left_value - right_value) <= rel_tol * scale + ABSOLUTE_TOLERANCE:
+        # Both sides are exactly zero: an exact match, and nothing left for a tolerance.
+        return VERDICT_CORRECT
+    if abs(left_value / scale - right_value / scale) <= rel_tol:
         return VERDICT_CORRECT
     return VERDICT_INCORRECT
 

@@ -195,6 +195,138 @@ def test_a_bare_pi_is_compared_as_a_constant() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Small-scale numeric grading (PLA-496 R1)
+#
+# The numeric layer must hold a tiny answer to the same relative standard as a large
+# one: a gross relative error at 1e-12 is a wrong answer exactly as at 1, and a value
+# within the relative tolerance is credit at either scale. A fixed base-unit absolute
+# allowance was erasing exactly that difference for small answers.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("reference", "response"),
+    [
+        # Tiny dimensionless answers: 100 percent off, 500x off, and even the opposite
+        # sign, in base units.
+        ("1e-12", "0"),
+        ("1e-12", "5e-10"),
+        ("1e-12", "-1e-12"),
+        # The same gross errors in physical units, converted to base units first.
+        ("1 pF", "500 pF"),
+        ("1 pF", "-1 pF"),
+        ("1 pF", "0 F"),
+        ("0 F", "1 pF"),
+        # Zero and a nonzero value are a settled mismatch in both directions.
+        ("0", "1e-12"),
+    ],
+)
+def test_small_numeric_mismatches_do_not_receive_absolute_floor_credit(
+    reference: str, response: str
+) -> None:
+    result = _grade(reference, response, grading={"answer_kind": "numeric", "tolerance": 0.01})
+    assert result.verdict == grading.VERDICT_INCORRECT
+    assert result.detail["grader"] == "numeric"
+
+
+@pytest.mark.parametrize(
+    ("reference", "response"),
+    [
+        # A valid unit conversion at the small scale.
+        ("1 pF", "1e-12 F"),
+        # Legitimate rounding inside the relative tolerance, at a tiny scale and at an
+        # ordinary one: the repair tightens gross errors, not rounding.
+        ("1e-12", "1.005e-12"),
+        ("1 pF", "1.005 pF"),
+        ("0.6283", "0.63"),
+        # Exact zero matches exact zero, written in either notation.
+        ("0", "0.0"),
+    ],
+)
+def test_small_numeric_rounding_and_conversion_still_receive_credit(
+    reference: str, response: str
+) -> None:
+    result = _grade(reference, response, grading={"answer_kind": "numeric", "tolerance": 0.01})
+    assert result.verdict == grading.VERDICT_CORRECT
+    assert result.detail["grader"] == "numeric"
+
+
+def test_the_exact_zero_comparison_is_settled_relative() -> None:
+    # The predicate takes canonical and response in either order: zero and nonzero are
+    # a settled mismatch in both directions, and two exact zeros are an exact match for
+    # which no tolerance is needed.
+    assert grading._numeric_verdict("1e-12", "0", 0.01) == grading.VERDICT_INCORRECT
+    assert grading._numeric_verdict("0", "1e-12", 0.01) == grading.VERDICT_INCORRECT
+    assert grading._numeric_verdict("0", "0", 0.01) == grading.VERDICT_CORRECT
+    assert grading._numeric_verdict("0.0", "0", 0.01) == grading.VERDICT_CORRECT
+
+
+def test_a_stricter_rubric_tolerance_still_rejects_a_gross_small_mismatch() -> None:
+    # A tighter rubric tolerance stays tight at a tiny scale: 50 percent off is outside
+    # one-tenth percent no matter how small the absolute difference happens to be.
+    gross = _grade("1e-12", "1.5e-12", grading={"answer_kind": "numeric", "tolerance": 0.001})
+    assert gross.verdict == grading.VERDICT_INCORRECT
+    # And the same tightened tolerance still accepts a value inside it, at the scale.
+    inside = _grade("1e-12", "1.0005e-12", grading={"answer_kind": "numeric", "tolerance": 0.001})
+    assert inside.verdict == grading.VERDICT_CORRECT
+
+
+def test_the_relative_check_survives_extreme_finite_scales() -> None:
+    # The comparison normalizes each side by the larger magnitude before differencing,
+    # so the largest and smallest finite magnitudes neither overflow the difference nor
+    # underflow the tolerance itself.
+    assert _grade("1e308", "1.0005e308").verdict == grading.VERDICT_CORRECT
+    assert _grade("1e308", "1.5e308").verdict == grading.VERDICT_INCORRECT
+    assert _grade("1e308", "-1e308").verdict == grading.VERDICT_INCORRECT
+    assert _grade("1e-320", "1.005e-320").verdict == grading.VERDICT_CORRECT
+    assert _grade("1e-320", "0").verdict == grading.VERDICT_INCORRECT
+
+
+def test_a_small_dimension_mismatch_still_abstains() -> None:
+    # `1 pF` against a bare `1` is a dimensionality mismatch at any scale: whether an
+    # omitted unit counts is the judge's call, so the pass lands on the fallback.
+    result = _grade("1 pF", "1", grading={"answer_kind": "numeric", "tolerance": 0.01})
+    assert result.verdict == grading.VERDICT_UNCERTAIN
+    assert result.detail["grader"] == "fallback"
+
+
+def test_a_small_mismatch_in_a_numeric_set_cannot_bypass_the_predicate() -> None:
+    # Set membership is decided through the same numeric comparison: a member whose
+    # gross relative error an absolute floor would have excused must not find an
+    # "equivalent" partner and carry the whole set to credit.
+    question = _question("1 pF, 2 pF", grading={"answer_kind": "set", "tolerance": 0.01})
+    result = grading.grade_free_response(question, "500 pF, 2 pF", judge=None)
+    assert result.verdict == grading.VERDICT_INCORRECT
+    assert result.detail["grader"] == "set"
+    # A legitimate member written in another unit still matches, so the set layer keeps
+    # crediting real equivalence at the small scale.
+    converted = grading.grade_free_response(question, "1e-12 F, 2e-12 F", judge=None)
+    assert converted.verdict == grading.VERDICT_CORRECT
+    assert converted.detail["grader"] == "set"
+
+
+def test_a_small_mismatch_cannot_bypass_the_predicate_through_alternatives() -> None:
+    # An acceptable alternative is an equivalent *form* of the reference, compared with
+    # the same numeric comparison: a grossly off value is not an alternative form,
+    # however close its base-unit magnitude happens to sit to any fixed allowance.
+    question = _question(
+        "1 pF",
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 0.01,
+            "acceptable_alternatives": ["1e-12 F"],
+        },
+    )
+    gross = grading.grade_free_response(question, "500 pF", judge=None)
+    assert gross.verdict == grading.VERDICT_INCORRECT
+    assert gross.detail["grader"] == "numeric"
+    # The genuine alternative form still earns credit through the alternative path.
+    converted = grading.grade_free_response(question, "1e-12 F", judge=None)
+    assert converted.verdict == grading.VERDICT_CORRECT
+    assert converted.detail["grader"] == "alternative"
+
+
+# ---------------------------------------------------------------------------
 # Set and list layer
 # ---------------------------------------------------------------------------
 
