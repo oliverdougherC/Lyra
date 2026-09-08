@@ -1627,7 +1627,7 @@ async def test_a_tool_stream_with_an_empty_reasoning_field_keeps_content_literal
         async def __aiter__(self):
             for delta in chunks:
                 yield ("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n").encode()
-            yield b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]\n\n'
+            yield b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
             yield b"data: [DONE]\n\n"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1663,7 +1663,7 @@ async def test_a_tool_stream_with_a_null_reasoning_field_still_splits_a_leading_
         async def __aiter__(self):
             for delta in chunks:
                 yield ("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n").encode()
-            yield b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]\n\n'
+            yield b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
             yield b"data: [DONE]\n\n"
 
     def handler(request: httpx.Request) -> httpx.Response:
