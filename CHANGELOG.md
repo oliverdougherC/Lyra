@@ -12,7 +12,7 @@
 
 * preserve literal reasoning tags, including empty explicit reasoning channels; retain streamed text and reject oversized upload bodies before multipart parsing ([#89](https://github.com/oliverdougherC/Lyra/pull/89))
 * recover failed draft editors, stabilize math styling across navigation, and bound source-preview reads ([#90](https://github.com/oliverdougherC/Lyra/pull/90))
-* send ambiguous prose-set answers to semantic grading, preserve uncertain-grade retries, target exact attention items, stabilize streamed answers, and batch class deck counts ([#91](https://github.com/oliverdougherC/Lyra/pull/91))
+* avoid false credit for very small numeric answers, send ambiguous prose-set answers to semantic grading, preserve uncertain-grade retries, target exact attention items, stabilize streamed answers, and batch class deck counts ([#91](https://github.com/oliverdougherC/Lyra/pull/91))
 * surface durable draft-length warnings and improve Guide feedback prompts; writer length adherence and Guide semantic quality remain unresolved ([#92](https://github.com/oliverdougherC/Lyra/pull/92))
 
 * allow hardened releases without an Apple developer account ([d664978](https://github.com/oliverdougherC/Lyra/commit/d6649782cf3d73dee2bfab9f75be13787800ef0a))
