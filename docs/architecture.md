@@ -213,3 +213,21 @@ restarts with a fresh session. Backup validation lives in `backend/desktop_backu
 publication/recovery spans `backend/desktop_backup.py` and `src-tauri/src/backup.rs`. Updates verify
 trusted signed artifacts and schema compatibility before replacement; see
 [releasing](releasing.md) and `src-tauri/src/updater.rs`. No update check runs automatically at launch.
+
+
+## Observation and rendering work
+
+Agent activity is observed while a turn or command is running and refreshed after mutations.
+Settled decisions use mutation invalidation and bounded dismissal-expiry checks. Document,
+draft, and study status requests skip hidden-window polling and reconcile on visibility
+return, while requested backend jobs continue independently. Error reads use a slower cadence.
+
+Chat keeps settled transcript elements separate from live presentation. Reasoning bytes are
+retained while a closed disclosure avoids per-delta presentation, and long Markdown answers
+use a memoized full-document renderer with adaptive publication scheduling. Editor citations
+rescan affected textblocks; comment resolution shares normalized document indexes. See
+[optimization evidence](optimization-evidence-20260908.md) for measurements and limits.
+
+Pre-migration backups retain consistent SQLite snapshots and private-file validation while
+copying and hashing in bounded chunks. Their 512 MiB source-file ceiling is independent of
+the upload route's limit. A failed verification or copy still prevents migration.

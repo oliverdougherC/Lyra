@@ -57,6 +57,7 @@ trees: Lyra reads and edits their files but never rewrites their permissions.
 import contextlib
 import errno
 import fnmatch
+import hashlib
 import logging
 import os
 import stat
@@ -578,7 +579,7 @@ def publish_private_stream(
     source: object,
     *,
     max_bytes: int,
-    chunk_size: int = STREAM_CHUNK_BYTES,
+    chunk_size: int | None = None,
 ) -> int:
     """Stream `source` into a staged file beside `path` and publish it, enforcing `max_bytes`.
 
@@ -600,7 +601,7 @@ def publish_private_stream(
         source: An object with `read(size) -> bytes`; an upload's spooled file.
         max_bytes: The inclusive size ceiling. A stream of exactly this many bytes is
             accepted; the first byte past it aborts the copy.
-        chunk_size: How many bytes to pull per read.
+        chunk_size: How many bytes to pull per read; the module default when None.
 
     Returns:
         The number of bytes published, for the caller to record as the stored size.
@@ -609,6 +610,8 @@ def publish_private_stream(
         StreamTooLargeError: the stream exceeded `max_bytes`; nothing was published.
         OSError, PrivacyContractError: the copy or publish failed; nothing was published.
     """
+    if chunk_size is None:
+        chunk_size = STREAM_CHUNK_BYTES
     staged = partial_path(path)
     try:
         total = _stream_private_bytes(staged, source, max_bytes=max_bytes, chunk_size=chunk_size)
@@ -618,26 +621,50 @@ def publish_private_stream(
     return total
 
 
-def read_owned_bytes(path: Path, *, root: Path, max_bytes: int) -> bytes:
-    """Read a bounded original through the existing no-follow owned-tree boundary."""
+def _open_owned_descriptor(path: Path, *, root: Path) -> tuple[int | None, int]:
+    """Open `path` read-only through the no-follow owned-tree boundary.
+
+    Returns the parent directory descriptor (when the openat descent was used) and the
+    file descriptor, both still open; the caller owns closing them. Every error is the
+    one the caller already knows: a symlink anywhere in the descent is refused, the
+    final entry must exist and be a regular file, and `_assert_owned_entry` confirms the
+    ownership contract before the first byte is read.
+    """
     path = _abspath(path)
-    parent_fd = None
-    descriptor = None
-    try:
-        if _HAS_OPENAT:
-            parent_fd = _open_tree_parent(path, root=root)
-            if parent_fd is None:
-                raise FileNotFoundError(path)
+    if _HAS_OPENAT:
+        parent_fd = _open_tree_parent(path, root=root)
+        if parent_fd is None:
+            raise FileNotFoundError(path)
+        try:
             descriptor = os.open(
                 path.name,
                 os.O_RDONLY | _O_NOFOLLOW | _O_NONBLOCK | _O_CLOEXEC,
                 dir_fd=parent_fd,
             )
-        else:
-            if not _tree_components_real(path, root=root):
-                raise FileNotFoundError(path)
-            _refuse_existing_symlink(path)
-            descriptor = _open_nofollow(path, is_dir=False)
+        except OSError as exc:
+            # The final component failed (a symlink is ELOOP, a directory EISDIR): the
+            # descent already succeeded, so the parent descriptor this call opened is
+            # ours to close before the error goes up - a caller that never received the
+            # descriptors cannot close them.
+            os.close(parent_fd)
+            _raise_unsafe_open(path, exc, operation="read")
+            raise
+        return parent_fd, descriptor
+    if not _tree_components_real(path, root=root):
+        raise FileNotFoundError(path)
+    _refuse_existing_symlink(path)
+    try:
+        descriptor = _open_nofollow(path, is_dir=False)
+    except OSError as exc:
+        _raise_unsafe_open(path, exc, operation="read")
+        raise
+    return None, descriptor
+
+
+def read_owned_bytes(path: Path, *, root: Path, max_bytes: int) -> bytes:
+    """Read a bounded original through the existing no-follow owned-tree boundary."""
+    parent_fd, descriptor = _open_owned_descriptor(path, root=root)
+    try:
         _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = None
@@ -650,6 +677,138 @@ def read_owned_bytes(path: Path, *, root: Path, max_bytes: int) -> bytes:
             os.close(descriptor)
         if parent_fd is not None:
             os.close(parent_fd)
+
+
+class _OwnedBytesReader:
+    """A bounded, chunked read over an already-validated owned descriptor.
+
+    `read(size)` pulls at most `size` bytes, so a caller copying or digesting a large
+    original holds one chunk in memory rather than the whole file. The running total is
+    the size-ceiling check: a source that grows past `max_bytes` mid-read (a file still
+    being written) aborts with `ValueError` the moment the ceiling is crossed, so a
+    changing source is verified against the same limit as a static one.
+    """
+
+    def __init__(self, descriptor: int, max_bytes: int) -> None:
+        self._handle = os.fdopen(descriptor, "rb")
+        self._max_bytes = max_bytes
+        self._total = 0
+
+    def read(self, size: int) -> bytes:
+        chunk = self._handle.read(size)
+        if chunk:
+            self._total += len(chunk)
+            if self._total > self._max_bytes:
+                raise ValueError(f"The original exceeds the {self._max_bytes}-byte limit")
+        return chunk
+
+    def close(self) -> None:
+        self._handle.close()
+
+
+@contextlib.contextmanager
+def open_owned_bytes(path: Path, *, root: Path, max_bytes: int) -> Iterable[_OwnedBytesReader]:
+    """Stream a bounded original through the no-follow owned-tree boundary.
+
+    The streaming twin of `read_owned_bytes`: yields a reader whose `read(size)` pulls
+    bounded chunks instead of materializing the file, so a large original can be copied
+    or digested without ever holding it whole in memory. The descent is the identical
+    boundary - no component beneath `root` may be a symlink, the final entry a regular
+    file owned by the current user - and the ceiling is enforced while the bytes are
+    read, not after the fact.
+
+    The reader (and with it the descriptors it owns) is closed on every exit, so an
+    aborted copy or digest leaves nothing open.
+    """
+    parent_fd, descriptor = _open_owned_descriptor(path, root=root)
+    try:
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
+        reader = _OwnedBytesReader(descriptor, max_bytes)
+        descriptor = None
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_fd is not None:
+            os.close(parent_fd)
+        raise
+    try:
+        yield reader
+    finally:
+        # The parent descriptor is closed before the reader's so that even a failing
+        # reader close cannot strand it open.
+        if parent_fd is not None:
+            os.close(parent_fd)
+        reader.close()
+
+
+def _require_positive_chunk_size(chunk_size: int) -> None:
+    """Reject a chunk size that would silently undo the bounded working set.
+
+    `read(0)` always returns an empty read - so a zero chunk would hash (or copy)
+    nothing at all - and a negative size means "read to end of file", one whole
+    allocation. Both would make the streaming bound a lie, so neither is accepted.
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be a positive byte count, got {chunk_size}")
+
+
+def hash_owned_file(
+    path: Path,
+    *,
+    root: Path,
+    max_bytes: int,
+    chunk_size: int | None = None,
+) -> str:
+    """Stream a SHA-256 digest of a bounded original through the owned-tree boundary.
+
+    The digesting twin of `read_owned_bytes`: the same no-follow descent and the same
+    streaming ceiling, but the bytes flow through the digest a chunk at a time instead
+    of being returned, so a large original can be verified for a backup without
+    materializing it.
+    """
+    if chunk_size is None:
+        chunk_size = STREAM_CHUNK_BYTES
+    _require_positive_chunk_size(chunk_size)
+    digest = hashlib.sha256()
+    with open_owned_bytes(path, root=root, max_bytes=max_bytes) as source:
+        while True:
+            chunk = source.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def hash_file(path: Path, *, chunk_size: int | None = None) -> str:
+    """Stream a SHA-256 digest over a file with a bounded working set.
+
+    For files Lyra just wrote itself inside a private tree - backup snapshots, published
+    receipts - where the owned-tree descent is not the concern: a plain no-follow open
+    and chunked reads, so the whole file is never materialized to be hashed.
+    """
+    if chunk_size is None:
+        chunk_size = STREAM_CHUNK_BYTES
+    _require_positive_chunk_size(chunk_size)
+    try:
+        descriptor = _open_nofollow(path, is_dir=False)
+    except OSError as exc:
+        _raise_unsafe_open(path, exc, operation="read")
+        raise
+    digest = hashlib.sha256()
+    owns_descriptor = False
+    try:
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
+        with os.fdopen(descriptor, "rb") as handle:
+            owns_descriptor = True
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    finally:
+        if not owns_descriptor:
+            os.close(descriptor)
+    return digest.hexdigest()
 
 
 def read_private_text(path: Path, *, encoding: str = "utf-8", max_chars: int | None = None) -> str:

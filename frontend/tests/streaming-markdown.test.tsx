@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
@@ -6,6 +6,19 @@ import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
 function words(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>('[data-stream-word]'))
 }
+
+/** Set `document.visibilityState` for the duration of a test (jsdom owns it by default). */
+function setVisibility(state: string) {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: state })
+}
+
+/**
+ * A long-enough source that the reparse schedule holds rather than re-parsing on every
+ * commit (above {@link STREAM_REPARSE_MIN_CHARS}), with a trailing sentinel word the tests
+ * check for.
+ */
+const LONG_A = 'alpha '.repeat(300) + ' SENTINEL_A'
+const LONG_B = 'beta '.repeat(300) + ' SENTINEL_B'
 
 /** Forces `prefers-reduced-motion` on, which the default setup stub reports as off. */
 function stubReducedMotion(reduce: boolean) {
@@ -226,6 +239,67 @@ describe('StreamingMarkdown', () => {
       )
 
       await waitFor(() => expect(onRevealComplete).toHaveBeenCalled())
+    })
+  })
+
+  describe('long-answer reparse edges (PLA-511)', () => {
+    it('re-parses a held long answer in full the moment the turn ends', () => {
+      const { container, rerender } = render(
+        <StreamingMarkdown content="seed" streaming />,
+      )
+      // Prime: a re-parse runs, stamping the schedule's last-parse time.
+      rerender(<StreamingMarkdown content={LONG_A} streaming />)
+      // A longer feed within the gap is held: the last document stays up, the tail is not
+      // on screen yet.
+      rerender(<StreamingMarkdown content={`${LONG_A} tail`} streaming />)
+      expect(container.textContent).toContain('SENTINEL_A')
+      expect(container.textContent).not.toContain('tail')
+      // The terminal frame forces the full re-parse, synchronously: the held words land.
+      rerender(<StreamingMarkdown content={`${LONG_A} tail`} streaming turnEnded />)
+      expect(container.textContent).toContain('tail')
+    })
+
+    it('strands no held text across a generation reset, and drains the new generation', () => {
+      const { container, rerender } = render(
+        <StreamingMarkdown content="seed" streaming generation="gen1" />,
+      )
+      // Prime under gen1: a re-parse runs, stamping the schedule.
+      rerender(<StreamingMarkdown content={LONG_A} streaming generation="gen1" />)
+      // Held under the same generation: the longer feed does not drain yet.
+      rerender(<StreamingMarkdown content={`${LONG_A} tail`} streaming generation="gen1" />)
+      expect(container.textContent).toContain('SENTINEL_A')
+      expect(container.textContent).not.toContain('tail')
+      // A reset clears the answer and moves the generation in one commit: the old document's
+      // held words must not strand, and must not drain under the new generation.
+      rerender(<StreamingMarkdown content="" streaming generation="gen2" />)
+      expect(container.textContent?.trim()).toBe('')
+      // The new generation's words drain: a fresh document, no inheritance of the old slots.
+      rerender(<StreamingMarkdown content={LONG_B} streaming generation="gen2" />)
+      expect(container.textContent).toContain('SENTINEL_B')
+    })
+
+    it('holds a hidden long answer and flushes it whole on resume with no further tokens', async () => {
+      setVisibility('hidden')
+      try {
+        // A short first answer parses immediately (even hidden) and marks the hidden parse.
+        const { container, rerender } = render(
+          <StreamingMarkdown content="seed" streaming />,
+        )
+        rerender(<StreamingMarkdown content="first words" streaming />)
+        expect(container.textContent).toContain('first words')
+        // A long feed while hidden is held: no frame is owed, the last document stays up.
+        rerender(<StreamingMarkdown content={LONG_A} streaming />)
+        expect(container.textContent).not.toContain('SENTINEL_A')
+        // Resume with no further tokens: the held text must flush, not stay under the old
+        // document. The return from hidden forces the full re-parse.
+        setVisibility('visible')
+        await act(async () => {
+          document.dispatchEvent(new Event('visibilitychange'))
+        })
+        expect(container.textContent).toContain('SENTINEL_A')
+      } finally {
+        setVisibility('visible')
+      }
     })
   })
 })
