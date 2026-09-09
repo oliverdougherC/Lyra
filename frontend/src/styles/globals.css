@@ -1371,61 +1371,74 @@ li[data-stream-word].stream-word-visible::marker {
 
 .class-ask-sheet {
   position: relative;
-  border: 1px solid var(--border-strong);
-  border-radius: 18px;
+  isolation: isolate;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 45%, var(--bg-secondary));
+  border-radius: 20px;
   background: var(--bg-secondary);
-  padding: 28px 32px 22px;
+  padding: 36px 38px 24px;
   box-shadow:
-    var(--elevation-md),
-    inset 0 0 0 5px var(--bg-secondary),
-    inset 0 0 0 6px var(--gold-line);
+    0 2px 3px rgb(40 35 26 / 0.025),
+    0 16px 36px -18px rgb(40 35 26 / 0.2),
+    inset 0 1px 0 color-mix(in srgb, var(--gold) 12%, transparent);
   transition:
     border-color 200ms ease,
     box-shadow 200ms ease;
 }
 
-.class-ask-sheet:focus-within {
-  border-color: var(--focus-ring);
-  box-shadow:
-    var(--elevation-md),
-    0 0 0 1px var(--focus-ring),
-    inset 0 0 0 5px var(--bg-secondary),
-    inset 0 0 0 6px var(--gold-line);
+.class-ask-sheet::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 38px;
+  width: 56px;
+  height: 2px;
+  background: var(--gold);
+  opacity: 0.65;
 }
 
-.class-ask-inscription {
+.class-ask-sheet:focus-within {
+  border-color: var(--border-strong);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--focus-ring) 20%, transparent),
+    0 20px 40px -20px rgb(40 35 26 / 0.24),
+    inset 0 1px 0 color-mix(in srgb, var(--gold) 12%, transparent);
+}
+
+.class-ask-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  gap: 24px;
 }
 
 .class-ask-title {
   display: block;
-  margin-top: 22px;
-  font-size: clamp(26px, 3vw, 34px);
+  font-size: clamp(28px, 3vw, 36px);
   line-height: 1.2;
-  font-weight: 500;
+  font-weight: 400;
+  letter-spacing: -0.025em;
   cursor: text;
+}
+
+.class-ask-ornament {
+  flex-shrink: 0;
+  width: 36px;
+  color: var(--gold);
+  opacity: 0.7;
 }
 
 .class-ask-writing {
   position: relative;
-  margin-top: 18px;
-  font-size: 21px;
-  line-height: 1.5;
+  margin-top: 26px;
+  font-size: 22px;
+  line-height: 1.55;
 }
 
 .class-ask-writing textarea {
   display: block;
   width: 100%;
-  min-height: 132px;
-  max-height: 320px;
-  resize: vertical;
+  height: 150px;
+  resize: none;
   border: 0;
   padding: 0;
   background: transparent;
@@ -1456,64 +1469,75 @@ li[data-stream-word].stream-word-visible::marker {
 
 .class-ask-footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 18px;
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 
-.class-ask-use-prompt {
-  color: var(--text-secondary);
-  font-size: 14px;
-  text-decoration: underline;
-  text-decoration-color: var(--border-strong);
-  text-underline-offset: 4px;
-}
-
-.class-ask-pause {
+.class-ask-send {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
   border-radius: 50%;
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
 }
 
-.class-ask-pause svg {
-  width: 12px;
-  height: 12px;
+.class-ask-send svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.5;
+  transition: transform 160ms var(--ease-gentle);
 }
 
-.class-ask-use-prompt:focus-visible,
-.class-ask-pause:focus-visible {
+.class-ask-send:not(:disabled) {
+  border-color: var(--text-primary);
+  background: var(--text-primary);
+  color: var(--bg-secondary);
+  box-shadow: 0 3px 8px rgb(40 35 26 / 0.12);
+}
+
+.class-ask-send:disabled {
+  cursor: default;
+}
+.class-ask-send:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 4px;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .class-ask-use-prompt:hover {
-    color: var(--text-primary);
-  }
-  .class-ask-pause:hover {
-    background: var(--bg-tertiary);
+  .class-ask-send:not(:disabled):hover svg {
+    transform: translateY(-2px);
   }
 }
 
 @media (max-width: 639px) {
   .class-ask-sheet {
-    padding: 22px 20px 18px;
+    padding: 28px 24px 20px;
   }
-  .class-ask-inscription {
-    font-size: 10px;
-    letter-spacing: 0.08em;
+  .class-ask-sheet::before {
+    left: 24px;
+    width: 40px;
+  }
+  .class-ask-heading {
+    gap: 12px;
+  }
+  .class-ask-title {
+    font-size: 28px;
+  }
+  .class-ask-ornament {
+    width: 28px;
   }
   .class-ask-writing {
-    font-size: 19px;
-  }
-  .class-ask-footer {
-    gap: 10px;
+    font-size: 20px;
   }
 }
 

@@ -1,10 +1,9 @@
 'use client'
 
 import { useEffect, useId, useRef, useState } from 'react'
-import { ArrowUp, Pause, Play } from 'lucide-react'
+import { ArrowUp } from 'lucide-react'
 
 import { Asterism } from '@/components/ui/asterism'
-import { Button } from '@/components/ui/button'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 
 const GENERAL_PROMPTS = [
@@ -26,7 +25,6 @@ export function ClassAskComposer({
   const [question, setQuestion] = useState('')
   const [index, setIndex] = useState(0)
   const [focused, setFocused] = useState(false)
-  const [paused, setPaused] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(false)
   const submitting = useRef(false)
@@ -38,7 +36,7 @@ export function ClassAskComposer({
   const empty = question.length === 0
 
   useEffect(() => {
-    if (!empty || focused || paused || reduceMotion || sending || prompts.length < 2) return
+    if (!empty || focused || reduceMotion || sending || prompts.length < 2) return
     let timer: ReturnType<typeof setInterval> | undefined
     const sync = () => {
       clearInterval(timer)
@@ -50,7 +48,7 @@ export function ClassAskComposer({
       clearInterval(timer)
       document.removeEventListener('visibilitychange', sync)
     }
-  }, [empty, focused, paused, reduceMotion, sending, prompts.length])
+  }, [empty, focused, reduceMotion, sending, prompts.length])
 
   async function send() {
     if (!question.trim() || submitting.current) return
@@ -78,16 +76,15 @@ export function ClassAskComposer({
           void send()
         }}
       >
-        <div className="class-ask-inscription" aria-hidden="true">
-          <span>A little curiosity goes a long way</span>
-          <Asterism className="text-gold shrink-0" />
+        <div className="class-ask-heading">
+          <label htmlFor={id} className="class-ask-title">
+            What shall we explore?
+          </label>
+          <Asterism className="class-ask-ornament" />
         </div>
-        <label htmlFor={id} className="class-ask-title">
-          What shall we explore?
-        </label>
         <div className="class-ask-writing">
           {empty ? (
-            <span key={prompt} className="class-ask-prompt" aria-hidden="true">
+            <span id={`${id}-idea`} key={prompt} className="class-ask-prompt">
               {prompt}
             </span>
           ) : null}
@@ -99,7 +96,7 @@ export function ClassAskComposer({
             value={question}
             readOnly={sending}
             aria-label={`Ask about ${className ?? 'this class'}`}
-            aria-describedby={`${id}-hint`}
+            aria-describedby={empty ? `${id}-idea` : undefined}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             onChange={(event) => setQuestion(event.target.value)}
@@ -113,44 +110,15 @@ export function ClassAskComposer({
           />
         </div>
         <div className="class-ask-footer">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-            {empty ? (
-              <button
-                type="button"
-                className="class-ask-use-prompt"
-                aria-label={`Use this idea: ${prompt}`}
-                onClick={() => {
-                  setQuestion(prompt)
-                  textarea.current?.focus()
-                }}
-              >
-                Use this idea <span aria-hidden="true">↗</span>
-              </button>
-            ) : null}
-            {empty && !reduceMotion && prompts.length > 1 ? (
-              <button
-                type="button"
-                className="class-ask-pause"
-                aria-label={paused ? 'Resume suggestions' : 'Pause suggestions'}
-                onClick={() => setPaused((value) => !value)}
-              >
-                {paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
-              </button>
-            ) : null}
-            <span id={`${id}-hint`} className="text-text-tertiary text-xs">
-              <span className="hidden sm:inline">Enter to send · Shift + Enter for a new line</span>
-              <span className="sm:hidden">A question is a beginning.</span>
-            </span>
-          </div>
-          <Button
+          <button
             type="submit"
             disabled={!question.trim() || sending}
-            className="h-11 shrink-0 gap-2 rounded-full px-5"
+            className="class-ask-send"
             aria-label="Ask"
+            title={sending ? 'Opening conversation' : 'Send message'}
           >
-            {sending ? 'Opening…' : 'Ask Lyra'}
-            <ArrowUp aria-hidden="true" className="size-4" />
-          </Button>
+            <ArrowUp aria-hidden="true" />
+          </button>
         </div>
         {error ? (
           <p role="alert" className="mt-3 text-sm text-danger-text">
