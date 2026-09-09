@@ -34,6 +34,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Desktop Migration Inventory](desktop-migration-inventory.md) | Historical record |
 | [Lyra desktop resource summary](desktop-runtime-summary.md) | Historical record |
 | [Distribution notices and license review](distribution-notices.md) | Maintained |
+| [Local writer quality — September 8, 2026](local-writer-quality-20260908.md) | Candidate evidence; length warning and unresolved semantic quality |
 | [Draft autosave concurrency (PLA-289)](draft-autosave-concurrency.md) | Maintained |
 | [Ex Libris: The Lyra Design System (Approved Brief)](exlibris-design-system.md) | Historical record |
 | [Ex Libris Migration: Component Inventory and Transition Plan](exlibris-migration.md) | Historical record |
@@ -42,6 +43,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Local Deployment](local-deployment.md) | Maintained |
 | [Learning beta quality evidence](learning-beta-evidence/README.md) | Candidate evidence; recorded revisions and configurations only |
 | [Learning quality causal follow-up](learning-followup-evidence/README.md) | Candidate evidence; reviewed PR #80 preserved |
+| [PLA-461 local Guide quality pass — September 8, 2026](local-guide-quality-20260908.md) | Candidate/incident evidence; recorded revision only |
 | [macOS Apple Silicon Release Checklist](macos-apple-silicon-release-checklist.md) | Maintained |
 | [Phase 2 Handoff](phase-2-handoff.md) | Historical record |
 | [Phase 3 Handoff](phase-3-handoff.md) | Historical record |

@@ -133,15 +133,17 @@ request's scope.
 - Getting started: give one concrete first move and why; stop at a useful setup, before
   the rest of the solution or final result unless currently requested.
 - Simpler: use less abstraction, not a second full lecture. Explain the same concrete
-  mechanism in plain words, not a new analogy. Omit the formal definition or notation
-  that caused difficulty. Keep necessary conditions true in plain language; a simpler
-  explanation must not turn a conditional tendency into an unconditional guarantee.
+  mechanism in plain words, not a new analogy, and show it in one small concrete example.
+  Omit the formal definition or notation that caused difficulty. Keep necessary
+  conditions true in plain language; a simpler explanation must not turn a conditional
+  tendency into an unconditional guarantee.
 - Read and diagnose an attempt: acknowledge the valid setup or steps, then identify
-  the first invalid transition and explain exactly what changed or was lost. Preserve
-  valid operations; distinguish an operation from an incorrectly applied version of it.
-  State the conditions under which a partly correct step is valid. Show the corrected
-  step in the student's method, then stop when the requested diagnosis is explained;
-  finish the remaining solution when requested.
+  the first invalid transition and explain exactly what changed or was lost. Before
+  naming a step wrong, check what that step actually does to the expression: name the
+  part of the student's move that is valid and the part that changes the value, and never
+  explain an error by inventing a stricter rule than the operation allows. Show the
+  corrected step in the student's method, then stop when the requested diagnosis is
+  explained; finish the remaining solution when requested.
 - "Just give me the answer": give it with a short reason.
 - If asked not to ask questions, teach directly; omit closing questions and follow-up offers.
 
@@ -1956,7 +1958,8 @@ def build_paragraph_draft_prompt(
         f"Global document map:\n{document_map}",
         f"Section plan:\n{section_plan}",
         f"This paragraph's fixed job:\n{paragraph_plan}",
-        f"Write about {target_words} words. Write one paragraph only.",
+        f"Write about {target_words} words, staying within 10 percent of that budget. "
+        "Write one paragraph only.",
     ]
     if research_block:
         context.append(f"Research for this paragraph:\n{research_block}")
@@ -1981,7 +1984,16 @@ def build_paragraph_draft_prompt(
                 "outline, notes, preface, or explanation. Establish the paragraph's "
                 "relationship to the preceding idea through meaning, not a generic "
                 "transition phrase. Do not perform work assigned to later paragraphs. "
-                "Do not plan or reason about the job; begin the paragraph immediately."
+                "Do not plan or reason about the job; begin the paragraph immediately. "
+                "State historical or factual claims only where the supplied sources "
+                "establish them: do not extend a source's sample, group, or measurements "
+                "to a broader population than the source describes, and do not present "
+                "an unmeasured effect or population as already measured. Clearly labeled "
+                "proposals - a next step, a method to try, a survey to run - are the "
+                "student's own recommendations and may be stated, and the student's own "
+                "stated experiences and stance may be used as the notes give them; no "
+                "personal experience may be invented. A missing measurement is not "
+                "evidence that an effect or population is absent."
             ),
         },
         {"role": "user", "content": "/no_think\n\n" + "\n\n".join(context)},

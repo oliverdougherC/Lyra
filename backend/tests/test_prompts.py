@@ -165,6 +165,49 @@ def test_paragraph_prompt_receives_global_map_neighbours_and_local_evidence() ->
     assert "/no_think" in messages[-1]["content"]
 
 
+def test_paragraph_prompt_binds_the_budget_and_scope_to_the_sources() -> None:
+    """PLA-153: the drafting call must bound the budget and police claim scope.
+
+    Full drafts previously came back well over the requested length and with
+    population claims extended beyond what the sources measured. The review prompts
+    carry that discipline; the drafting prompt must state it too - but only for
+    historical/factual claims. Clearly labeled proposals and the student's own stated
+    experience are legitimate drafting material and must stay permitted.
+    """
+    messages = prompts.build_paragraph_draft_prompt(
+        "Essay",
+        document_map="Thesis: T. Sections: context, evidence, conclusion.",
+        section_plan="Evidence section proves C.",
+        paragraph_plan="P2 compares the two results.",
+        research_block="Source 7 reports the result.",
+        ledger_block="Source ledger: id 7",
+        previous_paragraph="P1 establishes the baseline.",
+        next_paragraph_summary="P3 explains the consequence.",
+        target_words=180,
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+    system = messages[0]["content"]
+
+    # The word budget is a bound: the target number rides into the bound sentence.
+    assert "about 180 words" in rendered
+    assert "staying within 10 percent of that budget" in rendered
+    # Historical/factual claims stay inside the supplied sources: no population
+    # extension, no unmeasured-as-measured, no absence-read-as-proof.
+    assert (
+        "State historical or factual claims only where the supplied sources establish them"
+        in system
+    )
+    assert "broader population than the source describes" in system
+    assert "do not present an unmeasured effect or population as already measured" in system
+    assert "A missing measurement is not evidence that an effect or population is absent" in system
+    # Legitimate material stays permitted: proposals as proposals, and the student's
+    # own stated experience from the notes.
+    assert "are the student's own recommendations and may be stated" in system
+    assert "no personal experience may be invented" in system
+    # The ledger block itself is carried through unchanged for the citation contract.
+    assert "Source ledger: id 7" in rendered
+
+
 def test_transition_prompt_knows_the_document_map_and_only_revises_the_next_paragraph() -> None:
     messages = prompts.build_transition_review_prompt(
         "Essay",
@@ -570,10 +613,39 @@ def test_guide_bounds_start_help_and_reduces_abstraction_for_simplification() ->
     assert "unless currently requested" in guide
     assert "less abstraction, not a second full lecture" in guide
     assert "same concrete mechanism in plain words" in guide
+    # A simpler explanation re-uses the mechanism's picture and grounds it in a small
+    # concrete example instead of drifting to a new one (PLA-461 local pass): the retained
+    # failure repeated a different, more familiar picture with no example at all.
+    assert "and show it in one small concrete example" in guide
     assert "omit the formal definition or notation that caused difficulty" in guide
     assert "never withhold an explanation or answer the student asked for outright" in guide
     assert "direct, complete, worked explanation" in show
     assert "stop at a useful setup" not in show
+
+
+def test_guide_attempt_diagnosis_checks_the_step_before_naming_it_wrong() -> None:
+    """PLA-461 local pass: attempt diagnosis must not invent a stricter rule.
+
+    The retained failure misdiagnosed a student who factored a variable-independent term
+    out of an integral: the reply blamed the (legal) factoring on an invented condition -
+    "only legal if the integrand is constant" - instead of the dropped variable-dependent
+    remainder. A first wording that asked the model to state the operation's rule from
+    memory still produced the invented rule; the working instruction makes checking
+    what the student's step actually does a precondition of naming it wrong, with the
+    step split into the part that is valid and the part that changes the value. This test
+    pins that instruction at the prompt surface; the semantic behavior is measured by
+    the production class_chat evaluation, not by this test.
+    """
+    guide = _normalized(build_system_prompt("guide", [], []))
+    show = _normalized(build_system_prompt("show", [], []))
+    assert "before naming a step wrong, check what that step actually does" in guide
+    assert (
+        "the part of the student's move that is valid and the part that changes the value" in guide
+    )
+    assert "never explain an error by inventing a stricter rule than the operation allows" in guide
+    # The diagnosis instruction belongs to the teaching contract, not the worked-result
+    # format.
+    assert "before naming a step wrong" not in show
 
 
 def test_guide_respects_explicit_no_question_requests_including_its_closing() -> None:

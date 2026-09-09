@@ -1,0 +1,79 @@
+{
+ "evidence_kind": "compact-sanitized",
+ "note": "Derived from the raw case receipt in the retained output directory; all prose is synthetic corpus content. assembled_proposal is a faithful rendering of the preserved state: for live full-draft runs it is derived from the preserved blocks (heading dedupe plus mathnorm, identical to the pending proposal when one exists), and for scoped revision runs it is the pending proposal itself.",
+ "case_id": "full_live_draft_from_student_notes",
+ "scenario": "uninterrupted",
+ "run": {
+  "tested_sha": "07ad4511ea8eed287fd950dfadccf43af775827a",
+  "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "prompt_sha256": "9d9946f07ecca8f28747c3900150b78a68f11f83b2ed9a52805a6d446dbc1d20",
+  "backend_source_sha256": "9eee1d3d951bc3413cec786893b9c0dfb32e7b07c86e5d9173a5fcf68e19d8aa",
+  "model": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "runtime": "source_desktop_bootstrap"
+ },
+ "plan_mode": "corpus_seeded",
+ "case_status": "recorded",
+ "elapsed_seconds": 34.985,
+ "run_status": "failed",
+ "stage_detail": "The pass did not finish.",
+ "artifact_error_message": "The live draft runs 445 words against a requested 320. The partial suggestion was kept for revision.",
+ "warnings": [],
+ "length": {
+  "brief_length_target": "320 words",
+  "requested_words": 320,
+  "candidate_words": null,
+  "assembled_block_words": 445,
+  "model_owned_block_words": 445,
+  "body_unchanged": true
+ },
+ "blocks": [
+  {
+   "stable_key": "1:p1",
+   "status": "complete",
+   "words": 106,
+   "target_words": 80,
+   "user_revision": 0
+  },
+  {
+   "stable_key": "1:p2",
+   "status": "complete",
+   "words": 101,
+   "target_words": 80,
+   "user_revision": 0
+  },
+  {
+   "stable_key": "2:p1",
+   "status": "complete",
+   "words": 135,
+   "target_words": 80,
+   "user_revision": 0
+  },
+  {
+   "stable_key": "2:p2",
+   "status": "complete",
+   "words": 103,
+   "target_words": 80,
+   "user_revision": 0
+  }
+ ],
+ "deterministic": {
+  "candidate_present": false,
+  "candidate_protected_passages_preserved": null,
+  "candidate_forbidden_literal_hits": null,
+  "excerpt_revision_support_violations": [],
+  "body_unchanged": true,
+  "protected_passages_total": 0,
+  "protected_passages_preserved": 0,
+  "duplicate_comment_signatures": 0,
+  "real_run_id_present": true,
+  "missed_seeded_issues": null,
+  "unsupported_rewrites": null,
+  "unrelated_candidate_edits": null,
+  "citation_support": null,
+  "seed_metrics_note": "Semantic measures await independent/human review."
+ },
+ "assembled_proposal": "## Evidence\n\nI stood at the east gate wondering whether to wait or walk, and that uncertainty frames this memo. The pilot recorded 160 boardings in week A and 240 in week B [@lyra:1]. These figures count trips, not unique people, so they show usage rather than a change in who attended class. No attendance data were collected during the pilot [@lyra:1]. Because the weeks differed in academic schedule and the pilot was not randomized, the observed increase cannot be attributed to the shuttle’s effect on attendance [@lyra:1]. The numbers suggest someone used the service more often, but they do not answer whether more students came to class.\n\nThose boarding counts, however, rest on a small and specific sample. The pilot collected 18 voluntary survey responses from current shuttle riders, and non-riders were not surveyed [@lyra:2]. Consequently, these responses describe the experiences of these particular respondents and cannot establish demand across the entire student population [@lyra:2]. Since the data lacks input from non-riders, it remains impossible to determine how much of the wider student body would use the service if it were extended. This gap means the observations justify further investigation into who can use the shuttle, rather than supporting a causal conclusion about its impact on campus attendance.\n\n## Recommendation\n\nBecause the current survey only reflects voluntary riders, I recommend keeping the pilot running for one more term to close that gap. The boarding totals and rider feedback do not yet show how the service affects attendance [@lyra:1] or how much the wider student population would actually use it [@lyra:2]. Extending the trial gives us a second term to collect data from students who have not ridden the shuttle. This continuation is conditional: it is meant to generate the missing evidence before the committee decides whether to keep, adjust, or drop the service. I am not asking for a permanent commitment based on incomplete data. The next term should test whether the shuttle serves a broader need or just the current riders, and that test requires asking the people we have not yet heard from.\n\nThe measurement plan for the extended term must specifically target non-riders, a group entirely absent from the current survey data [@lyra:2]. Asking students who did not board the shuttle about their barriers to use and potential demand would provide the missing perspective needed to evaluate wider utility. This survey should clarify whether the service meets a broader campus need or only serves existing users. I am also not proposing any cost or emissions calculations, as those measurements were not part of the original data collection [@lyra:2]. The extension should focus strictly on gathering this specific demand-side information to inform the committee's final decision.\n",
+ "candidate": null
+}
