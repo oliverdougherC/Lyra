@@ -9,16 +9,23 @@ a confident "wrong" where the evidence is thin. The layers, cheapest first:
    second normalized form where a match is settled outright, so an endpoint is never
    called for `2π/Ts` when the student wrote `2pi/Ts`.
 2. Rubric alternatives. The acceptable alternative forms the question generator wrote
-   down, compared the same way.
+   down, compared the same way. A precision-limited match of an alternative is no
+   credit, but it is not a dismissal either: it settles `uncertain` at the end of the
+   pass instead of a confident wrong or a judge's call.
 3. Numeric. Magnitudes in base units with a relative tolerance, so `4200 mHz` equals
    `4.2 Hz`, `42%` equals `0.42`, and three-significant-figure rounding counts. Pint
    runs in-process because its parser whitelists every node before it evaluates, the
-   same reasoning `backend/tools/units.py` already recorded.
+   same reasoning `backend/tools/units.py` already recorded. Where the strict check
+   misses the inclusive boundary by machine roundoff, a small capped ULP band on the
+   larger operand's scale decides: credit, a settled wrong, or - where the band would
+   rival the rubric's allowed error - a settled numerical precision uncertainty that
+   survives to the final result.
 4. Sets and lists. Order-insensitive item comparison for answers that are lists,
    settled only where membership is mathematics: a complete deterministic assignment
    settles right, a settled numeric mismatch settles wrong - an unmatched prose item,
    or a unit the numeric layer will not decide, is the judge's call, never a confident
-   wrong from this layer.
+   wrong from this layer. A membership that exists only by riding a precision-limited
+   pair settles `uncertain` instead of taking the boundary answer to the judge.
 5. Symbolic. The two sides normalized into plain mathematical notation and compared for
    equality in the bounded SymPy subprocess (`backend/tools/cas.py`). SymPy is never
    imported here; the subprocess is the boundary that keeps an evaluating parser out of
@@ -81,7 +88,16 @@ logger = logging.getLogger(__name__)
 # boundary just outside itself (100 versus 99 at one percent); version-3 verdicts
 # regrade on resubmission instead of replaying a boundary false negative the current
 # comparison would not make.
-GRADING_VERSION = 4
+# Version 5: the numeric comparison credits an inclusive boundary the strict check
+# misses only by machine roundoff (PLA-496 R2 residual) - a small, magnitude-dependent
+# ULP band on the larger operand's scale, capped so the band can never substitute for
+# the rubric - and settles a precision-limited boundary (an underflowed allowed error,
+# or a band more than one part in 100 million of the allowed error) as a recorded
+# `uncertain` the set and alternative paths carry to the final result rather than a
+# confident wrong (100 pF versus 99 pF at one percent, 1 versus 0.99 at one percent);
+# version-4 verdicts regrade on resubmission instead of replaying a boundary false
+# negative the current policy would not make.
+GRADING_VERSION = 5
 
 VERDICT_CORRECT = "correct"
 VERDICT_INCORRECT = "incorrect"
@@ -93,6 +109,35 @@ VERDICT_UNCERTAIN = "uncertain"
 # the neighborhood counts".
 DEFAULT_RELATIVE_TOLERANCE = 1e-2
 MAX_RUBRIC_TOLERANCE = 5e-2
+
+# PLA-496 R2 residual: the strict check holds the inclusive boundary for representable
+# operands, but the student's decimal - or a prefix conversion of it - rarely lands
+# exactly on the cutoff. `1.0 - 0.99` computes to `0.010000000000000009`, slightly
+# beyond the one-percent allowance at that scale, and `100 pF - 99 pF` in base units
+# exceeds its allowance by about 9.5e-27. The boundary policy for such misses is
+# explicit and
+# deliberately conservative - a policy choice, not an exact reconstruction of decimal
+# intent:
+#
+# 1. The strict check decides first. Where it settles, the band below never runs.
+# 2. The explicit R1 rejections always win: an exact zero matches only the other exact
+#    zero, a one-sided zero is a full-scale relative mismatch, and an opposite-sign
+#    answer is outside any tolerance. The band can never credit any of these.
+# 3. Only then may the boundary be credited by a small machine-rounding band on the
+#    larger operand's scale: a few ULPs at that magnitude - not a universal
+#    physical-unit allowance like the version-2 floor.
+# 4. The band stays negligible against the rubric. Where the rubric's allowed error has
+#    underflowed, or the band is more than one part in 100 million of it, the layer
+#    settles numerical precision uncertainty: no credit, and no confident wrong either.
+#    That uncertainty is a verdict that must survive to the final result - the set and
+#    alternative paths carry it, and no later layer (judge included) may turn the
+#    boundary answer into a wrong.
+#
+# A few representation steps past the computed cutoff are boundary-equivalent by
+# policy, not theorem: floats already rounded have lost the decimal intent, and a
+# conservative abstention is the honest reading of what they can no longer show.
+_ROUNDING_BAND_ULPS = 4.0
+_ROUNDING_BAND_FRACTION_OF_TOLERANCE = 1e-8
 
 # The judge is a single small call; the wall-clock bound is set for an interactive answer,
 # not a background generation.
@@ -547,11 +592,9 @@ def _numeric_verdict(canonical: str, response: str, rel_tol: float) -> str | Non
     The check is relative to the larger magnitude, at the tolerance the question sets:
     a small answer is held to the same relative standard as a large one, so `1 pF` is
     not within one percent of `500 pF` although the two differ by less than any fixed
-    base-unit allowance would suggest. The check is `math.isclose` at exactly that
-    tolerance and no absolute allowance. This avoids the additional rounding introduced
-    by separately normalizing the operands; the comparison is symmetric and two exact
-    zeros match. Parsing and base-unit conversion still use floating point, so quantities
-    extremely close to a boundary retain those representation limits.
+    base-unit allowance would suggest. The strict check is `math.isclose` at exactly
+    that tolerance and no absolute allowance; where it misses the inclusive boundary
+    by machine roundoff, the explicit rounding policy (`_rounding_band`) decides.
     """
     left = _numeric_value(canonical)
     right = _numeric_value(response)
@@ -561,13 +604,55 @@ def _numeric_verdict(canonical: str, response: str, rel_tol: float) -> str | Non
     right_value, right_dimension = right
     if left_dimension != right_dimension:
         return None
-    # The tolerance is evaluated against the larger magnitude by the standard
-    # relative check itself: a separate normalization step (divide both sides, then
-    # difference) can round an exact boundary just outside itself, so the boundary
-    # the question set is the boundary the comparison holds.
-    if math.isclose(left_value, right_value, rel_tol=rel_tol, abs_tol=0.0):
+    return _numeric_comparison(left_value, right_value, rel_tol)
+
+
+def _numeric_comparison(left: float, right: float, rel_tol: float) -> str:
+    """The verdict for two finite base-unit magnitudes of one dimensionality.
+
+    The strict check decides first: `math.isclose` at the question's tolerance and no
+    absolute allowance, against the larger magnitude - the standard relative check
+    evaluates the tolerance there itself, so the boundary the question set is the
+    boundary the comparison holds, with no extra normalization rounding. Where it
+    settles, nothing else runs. Where it misses, the rejections below are explicit
+    and absolute (PLA-496 R1): two exact zeros match, a one-sided zero is a full-scale
+    relative mismatch, and an opposite-sign answer is outside any tolerance - the
+    rounding band may explain a boundary roundoff, but it may never credit any of
+    these.
+    """
+    if math.isclose(left, right, rel_tol=rel_tol, abs_tol=0.0):
         return VERDICT_CORRECT
-    return VERDICT_INCORRECT
+    if left == 0.0 or right == 0.0 or (left < 0.0) != (right < 0.0):
+        return VERDICT_INCORRECT
+    return _rounding_band(left, right, rel_tol)
+
+
+def _rounding_band(left: float, right: float, rel_tol: float) -> str:
+    """The bounded machine-rounding policy for what the strict check missed.
+
+    The apparent excess over the rubric's allowed error, measured against the larger
+    operand's scale: within `_ROUNDING_BAND_ULPS` ULPs of that scale the miss is
+    treated as cutoff roundoff, and the boundary is credited - unless the band would
+    do more than a rounding allowance at this rubric. Where the allowed error has
+    underflowed to zero, or the band is more than `_ROUNDING_BAND_FRACTION_OF_TOLERANCE`
+    of it, the values sit in a band the rubric is too fine to decide: the settled
+    result is numerical precision uncertainty, never credit and never a confident
+    wrong. That verdict is load-bearing downstream - the layers and persistence that
+    follow must carry it to the final result, and a judge may not turn it into a wrong.
+    """
+    scale = max(abs(left), abs(right))
+    difference = abs(left - right)
+    limit = rel_tol * scale
+    guard = _ROUNDING_BAND_ULPS * math.ulp(scale)
+    if difference - limit > guard:
+        # Beyond the band: a real deviation from the rubric, settled wrong as it
+        # was before the band existed.
+        return VERDICT_INCORRECT
+    # The miss is rounding-scale. Credit only while the band stays a rounding
+    # allowance against the rubric, not a tolerance substitute.
+    if limit == 0.0 or guard > _ROUNDING_BAND_FRACTION_OF_TOLERANCE * limit:
+        return VERDICT_UNCERTAIN
+    return VERDICT_CORRECT
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +682,13 @@ def _split_items(text: str) -> list[str] | None:
 
 _RELATION_EQUIVALENT = "equivalent"
 _RELATION_DIFFERENT = "different"
+# The numeric pair sits in a machine-rounding band the rubric's tolerance is too fine
+# to credit: a settled numerical precision uncertainty. Neither an equivalence the
+# matching may ride on nor a settled mismatch, and the distinction from `unknown`
+# matters: a judge that would call the pair wrong is a false negative the policy
+# exists to prevent, so the answer settles uncertainty rather than taking the
+# abstention to it.
+_RELATION_PRECISION = "precision"
 _RELATION_UNKNOWN = "unknown"
 
 
@@ -604,9 +696,11 @@ def _item_relation(left: str, right: str, rel_tol: float) -> str:
     """How one listed item stands against the other.
 
     `equivalent` - settled by a deterministic layer: trivially the same text, the same
-    mathematics in another notation, or numerically the same value within the tolerance.
-    `different` - the numeric layer has settled the values as decisively not the same
-    (a mismatch beyond the tolerance, in the same dimensionality). `unknown` - nothing
+    mathematics in another notation, or numerically the same value within the tolerance
+    (including a boundary the rounding policy credits). `different` - the numeric layer
+    has settled the values as decisively not the same (a mismatch beyond the tolerance
+    and the rounding band, in the same dimensionality). `precision` - the numeric layer
+    has settled a numerical precision uncertainty (above). `unknown` - nothing
     deterministic can tell them apart: a paraphrase, a domain synonym, or a value whose
     units the numeric layer deliberately will not decide. Unknown is an abstention, not
     a guess: that comparison belongs to the judge.
@@ -624,6 +718,8 @@ def _item_relation(left: str, right: str, rel_tol: float) -> str:
         return _RELATION_EQUIVALENT
     if verdict == VERDICT_INCORRECT:
         return _RELATION_DIFFERENT
+    if verdict == VERDICT_UNCERTAIN:
+        return _RELATION_PRECISION
     return _RELATION_UNKNOWN
 
 
@@ -641,20 +737,21 @@ def _all_numeric(items: list[str]) -> bool:
 _COMPLETE_MATCHING_CAP = 32
 
 
-def _complete_equivalent_matching(relations: list[list[str]]) -> bool:
-    """Whether every required item can take a distinct equivalent response item.
+def _complete_matching(relations: list[list[str]], acceptable: tuple[str, ...]) -> bool:
+    """Whether every required item can take a distinct response item whose relation is
+    in `acceptable`.
 
-    One augmenting-path search (Kuhn's algorithm) over the equivalence edges: a greedy
-    first pass can steal a partner that a later item is the only equivalent of, so the
-    question is the assignment, not any single item's neighbors. The caller bounds the
-    input - this runs only on lists of at most `_COMPLETE_MATCHING_CAP` items, where the
-    edge count stays trivial.
+    One augmenting-path search (Kuhn's algorithm) over the acceptable edges: a greedy
+    first pass can steal a partner that a later item is the only acceptable one of, so
+    the question is the assignment, not any single item's neighbors. The caller bounds
+    the input - this runs only on lists of at most `_COMPLETE_MATCHING_CAP` items, where
+    the edge count stays trivial.
     """
     taken: dict[int, int] = {}  # response index -> required index
 
     def augment(index: int, seen: set[int]) -> bool:
         for partner, relation in enumerate(relations[index]):
-            if relation != _RELATION_EQUIVALENT or partner in seen:
+            if relation not in acceptable or partner in seen:
                 continue
             seen.add(partner)
             if partner not in taken or augment(taken[partner], seen):
@@ -678,7 +775,11 @@ def _set_verdict(canonical: str, response: str, rel_tol: float, *, unordered: bo
     equivalents - and even there a pair the numeric layer will not decide (an omitted
     unit, say) leaves the call to the judge. Everything else - a paraphrase, a
     synonym, an extra or missing idea in a different form - abstains against the
-    contract, never a confident wrong from this layer.
+    contract, never a confident wrong from this layer. The one exception is the
+    rounding policy's own settlement: where a complete membership exists only by
+    riding a precision-limited pair, or a precision-limited member sits alongside one
+    only the judge could decide, the answer settles `uncertain` here - never at a
+    judge whose confident rejection would be a false negative on the boundary member.
     """
     canonical_items = _split_items(canonical)
     response_items = _split_items(response)
@@ -706,15 +807,35 @@ def _set_verdict(canonical: str, response: str, rel_tol: float, *, unordered: bo
                     [_item_relation(required, offered, rel_tol) for offered in response_items]
                     for required in canonical_items
                 ]
-                if _complete_equivalent_matching(matrix):
+                if _complete_matching(matrix, (_RELATION_EQUIVALENT,)):
                     # A different assignment satisfies the whole set: the greedy
                     # order just stole this item's partner. Complete membership is
                     # shown, so the answer settles as the all-matched case does.
                     return VERDICT_CORRECT if decisive else None
-                # No assignment satisfies the set. It settles wrong only where the
-                # mismatch is settled mathematics: every item a number and no pair the
-                # numeric layer will not decide - an omitted unit is the judge's call,
-                # as is any paraphrase or synonym.
+                if _complete_matching(matrix, (_RELATION_EQUIVALENT, _RELATION_PRECISION)):
+                    # A complete membership exists, but only by riding a
+                    # precision-limited pair: a member sits in a machine-rounding band
+                    # the rubric's tolerance is too fine to credit. Credit stays
+                    # withheld, and so does a confident wrong - the settled
+                    # uncertainty goes to the final result instead of to a judge,
+                    # whose confident rejection would be a false negative.
+                    return VERDICT_UNCERTAIN
+                if any(
+                    relation == _RELATION_PRECISION for row in matrix for relation in row
+                ) and any(relation == _RELATION_UNKNOWN for row in matrix for relation in row):
+                    # A precision-limited member alongside a member only the judge
+                    # could decide: the rounding band makes the answer terminal
+                    # uncertainty - not credit, and not a hand to a judge whose
+                    # confident rejection would be a false negative on the boundary
+                    # member. An ordinary prose set with no precision-limited member
+                    # still reaches the judge below.
+                    return VERDICT_UNCERTAIN
+                # No assignment satisfies the set, with or without riding precision:
+                # every complete membership must pair some required item decisively
+                # differently, so the set is wrong wherever the precision pairs sit.
+                # It settles wrong only where the mismatch is settled mathematics:
+                # every item a number and no pair the numeric layer will not decide -
+                # an omitted unit is the judge's call, as is any paraphrase or synonym.
                 if all_numeric and all(
                     relation != _RELATION_UNKNOWN for row in matrix for relation in row
                 ):
@@ -727,6 +848,13 @@ def _set_verdict(canonical: str, response: str, rel_tol: float, *, unordered: bo
                 _item_relation(canonical_item, response_item, rel_tol)
                 for response_item in response_items
             ]
+            if _RELATION_PRECISION in item_relations:
+                # The unmatched member sits in a rounding band the rubric cannot
+                # credit - for a mixed set as well as an all-numeric one, that
+                # uncertainty is terminal: a complete membership may exist only by
+                # riding that precision-limited pair, and the bounded fallback never
+                # hands the boundary answer to a judge.
+                return VERDICT_UNCERTAIN
             if _RELATION_EQUIVALENT in item_relations:
                 return None
             if all_numeric and all(relation == _RELATION_DIFFERENT for relation in item_relations):
@@ -994,11 +1122,20 @@ def grade_free_response(
         return GradingResult(VERDICT_CORRECT, {"grader": "text"})
 
     # Rubric alternatives are equivalent forms the generator wrote down with the
-    # question: trust them, compared with the same care a typed layer brings.
+    # question: trust them, compared with the same care a typed layer brings. A
+    # precision-limited match of an alternative is no credit - but it is not a
+    # dismissal either: the signal survives the pass, where it turns the reference's
+    # own settled wrong (or the fallback to a judge) into a settled uncertainty.
+    precision_alternative = False
     if rubric is not None:
         for alternative in rubric.get("acceptable_alternatives") or []:
-            if isinstance(alternative, str) and _item_equivalent(response, alternative, rel_tol):
+            if not isinstance(alternative, str):
+                continue
+            relation = _item_relation(response, alternative, rel_tol)
+            if relation == _RELATION_EQUIVALENT:
                 return GradingResult(VERDICT_CORRECT, {"grader": "alternative"})
+            if relation == _RELATION_PRECISION:
+                precision_alternative = True
 
     # The declared kind controls which typed layers may run: a `text` answer is never
     # settled by unit, set, or algebra comparison; a question without a contract
@@ -1006,7 +1143,28 @@ def grade_free_response(
     if kind in (None, "numeric", "symbolic", "set"):
         verdict = _numeric_verdict(reference, response, rel_tol)
         if verdict is not None:
-            return GradingResult(verdict, {"grader": "numeric"})
+            detail: dict[str, object] = {"grader": "numeric"}
+            if verdict == VERDICT_UNCERTAIN:
+                # A settled numerical precision uncertainty: the values sit in a
+                # machine-rounding band the rubric's tolerance is too fine to credit.
+                # The pass ends here - no judge may turn the boundary answer into a
+                # confident wrong, and the recorded result carries that to the
+                # student as a neutral retry, never a wrong.
+                detail["note"] = (
+                    "machine-rounding band beyond the rubric tolerance; credit withheld"
+                )
+                return GradingResult(verdict, detail)
+            if verdict == VERDICT_INCORRECT and precision_alternative:
+                # The canonical reference settles decisively wrong, but an acceptable
+                # alternative is a precision-limited match: the response may be that
+                # form at the boundary. Credit stays withheld, and so does the
+                # confident wrong.
+                detail["note"] = (
+                    "precision-limited alternative match; "
+                    "the reference settles wrong but the band may explain it"
+                )
+                return GradingResult(VERDICT_UNCERTAIN, detail)
+            return GradingResult(verdict, detail)
     if kind in (None, "set"):
         verdict = _set_verdict(reference, response, rel_tol, unordered=kind == "set")
         if verdict is not None:
@@ -1014,7 +1172,27 @@ def grade_free_response(
     if kind in (None, "symbolic"):
         verdict = _symbolic_verdict(reference, response)
         if verdict is not None:
+            if verdict == VERDICT_INCORRECT and precision_alternative:
+                return GradingResult(
+                    VERDICT_UNCERTAIN,
+                    {
+                        "grader": "alternative",
+                        "note": "precision-limited alternative match; symbolic reference differs",
+                    },
+                )
             return GradingResult(verdict, {"grader": "symbolic"})
+
+    if precision_alternative:
+        # No typed layer settled, but an acceptable alternative is a
+        # precision-limited match: the pass ends in the same settled uncertainty,
+        # never at a judge whose confident rejection would be a false negative.
+        return GradingResult(
+            VERDICT_UNCERTAIN,
+            {
+                "grader": "alternative",
+                "note": "precision-limited alternative match; no layer settled",
+            },
+        )
 
     if judge is not None:
         try:

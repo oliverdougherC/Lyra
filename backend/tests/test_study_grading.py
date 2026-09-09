@@ -7,7 +7,9 @@ data, no network.
 """
 
 import json
+import math
 from collections.abc import Callable
+from fractions import Fraction
 
 import pytest
 
@@ -451,6 +453,461 @@ def test_an_acceptable_alternative_carries_the_boundary_too() -> None:
     off = grading.grade_free_response(question, "98.999 Hz", judge=None)
     assert off.verdict == grading.VERDICT_INCORRECT
     assert off.detail["grader"] == "numeric"
+
+
+# ---------------------------------------------------------------------------
+# Rounding-boundary policy (PLA-496 R2 residual)
+#
+# The strict comparison holds the inclusive boundary for representable
+# operands, but a student's decimal - or a prefix conversion of it - can miss
+# the cutoff by a few machine ULPs: `1.0 - 0.99` computes to
+# `0.010000000000000009`, one float step past the one-percent allowance, and
+# `100 pF - 99 pF` in base units exceeds its allowance by about 9.5e-27. The
+# policy credits such misses with a small, magnitude-dependent ULP band on
+# the larger operand's scale - not a universal physical-unit allowance -
+# capped so the band can never substitute for the rubric: an underflowed
+# allowed error, or a band more than one part in 100 million of the allowed
+# error, settles numerical precision uncertainty. That uncertainty is a
+# verdict, not an abstention: it must survive the set and alternative paths
+# to the final result, where no later layer - judge included - may turn the
+# boundary answer into a confident wrong.
+# ---------------------------------------------------------------------------
+
+
+def _rejecting_judge() -> tuple[Callable[..., grading.GradingResult], list[str]]:
+    """A judge that confidently calls every answer wrong, and counts its calls."""
+    calls: list[str] = []
+
+    def judge(
+        *,
+        question: str,
+        rubric: dict[str, object] | None,
+        reference: str,
+        response: str,
+    ) -> grading.GradingResult:
+        calls.append(response)
+        return grading.GradingResult(
+            grading.VERDICT_INCORRECT,
+            {"grader": "judge", "judge_verdict": "incorrect", "confidence": 0.9},
+        )
+
+    return judge, calls
+
+
+@pytest.mark.parametrize(
+    ("canonical", "response", "rel_tol"),
+    [
+        # The ordinary decimal boundaries: the strict check's roundoff pushed
+        # each of them just past its cutoff.
+        ("1", "0.99", 0.01),
+        ("1", "0.95", 0.05),
+        ("1", "0.999", 0.001),
+        # Both signs ...
+        ("-1", "-0.99", 0.01),
+        ("-1", "-0.95", 0.05),
+        ("-1", "-0.999", 0.001),
+        # ... and both operand orders sit on the same boundary.
+        ("0.99", "1", 0.01),
+        ("0.95", "1", 0.05),
+        ("0.999", "1", 0.001),
+    ],
+)
+def test_a_decimal_boundary_the_strict_check_misses_is_correct(
+    canonical: str, response: str, rel_tol: float
+) -> None:
+    assert grading._numeric_verdict(canonical, response, rel_tol) == grading.VERDICT_CORRECT
+
+
+@pytest.mark.parametrize(
+    ("canonical", "response", "rel_tol"),
+    [
+        # One side zero is a full-scale relative mismatch, in both directions:
+        # the band may not credit a nonzero answer for zero.
+        ("1", "0", 0.01),
+        ("0", "0.99", 0.01),
+        ("1e-320", "0", 0.01),
+        # An opposite-sign answer is outside any tolerance, even where the
+        # rounding band would otherwise reach.
+        ("1", "-0.99", 0.01),
+        ("5e-324", "-5e-324", 0.01),
+        # Gross mismatches stay settled wrong at every scale the band covers.
+        ("1", "0.989", 0.01),
+        ("1", "0.99999999", 1e-20),
+        ("1e-320", "5e-323", 0.01),
+    ],
+)
+def test_the_rounding_band_cannot_credit_zero_sign_or_gross_errors(
+    canonical: str, response: str, rel_tol: float
+) -> None:
+    assert grading._numeric_verdict(canonical, response, rel_tol) == grading.VERDICT_INCORRECT
+
+
+@pytest.mark.parametrize(
+    ("reference", "response"),
+    [
+        # The production pF reproduction, both operand orders, and equivalent
+        # base-unit forms of the same quantities.
+        ("100 pF", "99 pF"),
+        ("99 pF", "100 pF"),
+        ("100e-12 F", "99e-12 F"),
+        ("1e-10 F", "9.9e-11 F"),
+        # The same boundary, one prefix over, including the mixed nF/pF forms.
+        ("1 nF", "990 pF"),
+        ("0.1 nF", "99 pF"),
+    ],
+)
+def test_a_prefix_conversion_boundary_is_correct_through_the_grader(
+    reference: str, response: str
+) -> None:
+    result = _grade(reference, response, grading={"answer_kind": "numeric", "tolerance": 0.01})
+    assert result.verdict == grading.VERDICT_CORRECT
+    assert result.detail["grader"] == "numeric"
+
+
+def test_one_step_past_a_physical_boundary_still_settles_wrong() -> None:
+    question = _question("100 pF", grading={"answer_kind": "numeric", "tolerance": 0.01})
+    off = grading.grade_free_response(question, "98.999 pF", judge=None)
+    assert off.verdict == grading.VERDICT_INCORRECT
+    assert off.detail["grader"] == "numeric"
+    inside = grading.grade_free_response(question, "99.001 pF", judge=None)
+    assert inside.verdict == grading.VERDICT_CORRECT
+    assert inside.detail["grader"] == "numeric"
+
+
+def test_a_prefix_boundary_member_matches_in_a_numeric_set() -> None:
+    # Set membership runs through the same numeric comparison: a member exactly
+    # on the prefix boundary finds its equivalent partner, and a member one
+    # step past it does not.
+    question = _question("100 pF, 5 nF", grading={"answer_kind": "set", "tolerance": 0.01})
+    on = grading.grade_free_response(question, "99 pF, 5 nF", judge=None)
+    assert on.verdict == grading.VERDICT_CORRECT
+    assert on.detail["grader"] == "set"
+    off = grading.grade_free_response(question, "98.999 pF, 5 nF", judge=None)
+    assert off.verdict == grading.VERDICT_INCORRECT
+    assert off.detail["grader"] == "set"
+
+
+def test_an_acceptable_alternative_carries_a_decimal_boundary() -> None:
+    # An alternative is an equivalent *form* of the reference, compared with
+    # the same numeric comparison: an answer that misses the alternative only
+    # by the boundary roundoff earns credit through the alternative path, and
+    # one step past it still settles wrong in the numeric layer.
+    question = _question(
+        "1 Hz",
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 0.01,
+            "acceptable_alternatives": ["1000 mHz"],
+        },
+    )
+    on = grading.grade_free_response(question, "0.99 Hz", judge=None)
+    assert on.verdict == grading.VERDICT_CORRECT
+    assert on.detail["grader"] == "alternative"
+    off = grading.grade_free_response(question, "0.989 Hz", judge=None)
+    assert off.verdict == grading.VERDICT_INCORRECT
+    assert off.detail["grader"] == "numeric"
+
+
+def test_a_strict_tolerance_boundary_is_uncertainty_not_credit_or_wrong() -> None:
+    # One part in a billion below the reference at a one-part-in-a-billion
+    # rubric: the strict check misses the inclusive boundary by float
+    # roundoff, and the four-ULP band would explain the miss - but the band is
+    # two orders of magnitude wider than the rubric's entire allowed error, so
+    # it is a tolerance substitute, not a rounding allowance. Neither credit
+    # nor a confident wrong is settled.
+    result = _grade(
+        "1", "0.9999999999999999", grading={"answer_kind": "numeric", "tolerance": 1e-20}
+    )
+    assert result.verdict == grading.VERDICT_UNCERTAIN
+    assert result.detail["grader"] == "numeric"
+    # The same pair at an ordinary rubric: the strict check settles it and the
+    # band is never consulted.
+    ordinary = _grade("1", "0.9999999999999999", grading={"answer_kind": "numeric"})
+    assert ordinary.verdict == grading.VERDICT_CORRECT
+    assert ordinary.detail["grader"] == "numeric"
+
+
+def test_an_underflowed_error_limit_is_uncertainty_not_credit() -> None:
+    # At subnormal scale the rubric's allowed error underflows to zero in
+    # binary64: `1e-5 * 1e-320` is below the smallest subnormal. The answer
+    # sits one representable step from the reference - inside the four-ULP
+    # band - so the band must not credit it; and with no float resolution
+    # left to verify the rubric at this scale, the layer must not settle a
+    # confident wrong either. Exact decimal arithmetic says the answer is
+    # past its boundary (difference 5.052e-324 against an allowed 1e-325),
+    # but the layer cannot show that in binary64, so the honest verdict is
+    # uncertainty.
+    assert grading._numeric_verdict("1e-320", "9.994948e-321", 1e-5) == grading.VERDICT_UNCERTAIN
+    result = _grade(
+        "1e-320", "9.994948e-321", grading={"answer_kind": "numeric", "tolerance": 1e-5}
+    )
+    assert result.verdict == grading.VERDICT_UNCERTAIN
+    assert result.detail["grader"] == "numeric"
+    # A miss beyond the band at the same scale is still a settled wrong: the
+    # band is a rounding allowance, not an absolute floor.
+    assert grading._numeric_verdict("1e-320", "5e-323", 0.01) == grading.VERDICT_INCORRECT
+
+
+def test_a_confident_rejecting_judge_cannot_settle_a_precision_limited_answer() -> None:
+    # Precision uncertainty must survive to the final verdict: a judge that
+    # confidently rejects the boundary answer must not convert the
+    # uncertainty into a wrong, on any path the numeric layers settle it.
+    judge, calls = _rejecting_judge()
+    # Scalar: the numeric layer settles the uncertainty before the judge.
+    scalar = _grade(
+        "1",
+        "0.9999999999999999",
+        judge=judge,
+        grading={"answer_kind": "numeric", "tolerance": 1e-20},
+    )
+    assert scalar.verdict == grading.VERDICT_UNCERTAIN
+    assert scalar.detail["grader"] == "numeric"
+    # Numeric set: a member inside a band the rubric cannot credit keeps the
+    # whole set at uncertainty, not at a judge's confident wrong.
+    question = _question("1, 2", grading={"answer_kind": "set", "tolerance": 1e-20})
+    set_result = grading.grade_free_response(question, "0.9999999999999999, 2", judge=judge)
+    assert set_result.verdict == grading.VERDICT_UNCERTAIN
+    assert set_result.detail["grader"] == "set"
+    # Acceptable alternative: a precision-limited match of the alternative is
+    # no credit, and the numeric layer settles the uncertainty before the judge.
+    alternative_question = _question(
+        "1",
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 1e-20,
+            "acceptable_alternatives": ["1.0"],
+        },
+    )
+    alternative = grading.grade_free_response(
+        alternative_question, "0.9999999999999999", judge=judge
+    )
+    assert alternative.verdict == grading.VERDICT_UNCERTAIN
+    assert alternative.detail["grader"] == "numeric"
+    # The judge was never consulted on any of them.
+    assert calls == []
+
+
+def test_a_precision_limited_alternative_settles_uncertainty_not_canonical_wrong() -> None:
+    # A precision-limited match of an acceptable alternative is no credit - but the
+    # signal must survive the pass: the canonical reference's own settled wrong, or a
+    # judge's, cannot replace it.
+    judge, calls = _rejecting_judge()
+    near = str(math.nextafter(1.0, 0.0))
+    # The canonical reference settles decisively wrong, but the alternative is the
+    # boundary the rounding policy settles.
+    result = _grade(
+        "5",
+        near,
+        judge=judge,
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 1e-20,
+            "acceptable_alternatives": ["1"],
+        },
+    )
+    assert result.verdict == grading.VERDICT_UNCERTAIN
+    # The reference does not even parse as a number: no layer settles, and the
+    # alternative's uncertainty still ends the pass.
+    unparsed = _grade(
+        "one",
+        near,
+        judge=judge,
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 1e-20,
+            "acceptable_alternatives": ["1"],
+        },
+    )
+    assert unparsed.verdict == grading.VERDICT_UNCERTAIN
+    # A confidently rejecting judge was never consulted on either.
+    assert calls == []
+
+
+def test_a_definitive_match_still_wins_over_a_precision_limited_alternative() -> None:
+    # The uncertainty is not premature: a strict match of the canonical reference,
+    # or of a later alternative, still settles correct.
+    near = str(math.nextafter(1.0, 0.0))
+    above = str(math.nextafter(1.0, 2.0))
+    # An exact alternative after the precision-limited one.
+    strict_alt = _grade(
+        "5",
+        near,
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 1e-20,
+            "acceptable_alternatives": ["1", near],
+        },
+    )
+    assert strict_alt.verdict == grading.VERDICT_CORRECT
+    assert strict_alt.detail["grader"] == "alternative"
+    # The canonical reference settles exact: the precision-limited alternative
+    # cannot hold a definitive match at uncertainty.
+    exact_canonical = _grade(
+        "1 Hz",
+        "1000 mHz",
+        grading={
+            "answer_kind": "numeric",
+            "tolerance": 1e-20,
+            "acceptable_alternatives": [above + " Hz"],
+        },
+    )
+    assert exact_canonical.verdict == grading.VERDICT_CORRECT
+    assert exact_canonical.detail["grader"] == "numeric"
+    # And a complete strict set assignment still settles right in reversed order.
+    strict_set = _grade(
+        "1, " + above,
+        above + ", 1",
+        grading={"answer_kind": "set", "tolerance": 1e-20},
+    )
+    assert strict_set.verdict == grading.VERDICT_CORRECT
+    assert strict_set.detail["grader"] == "set"
+
+
+def test_a_mixed_set_with_a_precision_limited_member_settles_uncertain() -> None:
+    # A declared set that mixes a precision-limited numeric member with a member the
+    # judge would have to decide settles uncertainty instead of taking the boundary
+    # answer to the judge.
+    judge, calls = _rejecting_judge()
+    near = str(math.nextafter(1.0, 0.0))
+    mixed = _grade(
+        "1, cell membrane",
+        near + ", plasma membrane",
+        judge=judge,
+        grading={"answer_kind": "set", "tolerance": 1e-20},
+    )
+    assert mixed.verdict == grading.VERDICT_UNCERTAIN
+    assert mixed.detail["grader"] == "set"
+    # An ordinary prose set with no numerical precision uncertainty still reaches
+    # the judge, and a confident rejection there is still a wrong.
+    prose = _grade(
+        "cell membrane, nucleus",
+        "plasma membrane, nucleus",
+        judge=judge,
+        grading={"answer_kind": "set", "tolerance": 1e-20},
+    )
+    assert prose.verdict == grading.VERDICT_INCORRECT
+    assert prose.detail["grader"] == "judge"
+    assert calls == ["plasma membrane, nucleus"]
+
+
+def test_a_mixed_set_beyond_the_cap_keeps_precision_uncertainty() -> None:
+    # Beyond the matching cap the bounded fallback keeps the signal too: the one
+    # precision-limited member settles uncertainty for a mixed set, and for an
+    # all-numeric set, never at a judge.
+    judge, calls = _rejecting_judge()
+    near = str(math.nextafter(1.0, 0.0))
+    reference = ", ".join([str(i) for i in range(1, 33)] + ["nucleus"])
+    response = ", ".join([near] + [str(i) for i in range(2, 33)] + ["nucleus"])
+    mixed = grading.grade_free_response(
+        _question(reference, grading={"answer_kind": "set", "tolerance": 1e-20}),
+        response,
+        judge=judge,
+    )
+    assert mixed.verdict == grading.VERDICT_UNCERTAIN
+    assert mixed.detail["grader"] == "set"
+    numeric_reference = ", ".join(str(i) for i in range(1, 34))
+    numeric_response = ", ".join([near] + [str(i) for i in range(2, 34)])
+    numeric = grading.grade_free_response(
+        _question(numeric_reference, grading={"answer_kind": "set", "tolerance": 1e-20}),
+        numeric_response,
+        judge=judge,
+    )
+    assert numeric.verdict == grading.VERDICT_UNCERTAIN
+    assert numeric.detail["grader"] == "set"
+    # An already-used equivalent partner must not hide a remaining precision partner.
+    tail = [str(i) for i in range(2, 33)]
+    duplicate = _grade(
+        ", ".join(["1", "1"] + tail),
+        ", ".join(["1", near] + tail),
+        judge=judge,
+        grading={"answer_kind": "set", "tolerance": 1e-20},
+    )
+    assert duplicate.verdict == grading.VERDICT_UNCERTAIN
+    # A judge that confidently rejects was never consulted.
+    assert calls == []
+
+
+def _exact_decimal_text(value: Fraction) -> str:
+    """The exact decimal string of a fraction whose denominator is 2^a * 5^b."""
+    sign = "-" if value < 0 else ""
+    numerator, denominator = abs(value).numerator, abs(value).denominator
+    twos = fives = 0
+    while denominator % 2 == 0:
+        denominator //= 2
+        twos += 1
+    while denominator % 5 == 0:
+        denominator //= 5
+        fives += 1
+    assert denominator == 1
+    places = max(twos, fives)
+    numerator *= 2 ** (places - twos) * 5 ** (places - fives)
+    whole, frac = divmod(numerator, 10**places)
+    if places == 0:
+        return f"{sign}{whole}"
+    return f"{sign}{whole}.{frac:0{places}d}"
+
+
+def test_the_rounding_policy_matches_exact_decimal_expectations_across_scales() -> None:
+    """A modest scale matrix: prefix-scale magnitudes, three rubric tolerances,
+    inside/on/outside the inclusive boundary, both signs, both operand orders.
+
+    Expected inclusivity comes from exact Fraction arithmetic on the decimals
+    the student meant - never from `math.isclose` or the rounding policy
+    itself. The operands are produced the way the production parser produces
+    them: the exact decimal, times the scale factor, rounded to float once -
+    so the matrix covers prefix-conversion forms, not just integer magnitudes.
+    """
+    checked = 0
+    for exponent in (-12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 21):
+        scale = Fraction(10) ** exponent
+        for tolerance_text, rel_tol in (("0.001", 0.001), ("0.01", 0.01), ("0.05", 0.05)):
+            tol = Fraction(tolerance_text)
+            for movement in (Fraction(-1, 10**6), Fraction(0), Fraction(1, 10**6)):
+                mantissa = 1 - tol + movement
+                for sign in (1, -1):
+                    exact_a = sign * scale
+                    exact_b = sign * mantissa * scale
+                    expected = (
+                        grading.VERDICT_CORRECT
+                        if abs(exact_a - exact_b) <= tol * max(abs(exact_a), abs(exact_b))
+                        else grading.VERDICT_INCORRECT
+                    )
+                    a_text = f"{'-' if sign < 0 else ''}1e{exponent}"
+                    b_text = _exact_decimal_text(mantissa * sign) + f"e{exponent}"
+                    for canonical, response in ((a_text, b_text), (b_text, a_text)):
+                        assert grading._numeric_verdict(canonical, response, rel_tol) == expected, (
+                            canonical,
+                            response,
+                            rel_tol,
+                        )
+                        checked += 1
+    assert checked == 432
+
+
+@pytest.mark.parametrize("kind", [None, "symbolic"])
+def test_a_precision_limited_alternative_survives_a_symbolic_reference(kind: str | None) -> None:
+    calls = []
+
+    def rejecting_judge(**kwargs: object) -> grading.GradingResult:
+        calls.append(kwargs)
+        return grading.GradingResult(grading.VERDICT_INCORRECT, {"grader": "judge"})
+
+    rubric: dict[str, object] = {
+        "tolerance": 1e-20,
+        "acceptable_alternatives": ["1"],
+    }
+    if kind is not None:
+        rubric["answer_kind"] = kind
+    result = _grade("x+1", "0.9999999999999999", judge=rejecting_judge, grading=rubric)
+    assert result.verdict == grading.VERDICT_UNCERTAIN
+    assert calls == []
+
+    # A proven canonical equivalence still wins over an uncertain alternative.
+    rubric["acceptable_alternatives"] = ["1.0000000000000002"]
+    matched = _grade("sin(pi/2)", "1", judge=rejecting_judge, grading=rubric)
+    assert matched.verdict == grading.VERDICT_CORRECT
+    assert matched.detail["grader"] == "symbolic"
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------
