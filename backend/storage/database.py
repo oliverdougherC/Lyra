@@ -5,7 +5,6 @@ the extension load do not map onto an ORM, and the schema is small enough that m
 would only add indirection.
 """
 
-import hashlib
 import json
 import os
 import re
@@ -32,6 +31,12 @@ _MIGRATION_FK_ON = re.compile(r"^pragma\s+foreign_keys\s*=\s*on\s*;?$", re.IGNOR
 _SQL_LINE_COMMENT = re.compile(r"--.*$", re.MULTILINE)
 _SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _SQLITE_BUSY_TIMEOUT_MS = 5_000
+
+# The per-file ceiling for originals carried into a migration backup. It bounds the
+# streaming working set (and the disk a single source can hold inside a snapshot) and is
+# independent of the upload route's own 50 MiB limit: an install may predate that route
+# limit, and an extracted text can outgrow the document that produced it.
+_BACKUP_FILE_MAX_BYTES = 512 * 1024 * 1024
 
 
 def latest_schema_version() -> int:
@@ -91,7 +96,9 @@ def _backup_before_migration(conn: sqlite3.Connection, version: int) -> None:
         if backup.execute("pragma user_version").fetchone()[0] != version:
             raise RuntimeError("Pre-migration backup schema verification failed; upgrade stopped.")
         backup.close()
-        files = {"lyra.db": hashlib.sha256(path.read_bytes()).hexdigest()}
+        # The snapshot is hashed by streaming, so even the (potentially large) database
+        # is never materialized whole in memory just to digest it.
+        files = {"lyra.db": private.hash_file(path)}
         if Path(database_path) == settings.db_path:
             # These are durable originals and extracted text. Models/caches can be
             # downloaded again; keys remain in the existing Keychain/profile, never
@@ -108,17 +115,28 @@ def _backup_before_migration(conn: sqlite3.Connection, version: int) -> None:
                     for name in names:
                         original = Path(parent) / name
                         relative = original.relative_to(settings.data_dir)
-                        content = private.read_owned_bytes(
-                            original, root=settings.data_dir, max_bytes=512 * 1024 * 1024
+                        # Pin the source's digest before copying: a file that changes
+                        # mid-copy is caught by comparing the saved copy to what was
+                        # verified, not to whatever the file becomes. The digest, the
+                        # copy, and the saved digest all stream in bounded chunks, so a
+                        # large original never materializes whole in memory.
+                        source_digest = private.hash_owned_file(
+                            original,
+                            root=settings.data_dir,
+                            max_bytes=_BACKUP_FILE_MAX_BYTES,
                         )
                         destination = snapshot / relative
-                        private.write_private_bytes(destination, content)
-                        digest = hashlib.sha256(content).hexdigest()
-                        if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+                        with private.open_owned_bytes(
+                            original, root=settings.data_dir, max_bytes=_BACKUP_FILE_MAX_BYTES
+                        ) as source:
+                            private.publish_private_stream(
+                                destination, source, max_bytes=_BACKUP_FILE_MAX_BYTES
+                            )
+                        if private.hash_file(destination) != source_digest:
                             raise RuntimeError("Backup file verification failed; upgrade stopped.")
                         with destination.open("rb") as saved_file:
                             os.fsync(saved_file.fileno())
-                        files[str(relative)] = digest
+                        files[str(relative)] = source_digest
         private.write_private_text(
             snapshot / "backup-manifest.json",
             json.dumps({"schema": version, "files": files}, sort_keys=True),

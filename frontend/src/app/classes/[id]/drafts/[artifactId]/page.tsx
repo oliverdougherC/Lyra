@@ -74,10 +74,10 @@ import { normalizeMathDelimiters } from '@/lib/drafts/math-delimiters'
 import {
   createSaveEngine,
   decideServerSync,
-  flushOnHidden,
   installBeforeUnloadGuard,
 } from '@/lib/drafts/save-engine'
 import type { SaveConflict, SaveStateName } from '@/lib/drafts/save-engine'
+import { saveOwnerFor, saveSessionFor } from '@/lib/drafts/save-session'
 import { useClasses } from '@/lib/hooks/use-classes'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
@@ -179,6 +179,11 @@ function parseImmersive(raw: string): boolean | null {
   return raw === 'true' ? true : raw === 'false' ? false : null
 }
 
+// Save ownership is now a document-owned session: the single save engine outlives
+// one mount of this document. The session (not the page) manages the engine's lifetime
+// and the per-document update-safety symbol, so a remount reattaches to the very same
+// engine instead of cloning its state into a second writer (PLA-513).
+
 export default function DraftWorkspacePage() {
   const params = useParams<{ id: string; artifactId: string }>()
   const classId = readId(params.id)
@@ -264,27 +269,31 @@ export default function DraftWorkspacePage() {
   const [immersive, setImmersive] = useLocalStorageState(IMMERSIVE_KEY, false, parseImmersive)
   const railTabsRef = useRef<HTMLDivElement | null>(null)
 
-  // The save engine is created once: the editor's onChange and the visibility flush both
-  // talk to it, and rebuilding it per render would drop a scheduled write on the floor.
-  // `mutateAsync` is stable across renders, so the closure never goes stale.
-  const [engine] = useState(() =>
-    createSaveEngine({
-      write: (content, expectedVersion) =>
-        updateBody
-          .mutateAsync({ content, expected_version: expectedVersion })
-          .then((result) => ({ version: result.version })),
-      onState: (state, detail) => {
-        setSaveState(state)
-        setSaveDetail(detail ?? null)
-      },
-      // A stale-version 409 is not an ordinary failure: it hands the engine the server's
-      // current version and body so the workspace can reconcile without losing either side.
-      isConflict: (error): SaveConflict | null =>
-        error instanceof DraftBodyConflictError
-          ? { serverVersion: error.currentVersion, serverBody: error.serverBody }
-          : null,
-    }),
+  // The save session for this document: get-or-create the session in a way that is
+  // idempotent across mounts (and the useState initializer is only run a couple of times
+  // under StrictMode). The engine is created once - the write closure captures the stable
+  // `mutateAsync` from the first render. Every mount of this page reuses this very engine,
+  // never a second writer, and the update-safety symbol is keyed to the document itself.
+  const updateBodyMutate = updateBody.mutateAsync
+  const [session] = useState(() =>
+    saveSessionFor(String(artifactId ?? 'unknown'), (notify) =>
+      createSaveEngine({
+        write: (content, expectedVersion) =>
+          updateBodyMutate({ content, expected_version: expectedVersion }).then((result) => ({
+            version: result.version,
+          })),
+        onState: notify,
+        // A stale-version 409 is not an ordinary failure: it hands the engine the server's
+        // current version and body so the workspace can reconcile without losing either side.
+        isConflict: (error): SaveConflict | null =>
+          error instanceof DraftBodyConflictError
+            ? { serverVersion: error.currentVersion, serverBody: error.serverBody }
+            : null,
+        owner: saveOwnerFor(String(artifactId ?? 'unknown')),
+      }),
+    ),
   )
+  const engine = session.engine
 
   // The poll is the live source of truth for a running pass; when it moves, the detail
   // and the pending edit are stale, exactly as the study page treats its own poll. The
@@ -348,21 +357,49 @@ export default function DraftWorkspacePage() {
     if (was && !passRunning) void syncEditorFromServer()
   }, [passRunning])
 
-  // Flush on the way out: a hidden tab is the last moment a write can still be sent, and
-  // an unmount drops the editor entirely. The beforeunload handler warns the student when
-  // the save engine has unconfirmed state so the browser's native "unsaved changes"
-  // dialog can prevent accidental data loss.
+  // Lifecycle (PLA-513): a hidden tab is the last moment a write can still be sent, so
+  // hide flushes and then *suspends* - the pending content is retained in the engine, but
+  // no background retry timer may keep probing a dead endpoint while the window is
+  // hidden. Returning to visible resumes, re-arming whatever is still owed (a retry that
+  // is already due fires at once; rapid hide/show can postpone it at most until the tab
+  // is visible again, never indefinitely).
+  //
+  // This mount attaches to the document's save session: the engine is shared across
+  // mounts (never a second writer), and the attach/detach of this view drives the
+  // session's own timers. A rapid remount reattaches to the same engine, so its
+  // pending/in-flight work and confirmed version are intact and not overwritten by
+  // seeding the stale query text.
   useEffect(() => {
-    const detach = flushOnHidden(() => {
-      void engine.flush(latestMarkdownRef.current)
+    // Attach this view: the engine resumes, the listener receives the current true state
+    // (so a retained engine does not show a stale 'Saved' indicator), and no new engine is
+    // created. StrictMode setup/cleanup/setup safely reuses this ownership.
+    session.attach((state, detail) => {
+      setSaveState(state)
+      setSaveDetail(detail ?? null)
     })
-    const detachGuard = installBeforeUnloadGuard(() => engine.isDirty(latestMarkdownRef.current))
-    return () => {
-      detach()
-      detachGuard()
-      void engine.flush(latestMarkdownRef.current)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        void engine.flush(null)
+        engine.suspend()
+      } else {
+        engine.resume()
+      }
     }
-  }, [engine])
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    const detachGuard = installBeforeUnloadGuard(() => engine.isDirty(latestMarkdownRef.current))
+    // A page that mounts while the window is already hidden starts suspended: no retry
+    // timer may begin probing a dead endpoint before the student is looking.
+    if (document.visibilityState === 'hidden') engine.suspend()
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      detachGuard()
+      // Detach this view: drops the React listener, suspends the automatic timers, and
+      // starts/joins the explicit final flush. The session is retained immediately - a
+      // rapid remount reattaches to this very engine (single-writer), and retirement
+      // happens only after the flush confirms nothing more is owed.
+      session.detach()
+    }
+  }, [session, engine, artifactId])
 
   const openDraftDocument = useCallback(() => setDraftDialogOpen(true), [])
 
@@ -764,20 +801,48 @@ export default function DraftWorkspacePage() {
             engine.schedule(markdown)
           }}
           onEditorReady={(view) => {
-            // The engine starts from what the server holds, at the version it holds it, so
-            // the seed document is not a change waiting to be written back.
-            engine.noteSaved(artifact.body, artifact.body_version)
-            latestMarkdownRef.current = seedBody
-            setLatestMarkdown(seedBody)
-            // A body whose math delimiters needed converting is now one edit ahead
-            // of the server. Schedule that edit rather than leaving the two to
-            // diverge: comment anchors and pending-edit diffs are computed
-            // server-side against the stored body, and they would drift from the
-            // text on screen until the student happened to type something.
-            if (seedBody !== artifact.body) engine.schedule(seedBody)
             view.dom.setAttribute('aria-label', 'Draft document')
             // A fresh editor knows nothing of the comments already filed.
             editorRef.current?.setComments(anchorThreadsRef.current)
+            // Seed the engine only when it has no work of its own. A retained engine (a
+            // previous mount) may be holding an in-flight write, a conflict, or a newer
+            // confirmed version - seeding stale query text on top of it would roll the
+            // baseline back and lose newer text.
+            const pending = engine.pendingContent()
+            if (engine.saving() || engine.conflict() !== null || pending !== null) {
+              // The engine's own state is the truth. If bytes are still owed, restore the
+              // editor to it (visibly unsaved), leave the pipeline alone, and let the
+              // engine's own timers do its work.
+              if (pending !== null) {
+                editorRef.current?.reset(pending)
+                latestMarkdownRef.current = pending
+                setLatestMarkdown(pending)
+              }
+              return
+            }
+            // The engine is clean (nothing owed). Follow the server's read, except when the
+            // engine's own confirmed baseline is newer than the query.
+            if (
+              engine.lastSaved() !== artifact.body ||
+              engine.version() !== artifact.body_version
+            ) {
+              if (engine.lastSaved() !== '') {
+                // The engine confirmed a baseline the query does not know about yet (a
+                // retained engine that saved after the query went stale): trust the engine
+                // over the (stale) query and reset the editor to the confirmed baseline.
+                editorRef.current?.reset(engine.lastSaved())
+                latestMarkdownRef.current = engine.lastSaved()
+                setLatestMarkdown(engine.lastSaved())
+                return
+              }
+              // Fresh engine: the read is the baseline.
+              engine.noteSaved(artifact.body, artifact.body_version)
+            }
+            latestMarkdownRef.current = seedBody
+            setLatestMarkdown(seedBody)
+            // A body whose math delimiters needed converting is now one edit ahead of the
+            // server. Schedule that edit rather than leaving the two to diverge.
+            if (seedBody !== artifact.body) engine.schedule(seedBody)
           }}
         />
       </div>

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
+import { OBSERVATION_ERROR_POLL_MS } from '@/lib/hooks/polling-policy'
 import { parseTimestamp } from '@/lib/format'
 import type { DocumentRead, DocumentState } from '@/types'
 
@@ -120,13 +121,18 @@ export function useDocuments(
     queryKey: documentKeys.list(classId),
     queryFn: ({ signal }) => api.listDocuments(classId, signal),
     enabled: options.enabled ?? Number.isFinite(classId),
-    refetchInterval: (query) => documentsPollInterval(query.state.data, options.refetchInterval),
-    // Ingestion does not pause because the student switched windows, and a minute of it is
-    // exactly when they would: reading a document is slow enough to go and do something
-    // else. Without this the poll stops on blur and, since the app turns off
-    // refetch-on-focus, coming back showed the stage it was on when they left until the
-    // page was reloaded by hand.
-    refetchIntervalInBackground: true,
+    refetchInterval: (query) =>
+      query.state.error
+        ? // A failing read backs off to the bounded slow cadence instead of retrying a
+          // dead endpoint at the live cadence.
+          OBSERVATION_ERROR_POLL_MS
+        : documentsPollInterval(query.state.data, options.refetchInterval),
+    // Hiding the window pauses the UI's observation - the backend batch keeps running
+    // on its own, and pausing a refetch never cancels server work - and one authoritative
+    // read on visibility return reconciles the stage the batch reached. A
+    // visible-but-unfocused window keeps observing: the focus manager reads visibility,
+    // not window focus, so this pauses on hidden, not on blur.
+    refetchOnWindowFocus: 'always',
   })
 }
 
@@ -141,13 +147,16 @@ export function useDocumentStatus(documentId: number, enabled = true) {
     queryFn: ({ signal }) => api.getDocumentStatus(documentId, signal),
     enabled: enabled && Number.isFinite(documentId),
     refetchInterval: (query) => {
+      if (query.state.error) return OBSERVATION_ERROR_POLL_MS
       const state = query.state.data?.state
       if (state && isTerminal(state)) return false
       const polls = query.state.dataUpdateCount
       return Math.min(500 + polls * 250, 2000)
     },
-    // Same reason as the list: a backgrounded tab must not freeze a run in progress.
-    refetchIntervalInBackground: true,
+    // Hidden pauses the UI's observation (the server keeps ingesting; a paused refetch
+    // never cancels it), and one read on visibility return reconciles the stage.
+    // Visible-but-unfocused keeps observing, because the focus manager reads visibility.
+    refetchOnWindowFocus: 'always',
   })
 }
 

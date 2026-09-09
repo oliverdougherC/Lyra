@@ -32,12 +32,61 @@ import { reportUpdateSaveState } from '../update-safety'
  *     the stored body moved past that version. A second tab, a slow retry, or an AI pass
  *     that rewrote the body therefore produces a deterministic conflict here rather than a
  *     silent overwrite - and the local text is kept for the student to reconcile.
+ *
+ * Failure scheduling is separate from typing (PLA-513): a healthy keystroke arms the
+ * 1.5-second rest timer, but a *failed* write arms a bounded, increasing retry backoff
+ * (2s, 4s, 8s, ... capped at 60s) so a dead endpoint is not probed 40 times a minute.
+ * Failures are classified: retryable ones (transport, 408/429/5xx) retry on that schedule;
+ * nonretryable ones (other 4xx) stop automatic retries at once and stay visibly `error`
+ * until the student acts - a fresh keystroke or an explicit `flush` always retries at
+ * once. The streak is about the endpoint's outage, not the body: edits during a failure
+ * keep the growing delay (a keystroke still arms the healthy debounce for the new
+ * content), and a suspend/resume cycle shortens the wait to the retry's remaining time
+ * rather than restarting it.
+ *
+ * Lifecycle is explicit: `suspend`/`resume` pause and restore timer ownership (pending
+ * content is retained), and `dispose` is terminal - a late settlement of an in-flight
+ * write applies its data and still settles the update-safety gate (so a confirmed final
+ * save releases its blocker), but can never report React state or re-arm a timer. An
+ * explicit `flush` that is already running when `dispose` lands keeps draining the
+ * newest body: it is the teardown flush, and letting it finish is what stops newer text
+ * from being dropped at unmount.
  */
 
 export type SaveStateName = 'saved' | 'saving' | 'dirty' | 'error' | 'conflict'
 
 /** The pause after the last keystroke that counts as a rest. */
 export const SAVE_DEBOUNCE_MS = 1500
+
+/** The first gap between a failed write and its automatic retry. */
+export const RETRY_BASE_MS = 2000
+
+/** The longest gap between automatic retries; the backoff never grows past this. */
+export const RETRY_MAX_MS = 60_000
+
+/** A write failure, for scheduling: retried automatically (with backoff) or not. */
+export type FailureKind = 'retryable' | 'nonretryable'
+
+/** The delay before the next automatic retry after `attempts` consecutive failures. */
+export function retryDelay(attempts: number): number {
+  if (!Number.isSafeInteger(attempts) || attempts < 1) return RETRY_BASE_MS
+  return Math.min(RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 30), RETRY_MAX_MS)
+}
+
+/**
+ * The classifier's default: no status means the request never landed (a transport
+ * failure - retryable); 408/429 and 5xx are transient server-side (retryable); the other
+ * 4xx refuse the body itself, so retrying it as-is cannot succeed (nonretryable).
+ * Duck-typed on `status` so the engine stays independent of the API layer.
+ */
+export function classifyFailure(error: unknown): FailureKind {
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status !== 'number') return 'retryable'
+  if (status === 408 || status === 429) return 'retryable'
+  if (status >= 500) return 'retryable'
+  if (status >= 400) return 'nonretryable'
+  return 'retryable'
+}
 
 /** What `window.setTimeout` hands back, named once so the engine never repeats it. */
 export type TimerHandle = number
@@ -101,9 +150,47 @@ export interface SaveEngine {
   lastSaved(): string
   /** The version the server confirmed for `lastSaved`, echoed as `expected_version`. */
   version(): number
+  /**
+   * The current true state without reporting it (no side effects). A newly-attached
+   * listener misses the transitions that led here, so it reads off the pipeline directly
+   * instead of waiting for a state that may already be stale.
+   */
+  snapshot(): { state: SaveStateName; detail: string | null }
+  /**
+   * The body still waiting for server confirmation, or null when nothing is pending.
+   * This is what a remount of the same document recovers: the bytes a disposed engine
+   * still owed, so the next engine can re-owe them instead of losing them.
+   */
+  pendingContent(): string | null
+  /** Whether this engine has been disposed (terminal). */
+  disposed(): boolean
   isDirty(current: string | null): boolean
   /** The unresolved stale-version conflict, or null. */
   conflict(): SaveConflict | null
+  /**
+   * Pause timer ownership while keeping the pending work: `desired`, `pendingBody`,
+   * `errorDetail` and any open conflict are all retained, and an in-flight write runs to
+   * completion - but no automatic timer is armed while suspended. A hidden tab calls this
+   * right after its flush so background retries do not keep probing a dead endpoint.
+   */
+  suspend(): void
+  /**
+   * Restore timer ownership after `suspend()`: re-settle, and if a write is still owed and
+   * idle, arm the timer it deserves (the retry backoff when a failure stands, the healthy
+   * debounce otherwise).
+   */
+  resume(): void
+  /**
+   * Terminal teardown for the editing surface leaving. Clears every timer and makes the
+   * engine a read model: `lastSaved`/`version`/`pendingContent`/`isDirty`/`conflict` keep
+   * answering truthfully (so the unsaved-changes guard and the update-safety gate stay
+   * honest), and a late settlement of an in-flight write still applies its data and
+   * settles the update-safety gate - but it never reports React state or re-arms a timer,
+   * and `schedule`/`flush`/reconciliation no longer start work. A `flush` that is already
+   * running when dispose lands is the exception to "no new work": it is the teardown
+   * flush, and it keeps draining the newest body it already owns.
+   */
+  dispose(): void
   /** Reconcile by keeping the local text: rebase onto the server version and write it. */
   keepLocal(content: string): void
   /**
@@ -118,9 +205,20 @@ export function createSaveEngine(opts: {
   onState: (state: SaveStateName, detail?: string) => void
   /** Classify a rejected write as a stale-version conflict, or null for an ordinary failure. */
   isConflict?: (error: unknown) => SaveConflict | null
+  /**
+   * Classify an ordinary (non-conflict) write failure for the retry schedule. Defaults to
+   * `classifyFailure`, which keeps the engine independent of the API layer.
+   */
+  classifyFailure?: (error: unknown) => FailureKind
   debounceMs?: number
+  /**
+   * The update-safety owner symbol. Pass the same symbol for every engine that serves one
+   * document so the gate's blocker survives - and stays resolvable across - remounts.
+   */
+  owner?: symbol
 }): SaveEngine {
   const debounceMs = opts.debounceMs ?? SAVE_DEBOUNCE_MS
+  const classify = opts.classifyFailure ?? classifyFailure
   let timer: TimerHandle | undefined
   let lastSaved = ''
   let version = 0
@@ -148,14 +246,36 @@ export function createSaveEngine(opts: {
   let writeEpoch = 0
   let conflict: SaveConflict | null = null
   let errorDetail: string | undefined
-  // The state is a stream of transitions, not of keystrokes: the fortieth dirty in a row
-  // says nothing the first did not.
-  const updateSaveOwner = Symbol('draft-save')
+  // The retry schedule's memory, separate from the typing debounce: how many consecutive
+  // failures stand, and how the last ordinary failure was classified. The streak is about
+  // the endpoint's outage, not the body: edits during a failure keep it (a keystroke still
+  // arms the healthy debounce for the new content), and only a successful write, a
+  // lost-ack adoption, a confirmed conflict, or an explicit `cancel` ends it.
+  let retryAttempts = 0
+  let failureKind: FailureKind | null = null
+  // When a retryable failure stands, the clock time its next automatic attempt is due: the
+  // backoff is measured from the failure, so a suspend/resume cycle shortens the wait to
+  // the remaining time instead of restarting the backoff - rapid hide/show can postpone a
+  // retry at most until the tab is visible again, never indefinitely.
+  let retryDueAt: number | null = null
+  // Timer ownership. `suspended` keeps all pending state but arms no timers (a hidden
+  // tab); `disposed` is terminal - late settlements apply data but never report or re-arm.
+  let mode: 'live' | 'suspended' | 'disposed' = 'live'
+  // The update-safety gate is keyed by a per-document owner, not by the engine instance:
+  // a remount of the same document must keep - and be able to resolve - the blocker a
+  // previous engine left behind, so the page hands every engine for this document the
+  // same symbol.
+  const updateSaveOwner = opts.owner ?? Symbol('draft-save')
   let reported: SaveStateName = 'saved'
   let reportedDetail: string | undefined
 
   function report(state: SaveStateName, detail?: string): void {
+    // Confirmed durability is read after the editing surface unmounts: the update-safety
+    // gate blocks updates while a save is unconfirmed, so a disposed engine still settles
+    // that bookkeeping (a successful final flush releases its blocker, a failed one keeps
+    // it). Only the React state callback stops at unmount.
     reportUpdateSaveState(updateSaveOwner, state === 'saved')
+    if (mode === 'disposed') return
     if (state === reported && detail === reportedDetail) return
     reported = state
     reportedDetail = detail
@@ -180,18 +300,47 @@ export function createSaveEngine(opts: {
       else report('dirty')
       return
     }
+    // Nothing is owed: clear any pending timer so `isDirty` and the beforeunload guard
+    // are honest (a leftover timer would make `isDirty` return true for a saved engine).
+    clearTimeout(timer)
+    timer = undefined
     report('saved')
   }
 
-  function armTimer(): void {
+  /**
+   * Arm the one automatic timer the engine is allowed to hold. Refused while suspended
+   * (the pending work is remembered in `pendingBody`/`errorDetail` and `resume` re-arms
+   * it) and disposed (nothing may own a timer after teardown).
+   */
+  function armTimer(delayMs: number): void {
+    if (mode !== 'live') return
     clearTimeout(timer)
     timer = window.setTimeout(() => {
       timer = undefined
       void kick()
-    }, debounceMs)
+    }, delayMs)
   }
 
-  /** The debounce fired: start a write if the pipeline is free and there is one owed. */
+  /**
+   * Arm whatever the pipeline currently owes, if anything: a healthy debounce for newer
+   * content, the remaining backoff after a retryable failure, and nothing at all when a
+   * nonretryable failure stands - the error stays visible until a keystroke or an
+   * explicit flush retries it (PLA-513).
+   */
+  function armIfOwed(): void {
+    if (conflict || inFlight || pendingBody === null) return
+    if (failureKind === 'nonretryable') return
+    if (failureKind === 'retryable') {
+      // Wait until the failure's own deadline; any time spent suspended has already
+      // counted, so this only ever shrinks toward zero, never restarts.
+      const due = retryDueAt ?? Date.now() + retryDelay(retryAttempts)
+      armTimer(Math.max(0, due - Date.now()))
+      return
+    }
+    armTimer(debounceMs)
+  }
+
+  /** The timer fired: start a write if the pipeline is free and there is one owed. */
   function kick(): void {
     if (inFlight || conflict || pendingBody === null) {
       settle()
@@ -200,10 +349,10 @@ export function createSaveEngine(opts: {
     void beginWrite().then(afterAutoWrite)
   }
 
-  /** After a debounce-driven write settles, re-arm for newer content or a retry. */
+  /** After an automatic write settles, re-arm for newer content or a retry. */
   function afterAutoWrite(): void {
     settle()
-    if (!conflict && pendingBody !== null) armTimer()
+    armIfOwed()
   }
 
   /**
@@ -241,6 +390,10 @@ export function createSaveEngine(opts: {
         lastSaved = writing
         version = (outcome as WriteOutcome).version
         errorDetail = undefined
+        // The failure streak ended: the next failure starts the backoff from the base.
+        retryAttempts = 0
+        failureKind = null
+        retryDueAt = null
         // Recompute against the newest desired body, not merely the body we just wrote: a
         // revert-while-writing leaves `desired` behind `writing`, and that corrective write
         // is still owed.
@@ -257,12 +410,24 @@ export function createSaveEngine(opts: {
         lastSaved = writing
         version = detected.serverVersion
         errorDetail = undefined
+        retryAttempts = 0
+        failureKind = null
+        retryDueAt = null
         pendingBody = desired !== lastSaved ? desired : null
       } else if (detected) {
-        // Keep pendingBody: the local text is not lost, it is waiting to be reconciled.
+        // Keep pendingBody: the local text is not lost, it is waiting to be reconciled. A
+        // conflict owns the pipeline from here, so the failure streak is moot.
         conflict = detected
+        retryAttempts = 0
+        failureKind = null
+        retryDueAt = null
       } else {
         errorDetail = failure instanceof Error ? failure.message : String(failure)
+        failureKind = classify(failure)
+        if (failureKind === 'retryable') {
+          retryAttempts += 1
+          retryDueAt = Date.now() + retryDelay(retryAttempts)
+        }
       }
     })()
     // Assign before reporting so `settle()` sees the write and reports `saving`.
@@ -273,7 +438,7 @@ export function createSaveEngine(opts: {
 
   /** Start a write if one is owed and the pipeline is free and unblocked by a conflict. */
   function pump(): void {
-    if (conflict || inFlight || pendingBody === null) return
+    if (mode === 'disposed' || conflict || inFlight || pendingBody === null) return
     void beginWrite().then(afterAutoWrite)
   }
 
@@ -281,6 +446,12 @@ export function createSaveEngine(opts: {
     // Drive the server to the newest desired body, one owner throughout: never start a
     // second write while one is in flight. Stops on a conflict (needs the student) or an
     // ordinary failure (leave it dirty+error rather than hot-looping a dead endpoint).
+    //
+    // A drain that is already running keeps going when `dispose` lands mid-way: it is the
+    // explicit final flush, and letting it finish is what keeps newer text from being
+    // dropped at teardown. That is not "new work on a disposed engine" - nothing else may
+    // start work there (schedule/pump/arm all refuse once disposed), so the flush simply
+    // completes the pipeline it already owns, then settles and stops.
     while (!conflict) {
       if (inFlight) {
         await inFlight.catch(() => undefined)
@@ -295,6 +466,11 @@ export function createSaveEngine(opts: {
       if (conflict || errorDetail !== undefined) break
     }
     settle()
+    // A flush that ends on a failure owes the same retry a failed autosave owes - the
+    // backoff timer, never the typing debounce; a flush that ends clean with newer content
+    // owed owes the healthy debounce. Explicit flushes always attempt immediately; this
+    // only schedules the next automatic attempt.
+    armIfOwed()
   }
 
   /** The flush verdict, read off where the pipeline came to rest. */
@@ -306,6 +482,7 @@ export function createSaveEngine(opts: {
 
   return {
     schedule(content: string): void {
+      if (mode === 'disposed') return
       desired = content
       if (conflict) {
         // Still unreconciled: track the newest local text so a resolution can write it,
@@ -321,20 +498,35 @@ export function createSaveEngine(opts: {
       // `lastSaved`.
       const heading = inFlight ? (inFlightBody as string) : lastSaved
       if (content === heading) {
+        // Nothing is owed anymore: the pipeline's destination is exactly what the editor
+        // now holds.
         pendingBody = null
         errorDetail = undefined
+        failureKind = null
+        retryAttempts = 0
+        retryDueAt = null
         clearTimeout(timer)
         timer = undefined
         settle()
         return
       }
       pendingBody = content
-      // A fresh keystroke supersedes a stale error label; the retry rides the new content.
-      errorDetail = undefined
-      settle()
-      armTimer()
+      // New bytes during an outage share the existing retry deadline. Explicit
+      // flush can retry immediately; typing must not restart a rapid failure loop.
+      if (failureKind === 'retryable') {
+        settle()
+        armIfOwed()
+      } else {
+        errorDetail = undefined
+        settle()
+        armTimer(debounceMs)
+      }
     },
     async flush(content): Promise<FlushResult> {
+      if (mode === 'disposed') {
+        // Terminal: the flush reports where the pipeline stands but never starts work.
+        return flushResult()
+      }
       clearTimeout(timer)
       timer = undefined
       if (content != null) desired = content
@@ -349,10 +541,14 @@ export function createSaveEngine(opts: {
       return flushResult()
     },
     cancel(): void {
+      if (mode === 'disposed') return
       clearTimeout(timer)
       timer = undefined
       pendingBody = null
       errorDetail = undefined
+      failureKind = null
+      retryAttempts = 0
+      retryDueAt = null
       // Dropping unsaved work means the editor no longer wants anything the server lacks.
       if (inFlight === null) desired = lastSaved
       if (!conflict) settle()
@@ -360,6 +556,7 @@ export function createSaveEngine(opts: {
     pending: () => timer !== undefined,
     saving: () => inFlight !== null,
     noteSaved(content: string, nextVersion: number): void {
+      if (mode === 'disposed') return
       lastSaved = content
       version = nextVersion
       desired = content
@@ -370,7 +567,37 @@ export function createSaveEngine(opts: {
       writeEpoch += 1
       settle()
     },
+    suspend(): void {
+      if (mode === 'disposed') return
+      mode = 'suspended'
+      // Clear only the timer. The pending state is the whole point: `desired`/
+      // `pendingBody`/`errorDetail`/`conflict` all survive, an in-flight write still
+      // runs to completion (its settlement applies data but arms nothing), and
+      // `resume` re-arms whatever is still owed.
+      clearTimeout(timer)
+      timer = undefined
+    },
+    resume(): void {
+      if (mode === 'disposed') return
+      mode = 'live'
+      settle()
+      armIfOwed()
+    },
+    dispose(): void {
+      if (mode === 'disposed') return
+      mode = 'disposed'
+      // Clear the timers and stop reporting React state. Everything else is retained on
+      // purpose: `isDirty`/`lastSaved`/`version`/`pendingContent`/`conflict` must keep
+      // telling the truth after the editing surface leaves (the unsaved-changes guard and
+      // the update-safety gate both read them), and a late in-flight settlement may still
+      // apply its data and settle the safety gate - it just never speaks to React or
+      // re-arms a timer (PLA-513). A final flush already running keeps draining: it owns
+      // the pipeline and finishes it, but arms nothing and admits no new owner.
+      clearTimeout(timer)
+      timer = undefined
+    },
     forceConflict(serverBody: string, serverVersion: number): void {
+      if (mode === 'disposed') return
       conflict = { serverVersion, serverBody }
       // Whatever the editor last wanted is the local text to reconcile; keep it pending so
       // a `keepLocal` resolution has it, and never clear it.
@@ -383,6 +610,22 @@ export function createSaveEngine(opts: {
     },
     lastSaved: () => lastSaved,
     version: () => version,
+    snapshot(): { state: SaveStateName; detail: string | null } {
+      // Mirror `settle()` without calling `report()`: same decision, no side effects,
+      // so a new listener can immediately show the true state.
+      if (conflict) return { state: 'conflict', detail: null }
+      if (inFlight) return { state: 'saving', detail: null }
+      if (pendingBody !== null || desired !== lastSaved) {
+        if (errorDetail !== undefined) return { state: 'error', detail: errorDetail }
+        return { state: 'dirty', detail: null }
+      }
+      return { state: 'saved', detail: null }
+    },
+    // The bytes still owed to the server, read straight off where the pipeline stands.
+    // Survives dispose on purpose: it is the recovery payload a remount of this document
+    // re-owes instead of silently dropping.
+    pendingContent: () => (desired !== lastSaved ? desired : null),
+    disposed: () => mode === 'disposed',
     isDirty(current: string | null): boolean {
       if (conflict !== null || pendingBody !== null || inFlight !== null) return true
       if (timer !== undefined || desired !== lastSaved) return true
@@ -390,7 +633,7 @@ export function createSaveEngine(opts: {
     },
     conflict: () => conflict,
     keepLocal(content: string): void {
-      if (!conflict) return
+      if (mode === 'disposed' || !conflict) return
       // The conflict is proof the server holds `serverBody` at `serverVersion`; that pair is
       // now the authoritative baseline, NOT the pre-conflict `lastSaved` (which the conflict
       // just disproved). Adopt it as the base so a write of the local text compare-and-swaps
@@ -422,7 +665,7 @@ export function createSaveEngine(opts: {
       pump()
     },
     takeServer(): SaveConflict | null {
-      if (!conflict) return null
+      if (mode === 'disposed' || !conflict) return null
       const resolved = conflict
       lastSaved = resolved.serverBody
       version = resolved.serverVersion

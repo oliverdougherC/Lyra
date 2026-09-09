@@ -14,6 +14,12 @@
  * whole set re-resolves against the new document - the passage may survive elsewhere,
  * and a quote that no longer matches simply loses its underline (the rail still lists
  * the finding; the server is the authority on orphaning).
+ *
+ * Within one resolution pass, the normalized document forms are built once and shared
+ * by every thread (PLA-512): the whitespace-normalized text always, the canonical
+ * case/punctuation form only when some thread misses it. And a flash/unflash never
+ * re-resolves at all: the plugin remembers each thread's resolved range and rebuilds
+ * the decoration set from those ranges, changing only the one thread's attributes.
  */
 
 import type { Node } from '@milkdown/kit/prose/model'
@@ -32,7 +38,23 @@ export interface AnchorThread {
   severity: CommentSeverity | null
 }
 
-type PluginState = { threads: AnchorThread[]; flashId: number | null; decorations: DecorationSet }
+/** Where one thread's quote resolved, in document coordinates. */
+export interface ResolvedAnchor {
+  id: number
+  from: number
+  to: number
+}
+
+type PluginState = {
+  threads: AnchorThread[]
+  flashId: number | null
+  ranges: ResolvedAnchor[]
+  decorations: DecorationSet
+  /** How many full quote resolutions have run on this plugin instance. */
+  resolutions: number
+  /** How many flash-driven rebuilds from stored ranges have run. */
+  rebuilds: number
+}
 
 type Meta =
   | { type: 'set'; threads: AnchorThread[] }
@@ -41,58 +63,103 @@ type Meta =
 
 const key = new PluginKey<PluginState>('lyra-comment-highlights')
 
-export const commentHighlightsPlugin = $prose(
-  () =>
-    new Plugin<PluginState>({
-      key,
-      state: {
-        init: () => ({ threads: [], flashId: null, decorations: DecorationSet.empty }),
-        apply(tr: Transaction, state: PluginState): PluginState {
-          const meta = tr.getMeta(key) as Meta | undefined
-          if (meta?.type === 'set') {
-            return {
-              threads: meta.threads,
-              flashId: state.flashId,
-              decorations: resolveAnchors(tr.doc, meta.threads, state.flashId),
-            }
+/** The raw plugin, exported so tests can drive the production state through a real EditorState. */
+export function createCommentPlugin(): Plugin<PluginState> {
+  return new Plugin<PluginState>({
+    key,
+    state: {
+      init: () => ({
+        threads: [],
+        flashId: null,
+        ranges: [],
+        decorations: DecorationSet.empty,
+        resolutions: 0,
+        rebuilds: 0,
+      }),
+      apply(tr: Transaction, state: PluginState): PluginState {
+        // The document change is authoritative first: a transaction that edits the text
+        // AND carries flash/unflash metadata in the same step must map (or re-resolve)
+        // the decorations and ranges before styling, or the flash would paint the
+        // pre-edit coordinates.
+        let current = state
+        if (tr.docChanged) {
+          // Keep the stored ranges in step with the decorations: a flash later rebuilds
+          // from them, and a stale range would resurrect a pre-edit position.
+          const mapping = tr.mapping
+          const mappedRanges: ResolvedAnchor[] = []
+          for (const range of state.ranges) {
+            const from = mapping.map(range.from)
+            const to = mapping.map(range.to)
+            if (to > from) mappedRanges.push({ ...range, from, to })
           }
-          // The flash lives in the decoration attributes, not in DOM classes: the
-          // editor redraws its decorations on scroll, and a class added DOM-side was
-          // gone before anyone saw it - verified live.
-          if (meta?.type === 'flash') {
-            return {
-              threads: state.threads,
-              flashId: meta.id,
-              decorations: resolveAnchors(tr.doc, state.threads, meta.id),
-            }
-          }
-          if (meta?.type === 'unflash') {
-            if (state.flashId !== meta.id) return state
-            return {
-              threads: state.threads,
-              flashId: null,
-              decorations: resolveAnchors(tr.doc, state.threads, null),
-            }
-          }
-          if (!tr.docChanged) return state
-          const mapped = state.decorations.map(tr.mapping, tr.doc)
+          const mapped = state.decorations.map(mapping, tr.doc)
           // A structural edit that swallowed an anchor whole: re-resolve everything,
           // because the passage may have survived somewhere the mapping cannot see.
-          if (mapped.find().length < state.decorations.find().length) {
-            return {
+          if (mappedRanges.length < state.ranges.length) {
+            const { ranges, decorations } = resolvePass(tr.doc, state.threads, state.flashId)
+            current = {
               threads: state.threads,
               flashId: state.flashId,
-              decorations: resolveAnchors(tr.doc, state.threads, state.flashId),
+              ranges,
+              decorations,
+              resolutions: state.resolutions + 1,
+              rebuilds: state.rebuilds,
             }
+          } else {
+            current = { ...state, ranges: mappedRanges, decorations: mapped }
           }
-          return { threads: state.threads, flashId: state.flashId, decorations: mapped }
-        },
+        }
+        const meta = tr.getMeta(key) as Meta | undefined
+        if (meta?.type === 'set') {
+          const { ranges, decorations } = resolvePass(tr.doc, meta.threads, current.flashId)
+          return {
+            threads: meta.threads,
+            flashId: current.flashId,
+            ranges,
+            decorations,
+            resolutions: current.resolutions + 1,
+            rebuilds: current.rebuilds,
+          }
+        }
+        // The flash lives in the decoration attributes, not in DOM classes: the
+        // editor redraws its decorations on scroll, and a class added DOM-side was
+        // gone before anyone saw it - verified live. The ranges are already resolved,
+        // so a flash rebuilds the set from them and does not re-run a single quote
+        // search (PLA-512).
+        if (meta?.type === 'flash') {
+          return {
+            threads: current.threads,
+            flashId: meta.id,
+            ranges: current.ranges,
+            decorations: anchorDecorations(tr.doc, current.threads, current.ranges, meta.id),
+            resolutions: current.resolutions,
+            rebuilds: current.rebuilds + 1,
+          }
+        }
+        if (meta?.type === 'unflash') {
+          if (current.flashId !== meta.id) return current
+          return {
+            threads: current.threads,
+            flashId: null,
+            ranges: current.ranges,
+            decorations: anchorDecorations(tr.doc, current.threads, current.ranges, null),
+            resolutions: current.resolutions,
+            rebuilds: current.rebuilds + 1,
+          }
+        }
+        return current
       },
-      props: {
-        decorations: (state: EditorState) => key.getState(state)?.decorations,
-      },
-    }),
-)
+    },
+    props: {
+      decorations: (state: EditorState) => key.getState(state)?.decorations,
+    },
+  })
+}
+
+export const commentHighlightsPlugin = $prose(() => createCommentPlugin())
+
+/** The plugin key, exported so tests can read the plugin state from a plain EditorState. */
+export const commentPluginKey = key
 
 /** Hand the plugin the current unresolved threads; it re-resolves and re-decorates. */
 export function setComments(view: EditorView, threads: AnchorThread[]): void {
@@ -127,19 +194,50 @@ export function jumpToComment(view: EditorView, commentId: number): boolean {
   return true
 }
 
-/** An underline plus a compact gutter marker per resolvable thread. */
+/**
+ * Resolve every thread against one shared document index and build the decorations.
+ * The per-pass sharing is the whole point of the index (PLA-512): one flatten, one
+ * whitespace normalization, at most one canonicalization, no matter how many threads
+ * or misses there are.
+ */
+export function resolvePass(
+  doc: Node,
+  threads: AnchorThread[],
+  flashId: number | null = null,
+): { ranges: ResolvedAnchor[]; decorations: DecorationSet } {
+  const index = buildDocIndex(flattenDoc(doc))
+  const ranges: ResolvedAnchor[] = []
+  for (const thread of threads) {
+    const range = findQuoteIn(index, thread.quote)
+    if (range) ranges.push({ id: thread.id, from: range.from, to: range.to })
+  }
+  ranges.sort((a, b) => a.from - b.from || a.id - b.id)
+  return { ranges, decorations: anchorDecorations(doc, threads, ranges, flashId) }
+}
+
+/** The public entry point tests and one-off callers use; the plugin uses `resolvePass`. */
 export function resolveAnchors(
   doc: Node,
   threads: AnchorThread[],
   flashId: number | null = null,
 ): DecorationSet {
-  const flat = flattenDoc(doc)
+  return resolvePass(doc, threads, flashId).decorations
+}
+
+/** Build the underline + gutter-marker decorations for the already-resolved ranges. */
+function anchorDecorations(
+  doc: Node,
+  threads: AnchorThread[],
+  ranges: ResolvedAnchor[],
+  flashId: number | null,
+): DecorationSet {
+  const byId = new Map<number, AnchorThread>(threads.map((thread) => [thread.id, thread]))
   const decorations: Decoration[] = []
-  for (const thread of threads) {
-    const range = findQuote(flat, thread.quote)
-    if (!range) continue
+  for (const range of ranges) {
+    const thread = byId.get(range.id)
+    if (!thread) continue
     const severity = thread.severity ?? 'note'
-    const flash = thread.id === flashId ? ' comment-anchor--flash' : ''
+    const flash = range.id === flashId ? ' comment-anchor--flash' : ''
     decorations.push(
       Decoration.inline(
         range.from,
@@ -199,6 +297,48 @@ export function flattenDoc(doc: Node): FlatDoc {
   return { text, positions }
 }
 
+type Normalized = { norm: string; map: number[] }
+
+/**
+ * The per-pass shared index over one document snapshot: the flattened text plus lazily
+ * built normalized forms. `space()` collapses whitespace (the primary match);
+ * `canonical()` folds case/punctuation and memoizes the word list for fuzzy matching,
+ * built only when some thread misses the primary form. `builds` counts how often each
+ * form was actually constructed, so a test can prove the sharing: exactly one space
+ * build and at most one canonical build per pass, no matter how many threads.
+ */
+export interface DocIndex {
+  flat: FlatDoc
+  space: () => Normalized
+  canonical: () => Normalized & { words: Word[] }
+  builds: { space: number; canonical: number }
+}
+
+export function buildDocIndex(flat: FlatDoc): DocIndex {
+  let space: Normalized | null = null
+  let canon: (Normalized & { words: Word[] }) | null = null
+  const builds = { space: 0, canonical: 0 }
+  return {
+    flat,
+    builds,
+    space: () => {
+      if (!space) {
+        space = normalizeWithMap(flat.text)
+        builds.space += 1
+      }
+      return space
+    },
+    canonical: () => {
+      if (!canon) {
+        const base = canonicalWithMap(flat.text)
+        canon = { ...base, words: wordsIn(base.norm) }
+        builds.canonical += 1
+      }
+      return canon
+    },
+  }
+}
+
 /**
  * A markdown quote, reduced to what the rendered document actually shows: heading
  * hashes, emphasis and code markers, list bullets, blockquote angles, link targets,
@@ -217,35 +357,40 @@ export function stripMarkdownQuote(quote: string): string {
 
 /** Where the quote sits in the document, as ProseMirror positions, or null. */
 export function findQuote(flat: FlatDoc, quote: string): { from: number; to: number } | null {
+  return findQuoteIn(buildDocIndex(flat), quote)
+}
+
+/** The same lookup against a shared pass index, so one pass normalizes once. */
+export function findQuoteIn(index: DocIndex, quote: string): { from: number; to: number } | null {
   const stripped = stripMarkdownQuote(quote)
   const target = normalizeSpace(stripped)
-  if (!target || flat.text.length === 0) return null
-  const { norm, map } = normalizeWithMap(flat.text)
-  let index = norm.indexOf(target)
-  let endIndex = index === -1 ? -1 : index + target.length - 1
+  if (!target || index.flat.text.length === 0) return null
+  const space = index.space()
+  let found = space.norm.indexOf(target)
+  let endIndex = found === -1 ? -1 : found + target.length - 1
+  let normalizedMap = space.map
 
   // Match the server's punctuation/case normalization before its conservative fuzzy
   // fallback. A model that copied curly quotes as straight quotes should not create a
   // server-side anchor that disappears in the editor.
-  let normalizedMap = map
-  if (index === -1) {
-    const canonicalDoc = canonicalWithMap(flat.text)
+  if (found === -1) {
+    const canon = index.canonical()
     const canonicalTarget = canonical(stripped)
     if (!canonicalTarget) return null
-    index = canonicalDoc.norm.indexOf(canonicalTarget)
-    endIndex = index === -1 ? -1 : index + canonicalTarget.length - 1
-    normalizedMap = canonicalDoc.map
-    if (index === -1) {
-      const fuzzy = fuzzySubstring(canonicalDoc.norm, canonicalTarget)
+    found = canon.norm.indexOf(canonicalTarget)
+    endIndex = found === -1 ? -1 : found + canonicalTarget.length - 1
+    normalizedMap = canon.map
+    if (found === -1) {
+      const fuzzy = fuzzySubstring(canon.norm, canonicalTarget, canon.words)
       if (!fuzzy) return null
-      index = fuzzy.from
+      found = fuzzy.from
       endIndex = fuzzy.to - 1
     }
   }
 
-  const startFlat = normalizedMap[index]
+  const startFlat = normalizedMap[found]
   const endFlat = normalizedMap[endIndex]
-  return { from: flat.positions[startFlat], to: flat.positions[endFlat] + 1 }
+  return { from: index.flat.positions[startFlat], to: index.flat.positions[endFlat] + 1 }
 }
 
 function normalizeSpace(value: string): string {
@@ -253,7 +398,7 @@ function normalizeSpace(value: string): string {
 }
 
 /** Whitespace runs collapsed to single spaces; `map[i]` = raw offset of `norm[i]`. */
-function normalizeWithMap(content: string): { norm: string; map: number[] } {
+function normalizeWithMap(content: string): Normalized {
   let norm = ''
   const map: number[] = []
   let inSpace = false
@@ -296,7 +441,7 @@ function canonical(value: string): string {
   return canonicalWithMap(value).norm.trim()
 }
 
-function canonicalWithMap(content: string): { norm: string; map: number[] } {
+function canonicalWithMap(content: string): Normalized {
   let norm = ''
   const map: number[] = []
   let inSpace = false
@@ -324,11 +469,19 @@ function canonicalWithMap(content: string): { norm: string; map: number[] } {
 
 type Word = { value: string; from: number; to: number }
 
-/** The same conservative shape as the server: enough words, token coverage, and similarity. */
-function fuzzySubstring(content: string, target: string): { from: number; to: number } | null {
-  const words = wordsIn(content)
+/**
+ * The same conservative shape as the server: enough words, token coverage, and
+ * similarity. The word list is memoized in the pass index, so a pass with many misses
+ * tokenizes the document once.
+ */
+function fuzzySubstring(
+  content: string,
+  target: string,
+  words?: Word[],
+): { from: number; to: number } | null {
+  const corpus = words ?? wordsIn(content)
   const targetWords = wordsIn(target)
-  if (targetWords.length < 4 || target.length < 20 || words.length === 0) return null
+  if (targetWords.length < 4 || target.length < 20 || corpus.length === 0) return null
   const targetSet = new Set(targetWords.map((word) => word.value))
   const spread = Math.max(1, Math.round(targetWords.length * 0.15))
   const candidates: Array<{ score: number; from: number; to: number }> = []
@@ -337,8 +490,8 @@ function fuzzySubstring(content: string, target: string): { from: number; to: nu
     size <= targetWords.length + spread;
     size++
   ) {
-    for (let index = 0; index + size <= words.length; index++) {
-      const window = words.slice(index, index + size)
+    for (let index = 0; index + size <= corpus.length; index++) {
+      const window = corpus.slice(index, index + size)
       const covered = new Set(
         window.map((word) => word.value).filter((word) => targetSet.has(word)),
       )

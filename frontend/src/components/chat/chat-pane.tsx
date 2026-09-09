@@ -6,10 +6,12 @@ import { ArrowDown } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Composer } from '@/components/chat/composer'
+import { chatWork } from '@/components/chat/work-counters'
 import { LyraMark } from '@/components/chat/lyra-mark'
 import { Asterism } from '@/components/ui/asterism'
 import { HeaderActions } from '@/components/layout/page-chrome'
 import { MessageRow, type ChatMessage } from '@/components/chat/message-bubble'
+import { startsTimeGapBetween, type SettledHandoff } from '@/components/chat/settled-transcript'
 import { isProcessingStage, type ProcessingStage } from '@/components/chat/thinking-indicator'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { Button } from '@/components/ui/button'
@@ -27,13 +29,19 @@ import {
 } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
-import { invalidateAgentTurnCaches } from '@/lib/hooks/use-agent'
+import {
+  beginAgentTurnObservation,
+  endAgentTurnObservation,
+  invalidateAgentTurnCaches,
+} from '@/lib/hooks/use-agent'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
 import type { ChatEvent, ChatMode, MessageRead, WriterActivity } from '@/types'
+
+let nextAgentObservationOwner = 0
 
 const MODES: { value: ChatMode; label: string; hint: string }[] = [
   {
@@ -147,9 +155,6 @@ const STICK_THRESHOLD_PX = 64
 /** How long after a wheel, touch, or key press a scroll still counts as the reader's. */
 const USER_SCROLL_WINDOW_MS = 700
 
-/** A pause long enough that the reader will want to know when the thread resumed. */
-const TIME_GAP_MS = 60 * 60 * 1000
-
 // A settling Stop's status poll: a calm interval, a generous bound. The server keeps the
 // stopped turn's request (and its connection) open only as long as its late workers
 // remain, and those workers bound their own work (network timeouts, the command
@@ -159,16 +164,8 @@ const TIME_GAP_MS = 60 * 60 * 1000
 const _STOP_SETTLE_POLL_MS = 750
 const _STOP_SETTLE_LIMIT_MS = 12 * 60 * 1000
 
-function startsTimeGap(messages: ChatMessage[], index: number): boolean {
-  if (index === 0) return true
-  const previous = messages[index - 1]
-  if (!previous) return false
-  return (
-    parseTimestamp(messages[index].created_at).getTime() -
-      parseTimestamp(previous.created_at).getTime() >
-    TIME_GAP_MS
-  )
-}
+/** No turn in flight: no rows of its own. A shared reference, so its absence is stable. */
+const EMPTY_LIVE_ROWS: ChatMessage[] = []
 
 type TurnOutcome = 'active' | 'completed' | 'stopped' | 'failed'
 
@@ -427,22 +424,10 @@ export function ChatPane({
    * persisted — verified against the refetched list, never to a tail position — so a
    * late, failed, or reshuffled refetch cannot hand one message the identity of another.
    * It is retired when the pane leaves the conversation.
+   *
+   * The shape itself lives with the settled transcript, which is the only reader that
+   * resolves rows against it (settled-transcript.tsx).
    */
-  type SettledHandoff = {
-    turnId: number
-    sessionId: number
-    /** The settled answer row keeps this key (the key its optimistic twin streamed under). */
-    assistantId: number
-    assistantKey: string
-    /** Set when the turn's user row verified (adjacent, same text); otherwise the user
-     *  row settles under its own persisted ID. */
-    userId?: number
-    userKey?: string
-    /** A selection the reader held inside the live answer, as text offsets: the static
-     *  renderer swaps the row's inner nodes, which resets a live selection even with the
-     *  same outer node, so the handoff carries the range back. */
-    selection?: { anchor: number; focus: number }
-  }
   const [settledHandoffs, setSettledHandoffs] = useState<SettledHandoff[]>([])
 
   /**
@@ -457,25 +442,45 @@ export function ChatPane({
   const recheckTimerRef = useRef<number | null>(null)
 
   /**
-   * Frame-cadence publication of the streaming answer.
+   * Frame-cadence publication of the streaming answer, and the same for the live
+   * reasoning text (PLA-510: reasoning used to publish on every event — one full pane
+   * render per event, closed disclosure or not).
    *
    * Tokens arrive in network reads, several of which can resolve inside one frame;
    * publishing each read as its own state update is what turns a burst into a burst of
-   * commits. The queue holds at most one pending publication per frame: reads after the
-   * first just refresh the pending text, and the frame (a hidden tab: a bounded timer,
-   * since rAF is withheld there) publishes it once. The first useful text of an answer
-   * publishes immediately — the reader's wait for the first word does not run a cadence —
-   * and terminal, reset, and unmount publish or invalidate synchronously: the last text
-   * never waits on a frame that may not come.
+   * commits. Each queue holds at most one pending publication per frame: reads after the
+   * first just refresh the pending text, and the frame publishes it once. The first
+   * useful text of a channel publishes immediately — the reader's wait for the first word
+   * does not run a cadence — and terminal, reset, and unmount publish or invalidate
+   * synchronously: the last text never waits on a frame that may not come.
+   *
+   * Hidden windows (PLA-509): a genuinely hidden document (`document.visibilityState`
+   * `hidden`) is owed no frames, so while it is hidden a token only refreshes the held
+   * pending text — no rAF, no timer, no commit — and the pane reconciles on
+   * `visibilitychange` by flushing whatever the stream gathered while away. Losing
+   * *focus* is not hidden: a visible side-by-side window keeps its per-frame cadence.
+   * Terminal frames flush synchronously in either state, and ingestion never pauses.
    */
   const publishRef = useRef<{
     owner: number | null
     pending: string | null
     raf: number | null
-    timer: number | null
-  }>({ owner: null, pending: null, raf: null, timer: null })
+  }>({ owner: null, pending: null, raf: null })
   /** The last text actually published to the rows; '' until the answer's first word. */
   const lastPublishedTextRef = useRef('')
+  const reasoningPubRef = useRef<{
+    owner: number | null
+    pending: string | null
+    raf: number | null
+  }>({ owner: null, pending: null, raf: null })
+  /** The last reasoning text actually published; '' until the first thought arrives. */
+  const lastPublishedThinkingRef = useRef('')
+  /**
+   * Whether the live reasoning disclosure is open (PLA-509): a closed disclosure owes no
+   * publications — its header label ticks itself, and the thought behind it is one click
+   * away, flushed in full the moment the reader opens it.
+   */
+  const reasoningOpenRef = useRef(false)
 
   const bumpRevealGeneration = useCallback(() => {
     revealGenRef.current = `g${Number(revealGenRef.current.slice(1)) + 1}`
@@ -487,33 +492,52 @@ export function ChatPane({
   const invalidatePublication = useCallback(() => {
     const pub = publishRef.current
     if (pub.raf !== null) cancelAnimationFrame(pub.raf)
-    if (pub.timer !== null) window.clearTimeout(pub.timer)
     pub.raf = null
-    pub.timer = null
     pub.pending = null
     pub.owner = null
   }, [])
 
-  /** Publish the pending text now, on this microtask: no frame in the path. Used when a
-   *  terminal frame lands — the answer's last text must not wait on an animation frame
-   *  that a hidden tab may withhold — and by the frame callback itself. */
+  const invalidateReasoningPublication = useCallback(() => {
+    const pub = reasoningPubRef.current
+    if (pub.raf !== null) cancelAnimationFrame(pub.raf)
+    pub.raf = null
+    pub.pending = null
+    pub.owner = null
+  }, [])
+
+  /** Publish the pending answer text now, on this microtask: no frame in the path. Used
+   *  when a terminal frame lands — the answer's last text must not wait on an animation
+   *  frame — and when the window comes back from hidden. */
   const flushPublication = useCallback(() => {
     const pub = publishRef.current
     if (pub.raf !== null) cancelAnimationFrame(pub.raf)
-    if (pub.timer !== null) window.clearTimeout(pub.timer)
     pub.raf = null
-    pub.timer = null
     const { owner, pending } = pub
     pub.pending = null
     if (owner === null || pending === null) return
     lastPublishedTextRef.current = pending
+    chatWork.answerPublications += 1
     setStreamText(pending)
   }, [])
 
+  const flushReasoningPublication = useCallback(() => {
+    const pub = reasoningPubRef.current
+    if (pub.raf !== null) cancelAnimationFrame(pub.raf)
+    pub.raf = null
+    const { owner, pending } = pub
+    pub.pending = null
+    if (owner === null || pending === null) return
+    lastPublishedThinkingRef.current = pending
+    chatWork.reasoningPublications += 1
+    setStreamThinking(pending)
+  }, [])
+
   /**
-   * Queue one publication. If one is already queued this frame, the read only refreshes
-   * the pending text — at most one commit per frame no matter how many reads resolved in
-   * it. The first useful word of an answer skips the queue entirely.
+   * Queue one answer publication. If one is already queued this frame, the read only
+   * refreshes the pending text — at most one commit per frame no matter how many reads
+   * resolved in it. The first useful word of an answer skips the queue entirely. Hidden:
+   * the text is held (never lost — the transport keeps accumulating) and the window's
+   * return publishes it.
    */
   const schedulePublication = useCallback(
     (owner: number, text: string) => {
@@ -526,38 +550,105 @@ export function ChatPane({
       }
       if (lastPublishedTextRef.current === '' && text.length > 0) {
         lastPublishedTextRef.current = text
+        chatWork.answerPublications += 1
         setStreamText(text)
         return
       }
       pub.pending = text
       if (pub.raf !== null) return
+      if (document.visibilityState === 'hidden') return
       const fire = () => {
         const p = publishRef.current
         if (p.raf !== null) cancelAnimationFrame(p.raf)
-        if (p.timer !== null) window.clearTimeout(p.timer)
         p.raf = null
-        p.timer = null
         if (p.pending === null || p.owner !== owner) return
         lastPublishedTextRef.current = p.pending
+        chatWork.answerPublications += 1
         setStreamText(p.pending)
         p.pending = null
       }
       pub.raf = requestAnimationFrame(fire)
-      // A hidden tab withholds rAF until the reader looks again; a bounded timer keeps
-      // the published text from stranding the stream while the tab is away.
-      pub.timer = window.setTimeout(fire, 64)
     },
     [invalidatePublication],
   )
 
-  /** Unmounted panes carry no frames: the pending publication dies with the pane. */
+  /**
+   * Queue one reasoning publication with the same frame cadence as the answer: one
+   * pending thought per frame, the first word immediate, the rest coalesced — but a
+   * CLOSED disclosure owes no further publications (PLA-509): its header label ticks
+   * itself, and the thought behind it is flushed in full the moment the reader opens
+   * it. The pending slot always mirrors the transport buffer, so an open-flush or a
+   * terminal flush always reaches the latest word, published or not.
+   */
+  const scheduleReasoningPublication = useCallback(
+    (owner: number, text: string) => {
+      const pub = reasoningPubRef.current
+      if (pub.owner !== owner) {
+        invalidateReasoningPublication()
+        pub.owner = owner
+      }
+      if (lastPublishedThinkingRef.current === '' && text.length > 0) {
+        lastPublishedThinkingRef.current = text
+        chatWork.reasoningPublications += 1
+        setStreamThinking(text)
+        return
+      }
+      pub.pending = text
+      if (pub.raf !== null) return
+      if (document.visibilityState === 'hidden') return
+      if (!reasoningOpenRef.current) return
+      const fire = () => {
+        const p = reasoningPubRef.current
+        if (p.raf !== null) cancelAnimationFrame(p.raf)
+        p.raf = null
+        if (p.pending === null || p.owner !== owner) return
+        if (!reasoningOpenRef.current) return
+        lastPublishedThinkingRef.current = p.pending
+        chatWork.reasoningPublications += 1
+        setStreamThinking(p.pending)
+        p.pending = null
+      }
+      pub.raf = requestAnimationFrame(fire)
+    },
+    [invalidateReasoningPublication],
+  )
+
+  /**
+   * The live disclosure's open state, reported at its boundary (PLA-509). Opening is the
+   * moment the held thought becomes visible: flush the transport buffer now, on this
+   * microtask, so the reader sees the current complete reasoning immediately. Closing
+   * stops the publications — the header keeps itself alive, the words stay in the buffer.
+   */
+  const handleReasoningOpenChange = useCallback(
+    (open: boolean) => {
+      reasoningOpenRef.current = open
+      if (open) flushReasoningPublication()
+    },
+    [flushReasoningPublication],
+  )
+
+  // The hidden window owed us no frames, so whatever the stream gathered while away is
+  // published the moment the reader is back: one listener per mounted pane, removed on
+  // unmount, and a no-op (not a timer) while the document is visible.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      flushPublication()
+      flushReasoningPublication()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [flushPublication, flushReasoningPublication])
+
+  /** Unmounted panes carry no frames: the pending publications die with the pane. */
   useEffect(
     () => () => {
       invalidatePublication()
+      invalidateReasoningPublication()
       turnIdRef.current += 1
       if (recheckTimerRef.current !== null) window.clearTimeout(recheckTimerRef.current)
     },
-    [invalidatePublication],
+    [invalidatePublication, invalidateReasoningPublication],
   )
 
   const clearOptimisticTurn = useCallback(() => {
@@ -578,6 +669,9 @@ export function ChatPane({
     setStreamActivity([])
     setTurnStartedAt(null)
     streamTextRef.current = ''
+    lastPublishedTextRef.current = ''
+    lastPublishedThinkingRef.current = ''
+    reasoningOpenRef.current = false
     setProcessingStage(null)
     setTurnOutcome(null)
     outcomeRef.current = null
@@ -586,7 +680,8 @@ export function ChatPane({
     stopInFlightRef.current = false
     setStopping(false)
     invalidatePublication()
-  }, [invalidatePublication])
+    invalidateReasoningPublication()
+  }, [invalidatePublication, invalidateReasoningPublication])
 
   /**
    * Which conversation the pane is showing, and whether the turn in flight is still in it.
@@ -836,11 +931,14 @@ export function ChatPane({
       turnContentRef.current = content
       acceptedMessageIdRef.current = null
       lastPublishedTextRef.current = ''
+      lastPublishedThinkingRef.current = ''
+      reasoningOpenRef.current = false
       if (recheckTimerRef.current !== null) {
         window.clearTimeout(recheckTimerRef.current)
         recheckTimerRef.current = null
       }
       invalidatePublication()
+      invalidateReasoningPublication()
       settledRef.current = false
       agentTurnRef.current = Boolean(agent)
       outcomeRef.current = 'active'
@@ -894,8 +992,12 @@ export function ChatPane({
           // publication per frame, with the first word publishing immediately.
           schedulePublication(turnId, assistantText)
         } else if (event.type === 'reasoning') {
+          // The transport keeps every byte in `reasoningText`; the rows see the first word
+          // immediately and, while the disclosure is open, the rest at frame cadence. A
+          // closed disclosure gets no further publications — the open and terminal
+          // flushes reach the full buffer either way (PLA-509).
           reasoningText += event.text
-          setStreamThinking(reasoningText)
+          scheduleReasoningPublication(turnId, reasoningText)
         } else if (event.type === 'status') {
           if (isProcessingStage(event.stage)) setProcessingStage(event.stage)
         } else if (event.type === 'notice') {
@@ -933,10 +1035,11 @@ export function ChatPane({
             acceptedMessageIdRef.current = event.message_id
           }
           setOutcome('completed')
-          // The terminal frame publishes the answer's final text on this microtask: a
-          // queued frame would strand the last words behind a frame the tab may not
-          // owe.
+          // The terminal frame publishes the answer's final text (and the last
+          // reasoning) on this microtask: a queued frame would strand the last words
+          // behind a frame the tab may not owe, in any visibility state.
           flushPublication()
+          flushReasoningPublication()
           if (assistantText.trim().length === 0) {
             revealDrainedRef.current = true
             setRevealDrained(true)
@@ -945,11 +1048,15 @@ export function ChatPane({
           toast.error(event.message)
           setOutcome('failed')
           flushPublication()
+          flushReasoningPublication()
         }
       }
 
+      let observationOwner: string | null = null
       try {
         if (agent) {
+          observationOwner = `chat:${++nextAgentObservationOwner}`
+          beginAgentTurnObservation(queryClient, classId, turnSessionId, observationOwner)
           // Feed live agent deltas through the same reasoning and reveal path as tutor
           // turns. A new tool round replaces its intermediate prose, retaining reasoning.
           const onAgentEvent = (event: import('@/lib/api').AgentStreamEvent) => {
@@ -1033,6 +1140,7 @@ export function ChatPane({
                 // publish it directly, and let the replacement's drain carry the settle.
                 invalidatePublication()
                 lastPublishedTextRef.current = assistantText
+                chatWork.answerPublications += 1
                 setStreamText(assistantText)
               }
               acceptedMessageIdRef.current = result.message_id
@@ -1115,6 +1223,7 @@ export function ChatPane({
             }
             // The stopped answer keeps what it has: publish any queued text now.
             flushPublication()
+            flushReasoningPublication()
             if (streamTextRef.current.trim().length === 0) {
               revealDrainedRef.current = true
               setRevealDrained(true)
@@ -1208,6 +1317,7 @@ export function ChatPane({
           } else {
             // Restore an unaccepted question only if no newer draft owns the box.
             flushPublication()
+            flushReasoningPublication()
             toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
             if (submittedTextRef.current !== null) {
               restoreDraft?.()
@@ -1215,6 +1325,9 @@ export function ChatPane({
           }
         }
       } finally {
+        if (observationOwner !== null) {
+          endAgentTurnObservation(queryClient, classId, turnSessionId, observationOwner)
+        }
         if (owns()) {
           abortRef.current = null
           // The turn is gone: any in-flight Stop belongs to it, so its "Stopping…"
@@ -1226,6 +1339,7 @@ export function ChatPane({
             // the answer the reader keeps, published now rather than stranded in the
             // queue.
             flushPublication()
+            flushReasoningPublication()
             toast.error('The answer stopped early.')
             setOutcome('failed')
           }
@@ -1249,6 +1363,8 @@ export function ChatPane({
       schedulePublication,
       flushPublication,
       invalidatePublication,
+      scheduleReasoningPublication,
+      flushReasoningPublication,
       scopedDocument,
       setOutcome,
       writer,
@@ -1516,62 +1632,156 @@ export function ChatPane({
   // Stop belonging to an answer this conversation is not the one waiting on.
   const optimisticTurn = showingTurn && turnOutcome !== 'failed'
   const turnActive = showingTurn && turnOutcome === 'active'
-  const rendered = optimisticTurn
-    ? messages.map((message) =>
-        message.id === -2 ? { ...message, content: streamText, thinking: streamThinking } : message,
-      )
-    : messages
+  // The settled/live split IS the PLA-510 boundary: the pane re-renders on every composer
+  // keystroke and every live publication, and before this the whole row map ran in that
+  // parent render (a handoff lookup and key resolution per row, per keystroke). The
+  // settled rows are the stable part — a new reference only when the persisted messages
+  // change or a turn's rows join/leave — and they render inside a memoized transcript
+  // that bails out otherwise. Only the live rows (the turn's own question and answer)
+  // change per publication, so their list is the only O(small) work the pane does per
+  // frame.
+  const settledRows = useMemo(() => {
+    if (!optimisticTurn || pendingTurn === null) return messages
+    // The turn's optimistic rows sit at the tail of `messages` (it appends them); the
+    // settled transcript is everything in front of them.
+    return messages.slice(0, -pendingTurn.length)
+  }, [messages, optimisticTurn, pendingTurn])
+  const liveRows = useMemo(() => {
+    if (!optimisticTurn || pendingTurn === null) return EMPTY_LIVE_ROWS
+    const tail = messages.slice(-pendingTurn.length)
+    return tail.map((message) =>
+      message.id === -2 ? { ...message, content: streamText, thinking: streamThinking } : message,
+    )
+  }, [messages, optimisticTurn, pendingTurn, streamText, streamThinking])
+  const rowCount = settledRows.length + liveRows.length
 
-  const handoffFor = (message: ChatMessage): SettledHandoff | null => {
-    if (activeSessionId === null) return null
+  // Handoffs indexed by the stable identity rows actually carry: row keying and
+  // selection restore become one map get instead of a scan of every handoff on every row
+  // of every render (PLA-510 — the scan's work grew with message count × handoff count).
+  // First match wins, in settlement order, exactly the row the linear scan would have hit.
+  const handoffIndex = useMemo(() => {
+    const byId = new Map<number, SettledHandoff>()
     for (const handoff of settledHandoffs) {
       if (handoff.sessionId !== activeSessionId) continue
-      if (message.id === handoff.assistantId) return handoff
-      if (handoff.userId !== undefined && message.id === handoff.userId) return handoff
+      if (!byId.has(handoff.assistantId)) byId.set(handoff.assistantId, handoff)
+      if (handoff.userId !== undefined && !byId.has(handoff.userId)) {
+        byId.set(handoff.userId, handoff)
+      }
     }
-    return null
-  }
+    return byId
+  }, [settledHandoffs, activeSessionId])
+
+  // A message's stamp parsed once: settled rows keep their timestamp forever, so the
+  // time-gap check (run for every row on every render) reads a cached number instead of
+  // re-running the date parser per row per render. Optimistic ids (-1/-2) are never
+  // cached: they change their stamp between turns.
+  const stampCache = useMemo(() => new Map<number, number>(), [activeSessionId])
+  const timestampOf = useCallback(
+    (message: ChatMessage): number => {
+      if (message.id > 0) {
+        const cached = stampCache.get(message.id)
+        if (cached !== undefined) return cached
+      }
+      const stamp = parseTimestamp(message.created_at).getTime()
+      if (message.id > 0) stampCache.set(message.id, stamp)
+      return stamp
+    },
+    [stampCache],
+  )
 
   /**
-   * Which React identity a row renders under.
+   * Which React identity a live row renders under.
    *
    * The optimistic rows stream under their turn's own keys (`optu-N`, `opt-N`), so two
    * turns' rows can never claim one key. When a turn settles, its persisted rows keep
    * those keys through the handoff — the settled answer row is the same React identity
    * the reader has been watching, not a remount of it — and they keep them when a later
-   * turn begins, because each turn owns a key of its own.
-   *
-   * A handoff hands its keys out by IDENTITY, verified at settle: the persisted answer
-   * must be the message id the transport accepted, and the user row must sit beside it
-   * carrying the turn's question. A late, failed, or reshuffled refetch therefore hands
-   * nothing over at all — the rows settle under their own ids rather than one message
-   * inheriting another's place. Handoffs live on the conversation their turn was sent
-   * to and are retired when the pane leaves it.
+   * turn begins, because each turn owns a key of its own. Settled rows resolve their keys
+   * inside the transcript itself, against the same handoff index.
    */
-  const rowKey = (message: ChatMessage): string => {
-    // The rows the turn on screen streams into: this turn's own keys.
-    if (optimisticTurn && activeTurnId !== null) {
-      if (message.id === -1) return `optu-${activeTurnId}`
-      if (message.id === -2) return `opt-${activeTurnId}`
-    }
-    // Everything else: a settled row keeps the key its own handoff handed over —
-    // including while a NEW turn is streaming, since a new row appearing is not a
-    // reason the old one remounts. Rows no handoff covers render under their IDs.
-    const handoff = handoffFor(message)
-    if (handoff !== null) {
-      if (message.id === handoff.assistantId) return handoff.assistantKey
-      if (handoff.userId !== undefined) return handoff.userKey as string
-    }
-    return String(message.id)
+  const liveRowKey = (message: ChatMessage): string => {
+    if (activeTurnId === null) return String(message.id)
+    if (message.id === -1) return `optu-${activeTurnId}`
+    return `opt-${activeTurnId}`
   }
-  const lastAssistantIndex = rendered.reduce(
-    (found, message, index) => (message.role === 'assistant' ? index : found),
-    -1,
-  )
-  const lastUserIndex = rendered.reduce(
-    (found, message, index) => (message.role === 'user' ? index : found),
-    -1,
-  )
+
+  // The settled rows' React elements, built once per settled-rows / handoff change — NOT
+  // per keystroke or live publication. Rendering the cached elements flat (in place of a
+  // live `rendered.map`) keeps the transcript's tree structure, and therefore each row's
+  // React identity, exactly what one flat list produced, while the O(history) handoff
+  // lookups and key resolutions stop running on every composer keystroke (PLA-510). A
+  // keystroke or a live delta leaves every dependency stable, so this memo bails.
+  const settledRowElements = useMemo(() => {
+    const lastAssistant = settledRows.reduce(
+      (found, message, index) => (message.role === 'assistant' ? index : found),
+      -1,
+    )
+    const lastUser = settledRows.reduce(
+      (found, message, index) => (message.role === 'user' ? index : found),
+      -1,
+    )
+    const interactive = !historyError && !messagesPending && !optimisticTurn
+    return settledRows.map((message, index) => {
+      chatWork.transcriptIterations += 1
+      // A settled row can carry the selection its live twin held: the static swap
+      // rebuilds the inner nodes, and the range has to come back with it.
+      chatWork.handoffLookups += 1
+      const handoff = handoffIndex.get(message.id) ?? null
+      let key = String(message.id)
+      if (handoff !== null) {
+        if (message.id === handoff.assistantId) key = handoff.assistantKey
+        else if (handoff.userId !== undefined) key = handoff.userKey as string
+      }
+      return (
+        <MessageRow
+          key={key}
+          message={message}
+          // A question and the answer under it are one turn, so they sit close; the next
+          // question opens at a wider interval. Even spacing throughout is what made a
+          // transcript read as an undifferentiated stack of blocks.
+          className={cn(!inline && index > 0 && (message.role === 'user' ? 'mt-11' : 'mt-5'))}
+          startsTimeGap={startsTimeGapBetween(
+            message,
+            index > 0 ? settledRows[index - 1] : null,
+            timestampOf,
+          )}
+          canRetry={interactive && index === lastAssistant && !writer}
+          onRetry={
+            interactive
+              ? writer
+                ? index === lastUser &&
+                  (message.writer_attempt?.state === 'failed' ||
+                    message.writer_attempt?.state === 'stopped')
+                  ? retryWriterTurn
+                  : undefined
+                : index === lastUser &&
+                    (message.agent_attempt?.state === 'failed' ||
+                      message.agent_attempt?.state === 'stopped' ||
+                      message.tutor_attempt?.state === 'failed' ||
+                      message.tutor_attempt?.state === 'stopped')
+                  ? retryTutorTurn
+                  : message.role === 'assistant'
+                    ? regenerate
+                    : undefined
+              : undefined
+          }
+          selectionRestore={handoff?.selection ?? null}
+        />
+      )
+    })
+  }, [
+    settledRows,
+    handoffIndex,
+    inline,
+    historyError,
+    messagesPending,
+    optimisticTurn,
+    writer,
+    timestampOf,
+    retryWriterTurn,
+    retryTutorTurn,
+    regenerate,
+  ])
 
   // A conversation opens at its latest message, and follows the stream while the reader
   // is already at the tail. Scrolling up to re-read detaches the follow, and the jump
@@ -1685,12 +1895,39 @@ export function ChatPane({
   useEffect(() => {
     if (!followingRef.current) return
     scrollToBottom('smooth')
-  }, [rendered.length, scrollToBottom])
+  }, [rowCount, scrollToBottom])
+
+  // Stream-follow scroll, coalesced per frame (PLA-510): each published word and each
+  // content resize used to read and write the viewport geometry in the same breath — a
+  // forced layout per publication. The two paths now share one deduplicated frame: while
+  // following, a publication or a resize arms at most one re-pin per animation frame, so a
+  // burst of words plus the resize they cause is one geometry read/write per frame, not
+  // one per word and one per resize. No time-based cap: the tail re-pins every frame it
+  // actually grows, which is the pace the reader is already watching, and a reader who
+  // scrolls away is still never followed (the check happens at fire, and `followingRef`
+  // is the only input).
+  const followFrameRef = useRef<number | null>(null)
+  const followTailSoon = useCallback(() => {
+    if (followFrameRef.current !== null) return
+    followFrameRef.current = requestAnimationFrame(() => {
+      followFrameRef.current = null
+      if (!followingRef.current) return
+      chatWork.followScrolls += 1
+      scrollToBottom('instant')
+    })
+  }, [scrollToBottom])
 
   useEffect(() => {
     if (!followingRef.current || !optimisticTurn) return
-    scrollToBottom('instant')
-  }, [streamText, streamThinking, processingStage, optimisticTurn, scrollToBottom])
+    followTailSoon()
+  }, [streamText, streamThinking, processingStage, optimisticTurn, followTailSoon])
+
+  useEffect(
+    () => () => {
+      if (followFrameRef.current !== null) cancelAnimationFrame(followFrameRef.current)
+    },
+    [],
+  )
 
   // The conversation keeps growing after the first paint: KaTeX re-lays out its math,
   // and opening the documents column reflows every paragraph taller. Both move the tail
@@ -1700,11 +1937,11 @@ export function ChatPane({
     const node = contentRef.current
     if (!node || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
-      if (followingRef.current) scrollToBottom('instant')
+      if (followingRef.current) followTailSoon()
     })
     observer.observe(node)
     return () => observer.disconnect()
-  }, [scrollToBottom])
+  }, [followTailSoon])
 
   // A segmented control rather than underlined tabs. These do not navigate anywhere - they
   // change how the next answer is written. In the header bar there is no pane rule for an
@@ -1783,10 +2020,9 @@ export function ChatPane({
           <Skeleton className="ml-auto h-12 w-2/3" />
           <Skeleton className="h-24 w-full" />
         </div>
-      ) : historyError && rendered.length === 0 ? null : rendered.length === 0 &&
-        emptyState !== undefined ? (
+      ) : historyError && rowCount === 0 ? null : rowCount === 0 && emptyState !== undefined ? (
         emptyState
-      ) : rendered.length === 0 ? (
+      ) : rowCount === 0 ? (
         <EmptyConversation
           className={className}
           readyCount={readyCount}
@@ -1795,63 +2031,44 @@ export function ChatPane({
           onPick={changeDraft}
         />
       ) : (
-        rendered.map((message, index) => {
-          const isStreamingReply = optimisticTurn && message.id === -2
-          // A settled row can carry the selection its live twin held: the static swap
-          // rebuilds the inner nodes, and the range has to come back with it.
-          const handoff = isStreamingReply ? null : handoffFor(message)
-          return (
-            <MessageRow
-              key={rowKey(message)}
-              message={message}
-              // A question and the answer under it are one turn, so they sit close; the
-              // next question opens at a wider interval. Even spacing throughout is what
-              // made a transcript read as an undifferentiated stack of blocks.
-              className={cn(!inline && index > 0 && (message.role === 'user' ? 'mt-11' : 'mt-5'))}
-              startsTimeGap={startsTimeGap(rendered, index)}
-              streaming={isStreamingReply}
-              activity={isStreamingReply ? streamActivity : undefined}
-              processingStage={isStreamingReply ? processingStage : null}
-              turnStartedAt={isStreamingReply ? turnStartedAt : null}
-              turnEnded={
-                isStreamingReply
-                  ? turnOutcome === 'completed' || turnOutcome === 'stopped'
-                  : undefined
-              }
-              onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
-              generation={isStreamingReply ? revealGen : undefined}
-              selectionRestore={handoff?.selection}
-              canRetry={
-                !historyError &&
-                !messagesPending &&
-                !optimisticTurn &&
-                index === lastAssistantIndex &&
-                !writer
-              }
-              onRetry={
-                historyError || messagesPending
-                  ? undefined
-                  : writer
-                    ? !optimisticTurn &&
-                      index === lastUserIndex &&
-                      (message.writer_attempt?.state === 'failed' ||
-                        message.writer_attempt?.state === 'stopped')
-                      ? retryWriterTurn
-                      : undefined
-                    : !optimisticTurn &&
-                        index === lastUserIndex &&
-                        (message.agent_attempt?.state === 'failed' ||
-                          message.agent_attempt?.state === 'stopped' ||
-                          message.tutor_attempt?.state === 'failed' ||
-                          message.tutor_attempt?.state === 'stopped')
-                      ? retryTutorTurn
-                      : message.role === 'assistant'
-                        ? regenerate
-                        : undefined
-              }
-            />
-          )
-        })
+        <>
+          {/* One flat list, exactly the shape the transcript always had (and the only shape
+              React reconciles by stable key across a turn boundary). The settled elements
+              are memoized (PLA-510) — a keystroke or live publication does not re-run the
+              O(history) handoff/key work — and the live rows stream at its tail. */}
+          {[
+            ...settledRowElements,
+            ...liveRows.map((message, index) => {
+              const isReply = message.id === -2
+              // The live rows sit at the tail of the transcript: the first one's time gap is
+              // measured against the last settled row, exactly as one flat list would.
+              const previous =
+                index === 0 ? (settledRows[settledRows.length - 1] ?? null) : liveRows[index - 1]
+              return (
+                <MessageRow
+                  key={liveRowKey(message)}
+                  message={message}
+                  className={cn(
+                    !inline &&
+                      settledRows.length + index > 0 &&
+                      (message.role === 'user' ? 'mt-11' : 'mt-5'),
+                  )}
+                  startsTimeGap={startsTimeGapBetween(message, previous, timestampOf)}
+                  streaming={isReply}
+                  activity={isReply ? streamActivity : undefined}
+                  processingStage={isReply ? processingStage : null}
+                  turnStartedAt={isReply ? turnStartedAt : null}
+                  turnEnded={
+                    isReply ? turnOutcome === 'completed' || turnOutcome === 'stopped' : undefined
+                  }
+                  onRevealComplete={isReply ? handleRevealComplete : undefined}
+                  generation={isReply ? revealGen : undefined}
+                  onReasoningOpenChange={isReply ? handleReasoningOpenChange : undefined}
+                />
+              )
+            }),
+          ]}
+        </>
       )}
     </div>
   )
@@ -1912,7 +2129,7 @@ export function ChatPane({
           {conversation}
         </ScrollArea>
 
-        {!following && rendered.length > 0 ? (
+        {!following && rowCount > 0 ? (
           <Button
             variant="outline"
             size="sm"

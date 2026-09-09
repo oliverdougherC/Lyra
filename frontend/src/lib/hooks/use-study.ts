@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api, ApiError } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
+import { OBSERVATION_ERROR_POLL_MS } from '@/lib/hooks/polling-policy'
 import type {
   AnswerCreate,
   ArtifactState,
@@ -57,10 +58,12 @@ export function useStudyList(classId: number, enabled = true) {
     queryKey: studyKeys.list(classId),
     queryFn: ({ signal }) => api.listStudy(classId, signal),
     enabled: enabled && Number.isFinite(classId),
-    refetchInterval: (query) => studyListPollInterval(query.state.data),
-    // Generation does not pause because the student switched windows, and a backgrounded
-    // tab must not freeze a run in progress.
-    refetchIntervalInBackground: true,
+    refetchInterval: (query) =>
+      query.state.error ? OBSERVATION_ERROR_POLL_MS : studyListPollInterval(query.state.data),
+    // Generation runs on the server regardless of the window; hidden pauses the UI's
+    // observation (a paused refetch never cancels the run), and one read on visibility
+    // return reconciles the stage. Visible-but-unfocused keeps observing.
+    refetchOnWindowFocus: 'always',
   })
 }
 
@@ -99,7 +102,11 @@ export function useDeckStatus(deckId: number, enabled = true) {
     queryKey: studyKeys.deckStatus(deckId),
     queryFn: ({ signal }) => api.getDeckStatus(deckId, signal),
     enabled: enabled && Number.isFinite(deckId),
-    refetchInterval: generatingPollInterval,
+    refetchInterval: (query) =>
+      query.state.error ? OBSERVATION_ERROR_POLL_MS : generatingPollInterval(query),
+    // Hidden already pauses this poll (no background opt-in); this adds the authoritative
+    // read on visibility return and keeps a visible-but-unfocused window observing.
+    refetchOnWindowFocus: 'always',
   })
 }
 
@@ -108,7 +115,9 @@ export function useQuizStatus(quizId: number, enabled = true) {
     queryKey: studyKeys.quizStatus(quizId),
     queryFn: ({ signal }) => api.getQuizStatus(quizId, signal),
     enabled: enabled && Number.isFinite(quizId),
-    refetchInterval: generatingPollInterval,
+    refetchInterval: (query) =>
+      query.state.error ? OBSERVATION_ERROR_POLL_MS : generatingPollInterval(query),
+    refetchOnWindowFocus: 'always',
   })
 }
 

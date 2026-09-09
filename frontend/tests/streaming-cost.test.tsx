@@ -9,6 +9,12 @@
  *   cascade layout effect React ran for it. It excludes the deliberate pause between
  *   chunks (that is the network, not the page), which is why it is kept separate from the
  *   playback wall time and never averaged into it.
+ * - `markdownNormalizations` counts the runs of the normalization memo; `markdownRenders`
+ *   counts the re-renders of the memoized document subtree (react-markdown re-parses the
+ *   whole document on every render — it has no cache). A healthy reparse schedule keeps the
+ *   two close: a re-check frame that does not change what is displayed bails the document
+ *   and does not re-parse. If `markdownRenders` runs well ahead of `markdownNormalizations`,
+ *   re-parses are happening without being owed — the schedule is re-rendering for nothing.
  * - `styleWrites` / `inheritanceScans` are what that commit's cascade pass itself did
  *   (zeroed per commit). `inheritanceScans` is the containment checks of the deadline
  *   inheritance — the nested pass over the historical ranges — while
@@ -22,6 +28,7 @@ import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
 
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
+import { chatWork, resetChatWork } from '@/components/chat/work-counters'
 import * as reveal from '@/components/chat/reveal'
 
 type Work = {
@@ -133,6 +140,8 @@ function syntheticAnswer(targetChars: number): string {
 
 const LARGE = syntheticAnswer(12_000)
 const XLARGE = syntheticAnswer(18_000)
+/** A long, whole-pipeline answer: past the reparse threshold, where the bounding matters. */
+const XXLARGE = syntheticAnswer(40_000)
 
 /** The real feed cadence: characters, then words, then bursts. */
 function feedPlan(text: string): string[] {
@@ -164,6 +173,9 @@ type Commit = {
   newUnitsScheduled: number
   inheritedUnits: number
   historicalRanges: number
+  markdownNorm: number
+  markdownRenders: number
+  normalizedChars: number
 }
 
 type SizeReport = {
@@ -179,6 +191,10 @@ type SizeReport = {
     newUnitsScheduled: number
     inheritedUnits: number
     historicalRangesMax: number
+    markdownNormalizations: number
+    markdownRenders: number
+    normalizedChars: number
+    revealNodeVisits: number
   }
   scansPerNewUnit: number | null
   styleWritesPerCommit: number
@@ -189,7 +205,9 @@ type SizeReport = {
  * Feeds the text chunk by chunk with real pauses between chunks and records what each
  * commit cost. Each `act` flushes the render, the commit, and the cascade layout effect,
  * so when it returns `work` holds the counters that commit's pass accumulated — and the
- * pause after it is network time, measured separately.
+ * pause after it is network time, measured separately. After the feed, a grace wait lets
+ * the reparse schedule drain any held tail (bounded by one gap), so the reported `units`
+ * is the complete answer, as the reader ultimately sees it.
  */
 async function feed(text: string, chunkMs: number) {
   let content = ''
@@ -200,12 +218,16 @@ async function feed(text: string, chunkMs: number) {
     return <StreamingMarkdown content={content} streaming onRevealComplete={() => {}} />
   }
   const view = render(<Recorder />)
+  resetChatWork()
   act(() => {})
   const commits: Commit[] = []
   const start = performance.now()
   for (const chunk of feedPlan(text)) {
     content += chunk
     const t0 = performance.now()
+    const normBefore = chatWork.markdownNormalizations
+    const rendersBefore = chatWork.markdownRenders
+    const charsBefore = chatWork.normalizedChars
     act(() => force())
     commits.push({
       n: commits.length + 1,
@@ -216,9 +238,19 @@ async function feed(text: string, chunkMs: number) {
       newUnitsScheduled: work.newUnitsScheduled ?? 0,
       inheritedUnits: work.inheritedUnits ?? 0,
       historicalRanges: work.historicalRanges ?? 0,
+      markdownNorm: chatWork.markdownNormalizations - normBefore,
+      markdownRenders: chatWork.markdownRenders - rendersBefore,
+      normalizedChars: chatWork.normalizedChars - charsBefore,
     })
     await new Promise<void>((resolve) => setTimeout(resolve, chunkMs))
   }
+  // The schedule guarantees an owed re-parse fires within one gap (at most the fixed
+  // floor, or twice the last re-parse's measured cost): wait that grace out so `units`
+  // counts the complete answer, not a tail that was still held on the last commit.
+  let worst = 0
+  for (const c of commits) worst = Math.max(worst, c.commitMs)
+  const graceMs = Math.max(75, 2 * worst) + 100
+  await new Promise<void>((resolve) => setTimeout(resolve, graceMs))
   const wallMs = performance.now() - start
   const units = document.querySelectorAll('[data-stream-word]').length
   view.unmount()
@@ -254,6 +286,10 @@ function summarize(
       newUnitsScheduled: newUnits,
       inheritedUnits: commits.reduce((a, c) => a + c.inheritedUnits, 0),
       historicalRangesMax: commits.reduce((a, c) => Math.max(a, c.historicalRanges), 0),
+      markdownNormalizations: commits.reduce((a, c) => a + c.markdownNorm, 0),
+      markdownRenders: commits.reduce((a, c) => a + c.markdownRenders, 0),
+      normalizedChars: commits.reduce((a, c) => a + c.normalizedChars, 0),
+      revealNodeVisits: chatWork.revealNodeVisits,
     },
     scansPerNewUnit: newUnits > 0 ? Math.round((scans / newUnits) * 100) / 100 : null,
     styleWritesPerCommit:
@@ -299,4 +335,12 @@ describe('PLA-501 streaming cost', () => {
     expect(feeded.commits.length, 'no commits were recorded').toBeGreaterThan(100)
     expect(feeded.units, 'no units on screen').toBeGreaterThan(200)
   }, 180_000)
+
+  it('xxlarge synthetic source at feed cadence (long-answer whole-pipeline work)', async () => {
+    const feeded = await feed(XXLARGE, 25)
+    const report = summarize('xxlarge', XXLARGE, feeded)
+    console.log(`COST-REPORT ${JSON.stringify(report)}`)
+    expect(feeded.commits.length, 'no commits were recorded').toBeGreaterThan(100)
+    expect(feeded.units, 'no units on screen').toBeGreaterThan(200)
+  }, 300_000)
 })

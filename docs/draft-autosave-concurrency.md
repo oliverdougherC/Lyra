@@ -57,6 +57,22 @@ that window.
   `current_version` as confirmed rather than raising a conflict dialog over identical text.
   Provably safe - the bytes match, so nothing is lost.
 
+## Failure scheduling and view lifetime
+
+Healthy typing keeps the 1.5-second debounce. Retryable failures back off through
+2, 4, 8, 16, 32, and then 60 seconds. New text coalesces behind the existing retry
+deadline; an explicit flush can retry immediately. Nonretryable failures stop automatic
+retries and leave the error visible until the student changes the text or retries.
+
+A document-owned save session retains one engine across view changes. Detaching a view
+removes its state listener; the last view suspends automatic timers and starts or joins
+the final flush of the engine's desired text. Reopening joins the same writer and keeps
+its pending body, conflict, and version rather than seeding stale query text over them.
+Only a confirmed, quiescent session with no attached view is retired. Late cleanup cannot
+remove a successor or clear another view's unsaved state. Hidden views suspend automatic
+retries; returning resumes the remaining deadline. This is in-memory navigation recovery;
+the server's acknowledgement is still the durability boundary.
+
 ## Body-dependent actions prove the save first
 
 Every action that reads the body server-side - start/continue a pass, start a review, export

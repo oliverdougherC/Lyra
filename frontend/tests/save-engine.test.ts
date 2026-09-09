@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  classifyFailure,
   createSaveEngine,
   decideServerSync,
   flushOnHidden,
   installBeforeUnloadGuard,
+  RETRY_BASE_MS,
+  RETRY_MAX_MS,
+  retryDelay,
   SAVE_DEBOUNCE_MS,
   type SaveConflict,
   type SaveStateName,
@@ -89,7 +93,10 @@ async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 5; i += 1) await Promise.resolve()
 }
 
-function makeEngine(server: FakeServer) {
+// Both server fakes expose this surface; the structural type keeps the factory agnostic.
+type EngineServer = { write: FakeServer['write']; body: string; version: number }
+
+function makeEngine(server: EngineServer) {
   const states: Array<{ state: SaveStateName; detail?: string }> = []
   const engine = createSaveEngine({
     write: server.write,
@@ -102,6 +109,40 @@ function makeEngine(server: FakeServer) {
 
 const names = (states: Array<{ state: SaveStateName }>): SaveStateName[] =>
   states.map((entry) => entry.state)
+
+/**
+ * A server that answers on the fake clock: fails until `recoverAt`, counting every
+ * attempt with its timestamp so a test can assert the exact schedule of wakeups.
+ */
+class FailingServer {
+  attempts: number[] = []
+  body = ''
+  version = 0
+  recoverAt: number | null = null
+  private failMessage = 'Could not reach the Lyra server.'
+
+  failWith(message: string): void {
+    this.failMessage = message
+  }
+
+  write = (content: string): Promise<WriteOutcome> =>
+    new Promise<WriteOutcome>((resolve, reject) => {
+      this.attempts.push(Date.now())
+      const failing = this.recoverAt === null ? true : Date.now() < this.recoverAt
+      if (failing) {
+        const error = new Error(this.failMessage)
+        if (this.failMessage.startsWith('status:')) {
+          const status = Number(this.failMessage.slice(7))
+          ;(error as Error & { status?: number }).status = status
+        }
+        reject(error)
+      } else {
+        this.body = content
+        this.version += 1
+        resolve({ version: this.version })
+      }
+    })
+}
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -157,8 +198,10 @@ describe('createSaveEngine: debounce and basic state', () => {
     expect(names(states)).toEqual(['dirty', 'saving', 'error'])
     expect(engine.isDirty('unsaved work')).toBe(true)
 
-    // The engine re-armed the debounce after the failure; the retry now succeeds.
-    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    // The failure armed the retry backoff (2s, not the 1.5s typing debounce); the retry
+    // now succeeds and the streak resets.
+    expect(server.inFlight()).toBe(0)
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS)
     expect(server.inFlight()).toBe(1)
     await server.settleNext()
 
@@ -776,9 +819,12 @@ describe('decideServerSync: a settled server op never resets over unresolved loc
     expect(decideServerSync(engine, 'mine')).toBe('skip')
   })
 
-  it('raises a conflict when idle unsaved local text exists (a failed flush left it dirty)', async () => {
-    // A pass that settles while the engine holds idle unsaved text (for example an earlier
-    // fire-and-forget flush that failed) must not reset the editor: reconcile instead.
+  it('never lets a settled server op reset unsaved local text (a failed flush left it dirty)', async () => {
+    // A pass that settles while the engine holds unsaved text (for example an earlier
+    // fire-and-forget flush that failed) must not reset the editor. The failed flush now
+    // owes a backoff retry (PLA-513), so the pipeline is pending - the sync skips it rather
+    // than adopting or conflicting over bytes the retry may still commit, and the retry
+    // itself conflicts when the pass has moved the server.
     const server = new FakeServer('base', 1)
     const { engine } = makeEngine(server)
     engine.schedule('local edit')
@@ -787,10 +833,21 @@ describe('decideServerSync: a settled server op never resets over unresolved loc
     await flushed
 
     expect(engine.saving()).toBe(false)
-    expect(engine.pending()).toBe(false)
+    expect(engine.pending()).toBe(true)
     expect(engine.conflict()).toBeNull()
     expect(engine.isDirty('local edit')).toBe(true)
-    expect(decideServerSync(engine, 'local edit')).toBe('conflict')
+    expect(decideServerSync(engine, 'local edit')).toBe('skip')
+
+    // The pass moved the server under us; the backoff retry lands on the new version and
+    // conflicts by itself - the editor is never reset by the settled op.
+    server.body = 'the pass rewrote the body'
+    server.version += 1
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS)
+    expect(server.inFlight()).toBe(1)
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+    expect(engine.isDirty('local edit')).toBe(true)
+    expect(decideServerSync(engine, 'local edit')).toBe('skip')
   })
 
   it('skips while a write is in flight even when the fetched body equals the editor', async () => {
@@ -1161,6 +1218,420 @@ describe('beforeunload event wiring (PLA-315)', () => {
 
     detach()
     expect(fireBeforeUnload().defaultPrevented).toBe(false)
+  })
+})
+
+describe('failure classification (PLA-513)', () => {
+  it('classifies transport, 408/429 and 5xx as retryable and other 4xx as nonretryable', () => {
+    expect(classifyFailure(new TypeError('Failed to fetch'))).toBe('retryable')
+    expect(classifyFailure(Object.assign(new Error('offline'), { status: 0 }))).toBe('retryable')
+    expect(classifyFailure(Object.assign(new Error('timeout'), { status: 408 }))).toBe('retryable')
+    expect(classifyFailure(Object.assign(new Error('slow down'), { status: 429 }))).toBe(
+      'retryable',
+    )
+    expect(classifyFailure(Object.assign(new Error('down'), { status: 503 }))).toBe('retryable')
+    expect(classifyFailure(Object.assign(new Error('bad body'), { status: 400 }))).toBe(
+      'nonretryable',
+    )
+    expect(classifyFailure(Object.assign(new Error('too big'), { status: 413 }))).toBe(
+      'nonretryable',
+    )
+    expect(classifyFailure('a plain string failure')).toBe('retryable')
+  })
+
+  it('computes a bounded increasing schedule', () => {
+    expect(retryDelay(1)).toBe(2000)
+    expect(retryDelay(2)).toBe(4000)
+    expect(retryDelay(5)).toBe(32_000)
+    expect(retryDelay(6)).toBe(RETRY_MAX_MS)
+    expect(retryDelay(40)).toBe(RETRY_MAX_MS)
+  })
+})
+
+describe('createSaveEngine: failure backoff (PLA-513)', () => {
+  it('retries a persistent retryable failure on the increasing schedule, never the typing debounce', async () => {
+    const server = new FailingServer()
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('unsaved work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS) // 1st attempt: the healthy debounce
+    expect(server.attempts).toHaveLength(1)
+    expect(names(states).filter((name) => name === 'error').length).toBe(1)
+    expect(engine.isDirty('unsaved work')).toBe(true)
+
+    const gaps: number[] = []
+    const step = (delay: number) => async () => {
+      await vi.advanceTimersByTimeAsync(delay)
+      gaps.push(Date.now() - server.attempts[server.attempts.length - 2])
+    }
+    await step(RETRY_BASE_MS)() // 2000
+    await step(4000)() // 4000
+    await step(8000)() // 8000
+    await step(16_000)() // 16000
+    await step(32_000)() // 32000
+    await step(RETRY_MAX_MS)() // capped at 60000
+
+    expect(server.attempts).toHaveLength(7)
+    expect(gaps).toEqual([RETRY_BASE_MS, 4000, 8000, 16_000, 32_000, RETRY_MAX_MS])
+    // Still failing, still dirty, and the engine holds exactly one timer - no pile-up.
+    expect(names(states).at(-1)).toBe('error')
+    expect(engine.isDirty('unsaved work')).toBe(true)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('stays bounded over five minutes of persistent failure (the PLA-513 wakeup count)', async () => {
+    // Before the fix, a persistent non-conflict failure re-armed on the 1500ms typing
+    // debounce: ~200 automatic attempts in five minutes. The backoff caps the count at
+    // the schedule: one debounce plus six 2/4/8/16/32/60s steps, the next at 303.5s.
+    const server = new FailingServer()
+    const { engine } = makeEngine(server)
+
+    engine.schedule('unsaved work')
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+
+    expect(server.attempts).toHaveLength(9)
+    expect(engine.isDirty('unsaved work')).toBe(true)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('lands attempts on the exact schedule, one timer at a time, through a failure streak', async () => {
+    const server = new FailingServer()
+    const { engine } = makeEngine(server)
+    let maxTimers = 0
+    const track = () => {
+      maxTimers = Math.max(maxTimers, vi.getTimerCount())
+    }
+
+    engine.schedule('unsaved work')
+    for (let i = 0; i < 6; i++) {
+      const delay = i === 0 ? SAVE_DEBOUNCE_MS : retryDelay(i)
+      await vi.advanceTimersByTimeAsync(delay)
+      track()
+    }
+    // The gaps between attempts are exactly the backoff schedule, whatever the fake clock's
+    // epoch: 2s, 4s, 8s, 16s, 32s after the first (debounced) attempt.
+    expect(server.attempts).toHaveLength(6)
+    for (let i = 1; i < server.attempts.length; i++) {
+      expect(server.attempts[i] - server.attempts[i - 1]).toBe(RETRY_BASE_MS * 2 ** (i - 1))
+    }
+    expect(maxTimers).toBeLessThanOrEqual(1)
+  })
+
+  it('does not auto-retry a nonretryable failure; a keystroke or an explicit flush retries at once', async () => {
+    const server = new FailingServer()
+    server.failWith('status:400')
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('bad body')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.attempts).toHaveLength(1)
+    expect(names(states).at(-1)).toBe('error')
+    expect(engine.isDirty('bad body')).toBe(true)
+
+    // No automatic timer at all: a five-minute wait must not probe the dead endpoint.
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    expect(server.attempts).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+
+    // A fresh keystroke is the recovery trigger: healthy debounce, immediate-ish retry.
+    server.recoverAt = Date.now() // the server is back
+    engine.schedule('fixed body')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.attempts).toHaveLength(2)
+    await flushMicrotasks()
+    expect(server.body).toBe('fixed body')
+    expect(names(states).at(-1)).toBe('saved')
+  })
+
+  it('lets an explicit flush retry immediately and leaves the backoff for the next failure', async () => {
+    const server = new FailingServer()
+    const { engine } = makeEngine(server)
+
+    engine.schedule('work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS) // 1st attempt fails
+    // A flush does not wait for the backoff: it writes now.
+    await engine.flush('work')
+    expect(server.attempts).toHaveLength(2)
+    // The flush failed too (streak of 2), so the next automatic retry is the second-step
+    // backoff (4s) - not an instant loop, and not the 1.5s typing debounce either.
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.attempts).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(retryDelay(2))
+    expect(server.attempts).toHaveLength(3)
+  })
+
+  it('stops retrying when the failure turns into a conflict, and keeps the student text', async () => {
+    const server = new FakeServer('base', 1)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('my local edit')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    await server.failNext('offline')
+    // The server moved on under the retry; its CAS refusal is a conflict, not a retry.
+    server.body = 'newer text from elsewhere'
+    server.version += 1
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS)
+    await server.settleNext()
+
+    expect(engine.conflict()).not.toBeNull()
+    expect(names(states).at(-1)).toBe('conflict')
+    expect(engine.isDirty('my local edit')).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS * 2)
+    expect(server.inFlight()).toBe(0)
+  })
+
+  it('resets the backoff after recovery, then starts a fresh streak from the base', async () => {
+    const server = new FailingServer()
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS) // fails
+    server.recoverAt = Date.now()
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS) // retry succeeds
+    expect(server.body).toBe('work')
+    expect(names(states).at(-1)).toBe('saved')
+    expect(vi.getTimerCount()).toBe(0)
+
+    // A new failure after the recovery restarts at the base delay, not the streak's cap:
+    // the retry lands exactly one RETRY_BASE_MS after the fresh failure.
+    server.recoverAt = null
+    engine.schedule('more work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS) // attempt 3, fails again
+    expect(server.attempts).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS) // attempt 4, on the reset base delay
+    expect(server.attempts).toHaveLength(4)
+  })
+
+  it('keeps the failure streak across edits while the outage continues', async () => {
+    const server = new FailingServer()
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('one')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS) // attempt 1 fails: streak 1
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS) // attempt 2 fails: streak 2
+    expect(server.attempts).toHaveLength(2)
+
+    // New text shares the pending retry deadline; typing cannot bypass the backoff.
+    engine.schedule('two')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.attempts).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(retryDelay(2) - SAVE_DEBOUNCE_MS)
+    expect(server.attempts).toHaveLength(3)
+    expect(names(states).at(-1)).toBe('error')
+    expect(engine.isDirty('two')).toBe(true)
+
+    // ...but the streak is NOT reset: a reset streak would have retried on the base delay
+    // already. The owed retry is still the growing backoff (retryDelay(3)).
+    // No fast loop: only one timer is pending (the backoff itself) - the edit's 1500ms
+    // retry already fired, so further edits still share one deadline.
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(server.attempts).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(retryDelay(3) - 1000)
+    expect(server.attempts).toHaveLength(4) // streak 4
+
+    // The outage ends: the next retry recovers the newest body and the streak resets.
+    server.recoverAt = Date.now()
+    await vi.advanceTimersByTimeAsync(retryDelay(4))
+    expect(server.attempts).toHaveLength(5)
+    expect(server.body).toBe('two')
+    expect(names(states).at(-1)).toBe('saved')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('createSaveEngine: suspend/resume/dispose lifecycle (PLA-513)', () => {
+  it('suspend clears the timer but retains the owed write; resume re-arms and it lands', async () => {
+    const server = new FakeServer()
+    const { engine } = makeEngine(server)
+
+    engine.schedule('hidden work')
+    expect(engine.pending()).toBe(true)
+    engine.suspend()
+
+    expect(engine.pending()).toBe(false)
+    expect(engine.isDirty('hidden work')).toBe(true) // the content is retained
+    // A long hidden window must not start the write: no timer was armed.
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(server.inFlight()).toBe(0)
+
+    engine.resume()
+    expect(engine.pending()).toBe(true)
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1)
+    await server.settleNext()
+    expect(server.body).toBe('hidden work')
+  })
+
+  it('suspend during a failure holds the backoff; resume re-arms it', async () => {
+    const server = new FakeServer()
+    const { engine } = makeEngine(server)
+
+    engine.schedule('work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    await server.failNext()
+    expect(engine.isDirty('work')).toBe(true)
+    expect(vi.getTimerCount()).toBe(1) // the backoff is armed
+
+    engine.suspend()
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(server.inFlight()).toBe(0) // no background probing while hidden
+
+    engine.resume()
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(RETRY_BASE_MS)
+    expect(server.inFlight()).toBe(1)
+    await server.settleNext()
+    expect(server.body).toBe('work')
+  })
+
+  it('resuming before the retry is due waits exactly the remainder of the backoff', async () => {
+    const server = new FailingServer()
+    const { engine } = makeEngine(server)
+
+    engine.schedule('work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS) // attempt 1 fails; retry due 2s out
+    engine.suspend()
+    await vi.advanceTimersByTimeAsync(500)
+    engine.resume() // arms the remaining 1500ms, not a fresh 2000ms
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(server.attempts).toHaveLength(1) // still owed: 500ms of the backoff left
+    await vi.advanceTimersByTimeAsync(500)
+    expect(server.attempts).toHaveLength(2) // landed on the failure's own deadline
+  })
+
+  it('an overdue retry fires at once on resume, and rapid hide/show cannot restart it', async () => {
+    const server = new FailingServer()
+    const { engine } = makeEngine(server)
+
+    engine.schedule('work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS) // attempt 1 fails; retry due 2s out
+    engine.suspend()
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(server.attempts).toHaveLength(1)
+
+    // Back to visible far past the deadline: the retry is owed NOW. The wait has already
+    // been paid for in hidden time, so resume fires it immediately - it never restarts.
+    engine.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(server.attempts).toHaveLength(2) // attempt 2 fails: streak 2, next due 4s out
+
+    // Rapid hide/show around the next retry keeps its original deadline: the attempts
+    // land on the backoff schedule no matter how often the tab flickers.
+    engine.suspend()
+    await vi.advanceTimersByTimeAsync(500)
+    engine.resume()
+    await vi.advanceTimersByTimeAsync(500)
+    engine.suspend()
+    engine.resume()
+    await vi.advanceTimersByTimeAsync(retryDelay(2) - 1000)
+    expect(server.attempts).toHaveLength(3)
+  })
+
+  it('a late in-flight completion after dispose settles data but never re-arms or reports', async () => {
+    const server = new FakeServer()
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('late work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1)
+    const reportedBefore = states.length
+
+    engine.dispose()
+    // The in-flight write settles late: its data applies (the version advances), but the
+    // disposed engine reports nothing and arms no ownerless retry timer.
+    await server.settleNext()
+
+    expect(server.body).toBe('late work')
+    expect(engine.version()).toBe(1)
+    expect(states.length).toBe(reportedBefore)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS * 4)
+    expect(server.inFlight()).toBe(0)
+    expect(states.length).toBe(reportedBefore)
+  })
+
+  it('a late failing completion after dispose keeps the work dirty without retrying', async () => {
+    const server = new FakeServer()
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('late work')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    const reportedBefore = states.length
+
+    engine.dispose()
+    await server.failNext()
+
+    expect(engine.isDirty('late work')).toBe(true) // pending content retained
+    expect(states.length).toBe(reportedBefore)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(RETRY_MAX_MS * 4)
+    expect(server.inFlight()).toBe(0)
+  })
+
+  it('dispose keeps the save model truthful: isDirty, lastSaved, version and conflict', async () => {
+    const server = new FakeServer('saved text', 3)
+    const { engine } = makeEngine(server)
+    engine.schedule('new text')
+    engine.suspend()
+    engine.dispose()
+
+    expect(engine.isDirty('new text')).toBe(true)
+    expect(engine.lastSaved()).toBe('saved text')
+    expect(engine.version()).toBe(3)
+    expect(engine.conflict()).toBeNull()
+    expect(engine.pending()).toBe(false)
+  })
+
+  it('a flush after dispose reports the verdict without starting a write', async () => {
+    const server = new FakeServer()
+    const { engine } = makeEngine(server)
+
+    engine.schedule('orphaned work')
+    engine.dispose()
+    const verdict = await engine.flush('orphaned work')
+
+    expect(server.inFlight()).toBe(0) // nothing was started
+    expect(verdict.ok).toBe(false)
+    expect(verdict.status).toBe('error')
+    expect(engine.isDirty('orphaned work')).toBe(true)
+  })
+
+  it('a flush begun before dispose still starts its final write; the late settlement is a no-op', async () => {
+    const server = new FakeServer()
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('final words')
+    const flushed = engine.flush('final words') // starts the write synchronously in drain
+    expect(server.inFlight()).toBe(1)
+    const reportedBefore = states.length
+
+    engine.dispose()
+    await server.settleNext() // the final write settles late
+    await flushed
+    expect(server.body).toBe('final words')
+    expect(server.version).toBe(1)
+    expect(states.length).toBe(reportedBefore) // no state reported past dispose
+    expect(vi.getTimerCount()).toBe(0)
+    expect(engine.isDirty('final words')).toBe(false) // the data still settled truthfully
+  })
+
+  it('disposed engines ignore schedule, reconciliation and late seeds', async () => {
+    const server = new FakeServer('server text', 2)
+    const { engine } = makeEngine(server)
+    engine.schedule('local')
+    engine.dispose()
+
+    engine.schedule('more')
+    engine.noteSaved('other', 5)
+    engine.forceConflict('server text', 2)
+    engine.keepLocal('local')
+    expect(engine.version()).toBe(2)
+    expect(engine.conflict()).toBeNull()
+    expect(server.inFlight()).toBe(0)
+    expect(engine.isDirty('local')).toBe(true)
   })
 })
 

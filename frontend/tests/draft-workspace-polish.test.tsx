@@ -20,6 +20,7 @@ const controls = vi.hoisted(() => ({
   retryDraft: vi.fn(),
   wide: false,
   live: null as LiveDraftSuggestion | null,
+  artifactId: '7',
   draft: {
     id: 7,
     class_id: 1,
@@ -35,7 +36,7 @@ const controls = vi.hoisted(() => ({
 }))
 vi.mock('@/router/hooks', async (original) => ({
   ...(await original<object>()),
-  useParams: () => ({ id: '1', artifactId: '7' }),
+  useParams: () => ({ id: '1', artifactId: controls.artifactId }),
 }))
 vi.mock('@/router/dynamic', () => ({
   default: () =>
@@ -133,7 +134,12 @@ async function openTool(name: string) {
   await userEvent.click(screen.getByRole('combobox', { name: 'Draft tool' }))
   await userEvent.click(screen.getByRole('option', { name }))
 }
+let nextArtifactId = 7
+
 beforeEach(() => {
+  // Each test gets its own document id so that a retained session (a pending or failing
+  // save, or an open conflict) does not contaminate the next test.
+  controls.artifactId = String(++nextArtifactId)
   controls.save.mockReset().mockResolvedValue({ version: 2 })
   controls.print.mockReset().mockResolvedValue(undefined)
   controls.exportAvailable = true

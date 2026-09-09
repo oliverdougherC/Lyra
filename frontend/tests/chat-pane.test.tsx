@@ -2490,8 +2490,8 @@ describe('frame-cadence token publication (PLA-501)', () => {
       act(() => frame?.())
       expect(answerText(container)).toBe('One two three')
 
-      // Let the backstop clock run out after the frame already won the race: it adds
-      // nothing.
+      // No timer exists behind the frame anymore (PLA-509 removed the hidden-tab
+      // backstop): waiting adds nothing once the frame has published.
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 120))
       })
@@ -2501,23 +2501,41 @@ describe('frame-cadence token publication (PLA-501)', () => {
     }
   })
 
-  it('keeps publishing while a hidden tab withholds the frame', async () => {
+  it('holds the publication while genuinely hidden, and reconciles on return (PLA-509)', async () => {
     const transcript: MessageRead[] = []
     primeApi(transcript)
-    // The withheld rAF: nothing is ever scheduled into a frame.
+    // A hidden document is owed no animation frames: withhold them and model the state.
     vi.stubGlobal('requestAnimationFrame', () => 0)
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    })
     const { emit, container } = await startTurn()
     try {
+      // The first word publishes immediately — a hidden pane still shows the turn began.
       await act(async () => emit({ type: 'token', text: 'One' }))
-      await act(async () => emit({ type: 'token', text: ' two' }))
       expect(answerText(container)).toBe('One')
 
-      // The bounded timer carries the publication while no frame comes.
+      // A genuinely hidden window is owed no frames: the second word is held, and the
+      // pane does no presentation work on it until the reader comes back. (The old 64 ms
+      // timer used to publish here; PLA-509 bounds that work to the hidden document.)
+      await act(async () => emit({ type: 'token', text: ' two' }))
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 120))
       })
+      expect(answerText(container)).toBe('One')
+
+      // The reader returns: whatever the stream gathered while away is published now.
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        value: 'visible',
+      })
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
       expect(answerText(container)).toBe('One two')
     } finally {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
       vi.unstubAllGlobals()
     }
   })
