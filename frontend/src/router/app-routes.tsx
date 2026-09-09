@@ -7,6 +7,7 @@ import RouteErrorFallback from '@/app/error'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePathname } from '@/router/hooks'
+import { ClassChatRoute } from '@/router/class-chat-route'
 import Link from '@/router/link'
 import { Button } from '@/components/ui/button'
 
@@ -24,7 +25,7 @@ type RoutePattern =
 type RouteDefinition = {
   id: string
   pattern: RoutePattern
-  component: React.LazyExoticComponent<React.ComponentType>
+  component: React.ComponentType
 }
 
 const routes: RouteDefinition[] = [
@@ -38,7 +39,7 @@ const routes: RouteDefinition[] = [
   {
     id: 'class-chat',
     pattern: '/classes/:id/chat',
-    component: lazy(() => import('@/app/classes/[id]/chat/page')),
+    component: ClassChatRoute,
   },
   {
     id: 'solutions-index',

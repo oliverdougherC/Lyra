@@ -1369,6 +1369,181 @@ li[data-stream-word].stream-word-visible::marker {
   }
 }
 
+.class-ask-sheet {
+  position: relative;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  background: var(--bg-secondary);
+  padding: 28px 32px 22px;
+  box-shadow:
+    var(--elevation-md),
+    inset 0 0 0 5px var(--bg-secondary),
+    inset 0 0 0 6px var(--gold-line);
+  transition:
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.class-ask-sheet:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow:
+    var(--elevation-md),
+    0 0 0 1px var(--focus-ring),
+    inset 0 0 0 5px var(--bg-secondary),
+    inset 0 0 0 6px var(--gold-line);
+}
+
+.class-ask-inscription {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.class-ask-title {
+  display: block;
+  margin-top: 22px;
+  font-size: clamp(26px, 3vw, 34px);
+  line-height: 1.2;
+  font-weight: 500;
+  cursor: text;
+}
+
+.class-ask-writing {
+  position: relative;
+  margin-top: 18px;
+  font-size: 21px;
+  line-height: 1.5;
+}
+
+.class-ask-writing textarea {
+  display: block;
+  width: 100%;
+  min-height: 132px;
+  max-height: 320px;
+  resize: vertical;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-primary);
+  caret-color: var(--hand);
+  outline: none;
+}
+
+.class-ask-prompt {
+  position: absolute;
+  inset: 0 0 auto;
+  pointer-events: none;
+  color: var(--text-secondary);
+  font-style: italic;
+  animation: class-ask-idea-in 240ms var(--ease-gentle) both;
+}
+
+@keyframes class-ask-idea-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.class-ask-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.class-ask-use-prompt {
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 4px;
+}
+
+.class-ask-pause {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--text-secondary);
+}
+
+.class-ask-pause svg {
+  width: 12px;
+  height: 12px;
+}
+
+.class-ask-use-prompt:focus-visible,
+.class-ask-pause:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 4px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .class-ask-use-prompt:hover {
+    color: var(--text-primary);
+  }
+  .class-ask-pause:hover {
+    background: var(--bg-tertiary);
+  }
+}
+
+@media (max-width: 639px) {
+  .class-ask-sheet {
+    padding: 22px 20px 18px;
+  }
+  .class-ask-inscription {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+  .class-ask-writing {
+    font-size: 19px;
+  }
+  .class-ask-footer {
+    gap: 10px;
+  }
+}
+
+/* Only this deliberate first-message handoff crossfades the reading surface.
+   The sidebar stays still, and ordinary navigation keeps its existing behavior. */
+html.lyra-ask-handoff #main-content {
+  view-transition-name: lyra-ask-content;
+}
+html.lyra-ask-handoff::view-transition-old(root),
+html.lyra-ask-handoff::view-transition-new(root),
+html.lyra-ask-handoff::view-transition-group(lyra-ask-content) {
+  animation: none;
+}
+html.lyra-ask-handoff::view-transition-old(lyra-ask-content) {
+  animation: class-ask-fade-out 240ms var(--ease-gentle) both;
+}
+html.lyra-ask-handoff::view-transition-new(lyra-ask-content) {
+  animation: class-ask-fade-in 240ms var(--ease-gentle) both;
+}
+@keyframes class-ask-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes class-ask-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
 .the-mark-reveal {
   animation: the-mark-in 150ms var(--ease-gentle) both;
 }
