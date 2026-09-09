@@ -1,14 +1,16 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { flushSync } from 'react-dom'
 import { ArrowRight, FileUp, Layers, PenLine, SquareCheckBig } from 'lucide-react'
 import Link from '@/router/link'
 import { useRouter } from '@/router/hooks'
+import { preloadClassChat } from '@/router/class-chat-route'
 import { toast } from 'sonner'
 
 import { StatusWord } from '@/components/ex-libris'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { ClassAskComposer } from '@/components/classes/class-ask-composer'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
@@ -77,8 +79,6 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   const documents = documentsQuery.data
   const { data: profile } = useClassProfile(classId)
   const createDraft = useCreateDraft(classId)
-
-  const [question, setQuestion] = useState('')
 
   // Distinct facts, kept distinct: no documents at all, documents still being read,
   // documents Lyra cannot use, and documents ready to work from can all be true at once,
@@ -302,13 +302,29 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
     study,
   ])
 
-  function ask(text: string, send: boolean) {
-    const trimmed = text.trim()
-    router.push(
-      trimmed.length > 0
-        ? chatHandoffUrl(classId, { ask: trimmed, send })
-        : chatHandoffUrl(classId),
-    )
+  async function ask(text: string) {
+    const href = chatHandoffUrl(classId, { ask: text.trim(), send: true })
+    if (
+      !document.startViewTransition ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      router.push(href)
+      return
+    }
+
+    // Warm the destination before taking the old-page snapshot. Slow chunk loading
+    // keeps the student's writing visible instead of crossfading into a skeleton.
+    await preloadClassChat()
+    document.documentElement.classList.add('lyra-ask-handoff')
+    const transition = document.startViewTransition(() => {
+      flushSync(() => router.push(href))
+    })
+    void transition.ready.catch(() => {}) // A skipped animation still navigates.
+    try {
+      await transition.finished
+    } finally {
+      document.documentElement.classList.remove('lyra-ask-handoff')
+    }
   }
 
   function startPractice() {
@@ -366,49 +382,11 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
         </p>
       ) : null}
       {tutorReady ? (
-        <section aria-label="Ask Lyra" className="flex flex-col gap-1">
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              ask(question, true)
-            }}
-            className="flex items-center gap-2"
-          >
-            <Input
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder={
-                readyCount > 0 ? `Ask about ${className ?? 'this class'}` : 'Ask Lyra anything'
-              }
-              aria-label={`Ask about ${className ?? 'this class'}`}
-              autoComplete="off"
-              className="h-11 flex-1 text-[15px]"
-            />
-            <Button type="submit" size="lg" className="h-11 shrink-0">
-              Ask
-            </Button>
-          </form>
-          {readyCount > 0 && suggestions.length > 0 ? (
-            <div className="flex flex-col">
-              {suggestions.map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  onClick={() => ask(prompt, false)}
-                  className="group/prompt border-border/70 text-text-secondary hover:text-text-primary focus-visible:ring-ring flex items-baseline justify-between gap-3 border-b py-2.5 text-left text-sm transition-colors duration-150 last:border-b-0 focus-visible:ring-2 focus-visible:outline-none"
-                >
-                  <span className="min-w-0">{prompt}</span>
-                  <span
-                    aria-hidden
-                    className="text-accent-primary shrink-0 opacity-0 transition-[opacity,transform] duration-150 group-hover/prompt:translate-x-0.5 group-hover/prompt:opacity-100 group-focus-visible/prompt:opacity-100"
-                  >
-                    →
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </section>
+        <ClassAskComposer
+          className={className}
+          suggestions={readyCount > 0 ? suggestions : undefined}
+          onSend={ask}
+        />
       ) : null}
 
       {items.length > 0 ? (
