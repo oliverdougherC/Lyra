@@ -27,18 +27,6 @@ describe('class opening composer', () => {
     expect(screen.queryByText(ideas[1])).not.toBeInTheDocument()
   })
 
-  it('lets the student stop cycling and insert an idea without sending it', () => {
-    vi.useFakeTimers()
-    const { box, onSend } = setup()
-    fireEvent.click(screen.getByRole('button', { name: 'Pause suggestions' }))
-    act(() => vi.advanceTimersByTime(12000))
-    expect(screen.getByText(ideas[0])).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: /Use this idea/ }))
-    expect(box).toHaveValue(ideas[0])
-    expect(box).toHaveFocus()
-    expect(onSend).not.toHaveBeenCalled()
-  })
-
   it('keeps ideas still for reduced motion', () => {
     vi.useFakeTimers()
     vi.spyOn(window, 'matchMedia').mockReturnValue({
@@ -49,7 +37,6 @@ describe('class opening composer', () => {
     setup()
     act(() => vi.advanceTimersByTime(12000))
     expect(screen.getByText(ideas[0])).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Pause suggestions' })).not.toBeInTheDocument()
     vi.restoreAllMocks()
   })
 

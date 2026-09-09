@@ -563,10 +563,10 @@ The distilled judgment calls, each one a scar from a workshop round:
 - **Empty**: the `Empty` primitives (Header, Media, Title, Description, Content, Action)
   with the fleuron opening; the empty conversation is a title page - fleuron, nameplate,
   sentence, one verb, suggestions reading as a contents list.
-- **The class Ask opening**: one generous paper writing sheet, a fine inset gold rule,
+- **The class Ask opening**: one generous paper writing sheet, a quiet engraved edge,
   and a serif invitation. Course-aware ideas appear inside the empty writing area every six
-  seconds; focus, typing, an explicit pause, hidden windows, and reduced motion stop the cycle.
-  “Use this idea” copies the current suggestion into the field for editing. Enter sends,
+  seconds; focus, typing, hidden windows, and reduced motion stop the cycle.
+  A restrained ink send control becomes prominent when there is writing. Enter sends,
   Shift + Enter inserts a line, and IME composition never sends. A first send crossfades the
   reading surface into a fresh conversation over 240ms using `--ease-gentle`; the sidebar stays
   still. Reduced motion and browsers without View Transitions navigate immediately. The
