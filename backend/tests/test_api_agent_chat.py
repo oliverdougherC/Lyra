@@ -33,6 +33,7 @@ from backend.llm import prompts as llm_prompts
 from backend.llm import tools
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 from backend.rag.tokens import estimate_tokens
+from backend.storage import secrets
 from backend.storage.database import connect, get_db
 
 
@@ -3100,3 +3101,121 @@ def test_a_stale_tool_refusal_cannot_pre_block_the_new_endpoint(
     assert len(registries) == 2
     assert isinstance(registries[-1], dict)
     assert "cas_evaluate" in registries[-1]
+
+
+@pytest.mark.parametrize("slot", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+def test_first_send_waits_for_keychain_without_blocking_the_event_loop(
+    client, db, class_id, monkeypatch, isolated_keychain, slot, stream
+):
+    endpoint = "http://127.0.0.1:8080/v1"
+    if slot:
+        identity = secrets.stage_tutor_credential(endpoint, "synthetic-first-send")
+        db.execute("update settings set tutor_credential_id=? where id=1", (identity,))
+    else:
+        isolated_keychain[(secrets.SERVICE, secrets.USERNAME)] = "synthetic-first-send"
+        db.execute("update settings set legacy_credential_endpoint=? where id=1", (endpoint,))
+    db.commit()
+    monkeypatch.setattr(secrets, "_slot_read_cache", {})
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    started, release = threading.Event(), threading.Event()
+    reads = []
+
+    def delayed_read(service, username):
+        reads.append(username)
+        started.set()
+        assert release.wait(2)
+        return isolated_keychain.get((service, username))
+
+    monkeypatch.setattr(secrets.keyring, "get_password", delayed_read)
+    sent = []
+
+    async def answer(endpoint, key, *args, **kwargs):
+        sent.append((endpoint, key))
+        return tools.ToolLoopResult(content="First send succeeded.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", answer)
+
+    async def release_on_request_loop():
+        for _ in range(200):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.005)
+        else:
+            return
+        # Only the request event loop can release this read: a blocking wait
+        # on that loop cannot pass, even if a timeout eventually frees it.
+        await asyncio.sleep(0.05)
+        release.set()
+
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    future = client.portal.start_task_soon(release_on_request_loop)
+    try:
+        response = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "First question", "profile": "code"},
+            headers={"Accept": "text/event-stream"} if stream else {},
+        )
+        assert response.status_code == 200, response.text
+        assert "First send succeeded." in response.text
+        assert "responding" not in response.text
+        assert sent == [(endpoint, "synthetic-first-send")]
+        assert len(reads) == 1
+        assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+    finally:
+        release.set()
+        future.result(timeout=2)
+        if secrets._operation_thread:
+            secrets._operation_thread.join(2)
+
+
+def test_stop_during_keychain_read_releases_turn_without_sending(client, db, class_id, monkeypatch):
+    endpoint = "http://127.0.0.1:8080/v1"
+    identity = secrets.stage_tutor_credential(endpoint, "synthetic-stopped")
+    db.execute("update settings set tutor_credential_id=? where id=1", (identity,))
+    db.commit()
+    monkeypatch.setattr(secrets, "_slot_read_cache", {})
+    started, release = threading.Event(), threading.Event()
+
+    def delayed_read(*args):
+        started.set()
+        assert release.wait(3)
+        return "synthetic-stopped"
+
+    monkeypatch.setattr(secrets.keyring, "get_password", delayed_read)
+    sent = []
+
+    async def answer(*args, **kwargs):
+        sent.append(True)
+        return tools.ToolLoopResult(content="Should never send")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", answer)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+    responses = []
+    sender = threading.Thread(
+        target=lambda: responses.append(
+            client.post(url, json={"content": "Stop this", "profile": "code"})
+        )
+    )
+    sender.start()
+    try:
+        assert started.wait(2)
+        busy = client.post(url, json={"content": "Duplicate", "profile": "code"})
+        assert busy.status_code == 409
+        stopped = client.post(url + "/stop")
+        assert stopped.json() == {"stopped": True, "settling": False}
+        sender.join(2)
+        assert not sender.is_alive()
+        assert responses[0].json()["stopped"] == "stopped"
+        assert secrets._operation_thread.is_alive()
+        assert sessions.active_turn(session_id) is None
+        assert sessions.list_messages(db, session_id) == []
+        assert sent == []
+    finally:
+        release.set()
+        sender.join(3)
+        if secrets._operation_thread:
+            secrets._operation_thread.join(3)
+    assert sessions.list_messages(db, session_id) == []
+    assert sent == []

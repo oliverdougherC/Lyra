@@ -48,6 +48,7 @@ from backend.llm.turn_budget import (
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk, retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import get_db
+from backend.storage.secrets import wait_for_credential_read
 
 logger = logging.getLogger(__name__)
 
@@ -1269,7 +1270,7 @@ async def _run_agent_turn(
     # results on later rounds, so it is bound by the same locality/acknowledgement rule.
     # Checked before any title or message is persisted and before the tool registry is even
     # built: a refusal puts nothing on the wire and stores nothing.
-    access = resolve_tutor_access(conn)
+    access = await wait_for_credential_read(lambda: resolve_tutor_access(conn))
     require_document_allowed(access)
     config = access.config
     session_mode = str(sessions.get_session(conn, session_id)["mode"])

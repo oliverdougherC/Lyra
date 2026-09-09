@@ -1,5 +1,6 @@
 """Healthy slow Keychain reads must remain pending, never become missing credentials."""
 
+import asyncio
 import threading
 from types import SimpleNamespace
 
@@ -263,3 +264,164 @@ def test_synchronous_denied_read_is_failure_and_no_backend_still_falls_back(dela
     delayed_keychain.errors[secrets.USERNAME] = keyring.errors.NoKeyringError("no backend")
     assert secrets.get_api_key() is None
     assert secrets._keyring_ok is False
+
+
+@pytest.mark.parametrize("already_pending", [False, True])
+def test_wait_for_tutor_credential_consumes_one_delayed_read(delayed_keychain, already_pending):
+    async def run():
+        delayed_keychain.release.clear()
+        if already_pending:
+            with pytest.raises(secrets.CredentialPendingError):
+                secrets.get_api_key()
+        task = asyncio.create_task(secrets.wait_for_credential_read(secrets.get_api_key))
+        await asyncio.sleep(0)
+        worker = secrets._operation_thread
+        assert worker is not None and worker.is_alive()
+        assert not task.done()
+        # The caller remains suspended while unrelated event-loop work can run.
+        await asyncio.sleep(0.03)
+        assert not task.done()
+        assert secrets._operation_thread is worker
+        delayed_keychain.release.set()
+        assert await asyncio.wait_for(task, 1) == "synthetic-tutor"
+        assert delayed_keychain.calls == [secrets.USERNAME]
+
+    asyncio.run(run())
+
+
+def test_wait_for_tutor_credential_waits_for_unrelated_exa_read(delayed_keychain):
+    async def run():
+        secrets._keyring_ok = True
+        delayed_keychain.release.clear()
+        with pytest.raises(secrets.CredentialPendingError):
+            secrets.get_exa_api_key()
+        exa_worker = secrets._operation_thread
+        task = asyncio.create_task(secrets.wait_for_credential_read(secrets.get_api_key))
+        await asyncio.sleep(0.03)
+        assert not task.done()
+        assert secrets._operation_thread is exa_worker
+        delayed_keychain.release.set()
+        assert await asyncio.wait_for(task, 1) == "synthetic-tutor"
+        assert secrets.get_exa_api_key() == "synthetic-exa"
+        assert delayed_keychain.calls == [secrets.EXA_USERNAME, secrets.USERNAME]
+
+    asyncio.run(run())
+
+
+def test_wait_for_credential_deadline_preserves_pending_read(delayed_keychain, monkeypatch):
+    monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.04)
+
+    async def run():
+        delayed_keychain.release.clear()
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(secrets.CredentialPendingError):
+            await secrets.wait_for_credential_read(secrets.get_api_key)
+        elapsed = asyncio.get_running_loop().time() - started
+        assert 0.04 <= elapsed < 0.5
+        worker = secrets._operation_thread
+        assert worker is not None and worker.is_alive()
+        assert delayed_keychain.calls == [secrets.USERNAME]
+        delayed_keychain.release.set()
+        await asyncio.to_thread(worker.join, 1)
+        assert await secrets.wait_for_credential_read(secrets.get_api_key) == "synthetic-tutor"
+        assert secrets._operation_thread is worker
+        assert delayed_keychain.calls == [secrets.USERNAME]
+        assert secrets._keyring_ok is True
+
+    asyncio.run(run())
+
+
+def test_cancelled_credential_wait_stops_polling(delayed_keychain):
+    reads = []
+
+    def read():
+        reads.append(None)
+        return secrets.get_api_key()
+
+    async def run():
+        delayed_keychain.release.clear()
+        task = asyncio.create_task(secrets.wait_for_credential_read(read))
+        await asyncio.sleep(0)
+        worker = secrets._operation_thread
+        assert worker is not None and worker.is_alive()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        reads_at_cancel = len(reads)
+        delayed_keychain.release.set()
+        await asyncio.to_thread(worker.join, 1)
+        await asyncio.sleep(0.03)
+        assert len(reads) == reads_at_cancel == 1
+        assert delayed_keychain.calls == [secrets.USERNAME]
+        assert secrets._operation_thread is worker
+
+    asyncio.run(run())
+
+
+def test_wait_for_credential_does_not_retry_actual_denial(delayed_keychain):
+    from backend.core.errors import ConfigurationError
+
+    async def run():
+        secrets._keyring_ok = True
+        delayed_keychain.errors[secrets.USERNAME] = keyring.errors.KeyringError("synthetic denied")
+        delayed_keychain.release.clear()
+        with pytest.raises(secrets.CredentialPendingError):
+            secrets.get_api_key()
+        worker = secrets._operation_thread
+        delayed_keychain.release.set()
+        await asyncio.to_thread(worker.join, 1)
+        reads = []
+
+        def read():
+            reads.append(None)
+            return secrets.get_api_key()
+
+        with pytest.raises(ConfigurationError, match="Unlock"):
+            await secrets.wait_for_credential_read(read)
+        assert len(reads) == 1
+        assert delayed_keychain.calls == [secrets.USERNAME]
+        assert secrets._operation_thread is worker
+        assert secrets._keyring_ok is True
+
+    asyncio.run(run())
+
+
+def test_credential_wait_uses_coherent_settings_after_endpoint_changes(db, delayed_keychain):
+    from backend.core import app_settings
+
+    first_endpoint = "http://127.0.0.1:8080/v1"
+    second_endpoint = "http://192.0.2.1:8080/v1"
+    first_identity = secrets.stage_tutor_credential(first_endpoint, "synthetic-first")
+    second_identity = secrets.stage_tutor_credential(second_endpoint, "synthetic-second")
+    secrets._slot_read_cache.clear()
+    db.execute(
+        "update settings set endpoint_url=?, tutor_credential_id=?, model=?, remote_ack=1 "
+        "where id=1",
+        (first_endpoint, first_identity, "first-model"),
+    )
+    db.commit()
+
+    async def run():
+        delayed_keychain.release.clear()
+        task = asyncio.create_task(
+            secrets.wait_for_credential_read(lambda: app_settings.resolve_tutor_access(db))
+        )
+        await asyncio.sleep(0)
+        assert not task.done()
+        db.execute(
+            "update settings set endpoint_url=?, tutor_credential_id=?, model=?, remote_ack=0 "
+            "where id=1",
+            (second_endpoint, second_identity, "second-model"),
+        )
+        db.commit()
+        delayed_keychain.release.set()
+        access = await asyncio.wait_for(task, 1)
+        assert access.config.endpoint_url == second_endpoint
+        assert access.config.credential_id == second_identity
+        assert access.config.api_key == "synthetic-second"
+        assert access.config.model == "second-model"
+        assert access.document_block == app_settings.REMOTE_UNACKNOWLEDGED
+        assert access.remote_ack is False
+        assert delayed_keychain.calls == ["tutor:" + first_identity, "tutor:" + second_identity]
+
+    asyncio.run(run())
