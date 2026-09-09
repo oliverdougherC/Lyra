@@ -90,7 +90,12 @@ export function VerdictBadge({ verdict, detail, className }: VerdictBadgeProps) 
         <p>{explanation}</p>
         {verdict === 'unchecked' ? (
           <p className="mt-2">
-            <Link href="/settings" className="text-accent-text underline underline-offset-2">
+            {/* The verdict could not be checked because the endpoint is not set; the fix
+                is the endpoint field, so the click lands on it. */}
+            <Link
+              href="/settings?lyra-anchor=endpoint-url"
+              className="text-accent-text underline underline-offset-2"
+            >
               Check your endpoint settings
             </Link>
           </p>

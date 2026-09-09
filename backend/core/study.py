@@ -30,6 +30,7 @@ Three reliability contracts hold here, each with its own Linear issue:
 """
 
 import asyncio
+import copy
 import json
 import logging
 import queue
@@ -730,6 +731,116 @@ def _record_card_provenance(
         artifacts.set_provenance(conn, part_id, entries, commit=False)
 
 
+# The hidden grading contract a question can carry (PLA-496): what actually makes a
+# free-response answer correct, written with the question rather than reconstructed from
+# one reference string after the fact. The layered grader (backend/core/grading.py)
+# consumes it; the interface never shows it. A real JSON Schema, not a field map: the
+# endpoint constrains the reply against it, so it must say object, properties, required,
+# and no additions - the same strictness as QUIZ_SCHEMA, whose question shape it is
+# embedded under. The bounds mirror `_grading_problem`, which still rechecks every reply
+# field by field in code; the schema keeps a conforming endpoint's reply shape honest
+# even when the model's structured output drifts.
+QUIZ_GRADING_CONTRACT: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "answer_kind": {
+            "type": ["string", "null"],
+            "enum": ["numeric", "symbolic", "set", "text", None],
+        },
+        "tolerance": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0,
+            "maximum": 0.05,
+        },
+        "units": {
+            "type": ["string", "null"],
+            "maxLength": 100,
+        },
+        "acceptable_alternatives": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "required_ideas": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "common_misconceptions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "contradictions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        "partial_understanding_accepted": {"type": "boolean"},
+    },
+    "required": [
+        "answer_kind",
+        "tolerance",
+        "units",
+        "acceptable_alternatives",
+        "required_ideas",
+        "common_misconceptions",
+        "contradictions",
+        "partial_understanding_accepted",
+    ],
+    "additionalProperties": False,
+}
+
+
+def _quiz_grading_schema() -> client.JsonSchema:
+    """QUIZ_SCHEMA plus the grading contract on every question.
+
+    Built from the prompt's own schema rather than restating it: the question shape is one
+    contract, and this is the one added field. The name changes so an endpoint that
+    caches schemas by name cannot hand back the field-less constraint for a reply that
+    must carry the field.
+    """
+    schema = copy.deepcopy(prompts.QUIZ_SCHEMA.schema)
+    item = schema["properties"]["questions"]["items"]
+    item["properties"]["grading"] = QUIZ_GRADING_CONTRACT
+    item["required"].append("grading")
+    return client.JsonSchema(name="quiz_questions_grading", schema=schema)
+
+
+_QUIZ_GRADING_INSTRUCTION = """\
+Each fill_blank question also carries a `grading` object: the hidden contract the grader
+uses to judge a typed answer, so a correctly written answer in different notation is not
+marked wrong. For fill_blank questions, fill it in from the same material as the
+question:
+- answer_kind: one of "numeric", "symbolic", "set", "text".
+- tolerance: for numeric answers, the relative tolerance that should accept a rounded
+  value, between 0.001 and 0.05; null for non-numeric answers.
+- units: the units the answer should be in, when it has any; null otherwise.
+- acceptable_alternatives: up to four equivalent forms of the answer (notation variants,
+  alternate units, alternate spellings).
+- required_ideas: for text answers, the concepts a correct response must convey.
+- common_misconceptions: the wrong ideas students typically bring to this question.
+- contradictions: statements that make a response wrong no matter what else it says.
+- partial_understanding_accepted: true when a response that conveys the core idea but
+  misses detail can still count as correct.
+For mcq and true_false questions the graded answer is the chosen option, so leave
+answer_kind, tolerance, and units null, leave the four lists empty, and set
+partial_understanding_accepted to false - the schema requires exactly that shape."""
+
+
+def _quiz_messages(job: _Job, source_text: str) -> list[dict[str, str]]:
+    """The quiz prompt's messages, plus the grading-contract instruction when fill-blank
+    questions are asked.
+
+    One builder serves both the budget pass and the call, so the instruction's tokens
+    count against the window the same way in each.
+    """
+    messages = prompts.build_quiz_prompt(source_text, job.count, job.difficulty, list(job.types))
+    if "fill_blank" in job.types:
+        messages.append({"role": "user", "content": _QUIZ_GRADING_INSTRUCTION})
+    return messages
+
+
 def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     """One call for the whole quiz, then code-enforced validation of every question."""
     artifact = artifacts.get_artifact(conn, job.artifact_id)
@@ -741,8 +852,10 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     _set_stage(conn, job.artifact_id, "Reading the material")
     asked = list(job.types)
     # The source budget leaves room for the retry hint, so the second call fits the window
-    # without re-gathering. The quiz prompt's fixed material is its system instruction.
-    fixed = _prompt_tokens(prompts.build_quiz_prompt("", job.count, job.difficulty, asked))
+    # without re-gathering. The quiz prompt's fixed material is its system instruction and
+    # the grading-contract instruction, counted together because both go out on every call
+    # that asks for fill-blank questions.
+    fixed = _prompt_tokens(_quiz_messages(job, ""))
     source_room = _source_cap(config, fixed)
     if source_room <= _RETRY_HINT_RESERVE:
         raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
@@ -756,11 +869,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
 
     _raise_if_cancelled(conn, job.artifact_id)
     _set_stage(conn, job.artifact_id, "Writing questions")
-    reply = _call_json(
-        config,
-        prompts.build_quiz_prompt(gathered, job.count, job.difficulty, asked),
-        prompts.QUIZ_SCHEMA,
-    )
+    reply = _call_json(config, _quiz_messages(job, gathered), _quiz_grading_schema())
     _raise_if_cancelled(conn, job.artifact_id)
     questions, failures = _validate_questions(_json_list(reply, "questions"), frozenset(asked))
     questions = _dedupe_questions(questions)
@@ -772,10 +881,8 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
         hint = _quiz_retry_hint(failures)
         retry = _call_json(
             config,
-            _with_retry_hint(
-                prompts.build_quiz_prompt(gathered, job.count, job.difficulty, asked), hint
-            ),
-            prompts.QUIZ_SCHEMA,
+            _with_retry_hint(_quiz_messages(job, gathered), hint),
+            _quiz_grading_schema(),
         )
         _raise_if_cancelled(conn, job.artifact_id)
         retried, _ = _validate_questions(_json_list(retry, "questions"), frozenset(asked))
@@ -1233,6 +1340,10 @@ def _question_problem(
         return "options must contain non-whitespace answers"
     if not isinstance(correct_index, int) or isinstance(correct_index, bool):
         return "correct_index must be an integer"
+    if "grading" in item:
+        problem = _grading_problem(item.get("grading"))
+        if problem is not None:
+            return problem
 
     if kind == "mcq":
         if len(options) != 4 or len({option.strip().casefold() for option in options}) != 4:
@@ -1251,6 +1362,67 @@ def _question_problem(
             return "fill_blank question needs a ___ blank"
     else:
         return f"unknown type {kind!r}"
+    return None
+
+
+_GRADING_LIST_FIELDS: tuple[tuple[str, int, int], ...] = (
+    # field, max entries, max entry length. Bounded so a generated contract cannot grow
+    # into a prompt the judge cannot carry.
+    ("acceptable_alternatives", 4, 200),
+    ("required_ideas", 8, 200),
+    ("common_misconceptions", 8, 200),
+    ("contradictions", 8, 200),
+)
+
+
+def _grading_problem(raw: object) -> str | None:
+    """The one rule a hidden grading contract breaks, or None when it is fit to serve.
+
+    The model's output is a proposal: the shape the schema asks for is rechecked here,
+    field by field, and a malformed contract drops the question rather than being
+    repaired. An absent `grading` key is not a problem - older quizzes, and any question
+    whose generator left it out, still grade against the reference answer alone.
+    """
+    if raw is None or not isinstance(raw, dict):
+        return "grading must be an object"
+    unknown = set(raw) - {
+        "answer_kind",
+        "tolerance",
+        "units",
+        "partial_understanding_accepted",
+        *(field for field, _, _ in _GRADING_LIST_FIELDS),
+    }
+    if unknown:
+        return f"grading has unknown fields: {sorted(unknown)}"
+    kind = raw.get("answer_kind")
+    if kind is not None and kind not in ("numeric", "symbolic", "set", "text"):
+        return "grading answer_kind must be numeric, symbolic, set, or text"
+    tolerance = raw.get("tolerance")
+    if tolerance is not None and (
+        isinstance(tolerance, bool)
+        or not isinstance(tolerance, (int, float))
+        or not (0 < tolerance <= 0.05)
+    ):
+        return "grading tolerance must be a number between 0 and 0.05"
+    units = raw.get("units")
+    if units is not None and (not isinstance(units, str) or not units.strip() or len(units) > 100):
+        return "grading units must be a short non-empty string"
+    # The schema requires a boolean here (never null), so the code agrees: a null flag
+    # is malformed generation output, not a default.
+    partial = raw.get("partial_understanding_accepted")
+    if not isinstance(partial, bool):
+        return "grading partial_understanding_accepted must be a boolean"
+    for list_field, max_entries, max_length in _GRADING_LIST_FIELDS:
+        value = raw.get(list_field, [])
+        if not isinstance(value, list):
+            return f"grading {list_field} must be a list"
+        if len(value) > max_entries:
+            return f"grading {list_field} holds at most {max_entries} entries"
+        for entry in value:
+            if not isinstance(entry, str) or not entry.strip():
+                return f"grading {list_field} entries must be non-empty strings"
+            if len(entry) > max_length:
+                return f"grading {list_field} entries are capped at {max_length} characters"
     return None
 
 

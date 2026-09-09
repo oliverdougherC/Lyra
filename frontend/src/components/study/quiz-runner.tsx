@@ -100,10 +100,15 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
           if (run !== generation.current) return
           busy.current = false
           setAttempt(started)
-          // Resume where the student left off: the first question with no recorded answer,
-          // or the last question when every one has already been answered (PLA-277).
+          // Resume where the student left off: the earliest question that still needs
+          // the student - unanswered, or answered but unsettled (an unresolved answer
+          // keeps its words and its retry) - or the last question when none do (PLA-277).
           const answered = new Set(started.answers.map((entry) => entry.part_id))
-          const firstUnanswered = started.question_part_ids.findIndex((id) => !answered.has(id))
+          const recordedByPart = new Map(started.answers.map((entry) => [entry.part_id, entry]))
+          const firstUnresolved = started.question_part_ids.findIndex((id) => {
+            const recorded = recordedByPart.get(id)
+            return recorded === undefined || recorded.uncertain
+          })
           let helpPartId: number | null = null
           try {
             const saved = JSON.parse(sessionStorage.getItem(returnKey) ?? 'null')
@@ -124,26 +129,37 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
           const resumeIndex =
             helpIndex >= 0
               ? helpIndex
-              : firstUnanswered === -1
+              : firstUnresolved === -1
                 ? Math.max(0, started.question_part_ids.length - 1)
-                : firstUnanswered
+                : firstUnresolved
           setIndex(resumeIndex)
 
-          // A lost finish response can leave every answer durably recorded while the
-          // attempt is still active. Restore the final reveal so the student can retry
-          // finish directly instead of submitting the last answer a second time.
-          if (firstUnanswered === -1 || helpIndex >= 0) {
-            const partId = started.question_part_ids[resumeIndex]
-            const recorded = started.answers.find((entry) => entry.part_id === partId)
-            const resumed = quiz.data?.questions.find((entry) => entry.part_id === partId)
-            if (recorded && resumed) {
-              setSelected(recorded.selected_index)
-              setAnswer({
-                correct: recorded.correct,
-                correct_index: resumed.question.correct_index,
-                explanation: resumed.question.explanation,
-              })
+          // The resumed question carries a recorded answer - settled, or unsettled with
+          // its words and its retry intact. Restore the reveal so the student returns
+          // exactly to where they were, and a lost finish response still lands on a
+          // re-usable final reveal instead of a resubmitted answer.
+          const resumedPartId = started.question_part_ids[resumeIndex]
+          const resumedRecorded = started.answers.find((entry) => entry.part_id === resumedPartId)
+          const resumedQuestion = quiz.data?.questions.find(
+            (entry) => entry.part_id === resumedPartId,
+          )
+          if (resumedRecorded && resumedQuestion) {
+            setSelected(resumedRecorded.selected_index)
+            // A recorded free response is the student's own words: restore them so the
+            // reveal shows what they wrote and the handoff to Lyra cites the actual
+            // response instead of an empty one.
+            if (
+              resumedQuestion.question.type === 'fill_blank' &&
+              resumedRecorded.response_text !== null
+            ) {
+              setFillText(resumedRecorded.response_text)
             }
+            setAnswer({
+              correct: resumedRecorded.correct,
+              uncertain: resumedRecorded.uncertain,
+              correct_index: resumedQuestion.question.correct_index,
+              explanation: resumedQuestion.question.explanation,
+            })
           }
         },
         onError: (error) => {
@@ -247,6 +263,9 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
 
   const payload = current.question
   const revealed = answer !== null
+  // An unsettled fill-blank is a comparison, not a verdict: the student may reword and
+  // submit again, and the server regrades the new words without a new attempt.
+  const retrying = !!answer && answer.uncertain && payload.type === 'fill_blank'
   const isLast = index === questions.length - 1
 
   async function choose(selectedIndex: number) {
@@ -255,7 +274,14 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
     busy.current = true
     setSelected(selectedIndex)
     try {
-      const graded = await submitAnswer({ part_id: current.part_id, selected_index: selectedIndex })
+      // The chosen index is the graded answer; the text of that option is the raw
+      // response the backend persists beside it, so a recorded answer always carries
+      // what the student actually submitted.
+      const graded = await submitAnswer({
+        part_id: current.part_id,
+        selected_index: selectedIndex,
+        response_text: payload.options[selectedIndex] ?? '',
+      })
       if (run === generation.current) setAnswer(graded)
     } catch (caught) {
       if (run !== generation.current) return
@@ -267,13 +293,28 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   }
 
   async function checkFillBlank() {
-    if (revealed || submitting || !fillText.trim()) return
-    // The runner grades the text itself: case-insensitive and whitespace-trimmed against
-    // the one stored option, then reported as 0 on a match and -1 on a miss, which is
-    // the contract the answers endpoint documents.
-    const expected = (payload.options[0] ?? '').trim().toLowerCase()
-    const matched = fillText.trim().toLowerCase() === expected
-    await choose(matched ? 0 : -1)
+    if ((revealed && !retrying) || busy.current || !attempt || !fillText.trim()) return
+    // The typed words are the answer. The server grades them against the question's
+    // reference answer and its hidden grading contract, and stores the student's own
+    // text beside the verdict; the index carries no meaning here, so the contract
+    // keeps its miss marker.
+    const run = generation.current
+    busy.current = true
+    setSelected(-1)
+    try {
+      const graded = await submitAnswer({
+        part_id: current.part_id,
+        selected_index: -1,
+        response_text: fillText,
+      })
+      if (run === generation.current) setAnswer(graded)
+    } catch (caught) {
+      if (run !== generation.current) return
+      setSelected(null)
+      toast.error(caught instanceof ApiError ? caught.message : 'Could not record that answer.')
+    } finally {
+      if (run === generation.current) busy.current = false
+    }
   }
 
   function advance() {
@@ -349,12 +390,12 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             aria-label="Your answer"
             autoComplete="off"
             placeholder="Type the answer"
-            disabled={revealed || submitting}
+            disabled={submitting || (revealed && !retrying)}
             onChange={(event) => setFillText(event.target.value)}
           />
-          {!revealed ? (
+          {!revealed || retrying ? (
             <Button type="submit" disabled={!fillText.trim() || submitting}>
-              Check
+              {retrying ? 'Check again' : 'Check'}
             </Button>
           ) : null}
         </form>
@@ -395,16 +436,24 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             'flex flex-col gap-2 rounded-md border p-4 focus:outline-none',
             answer.correct
               ? 'border-success-text/50 bg-success-fill/40'
-              : 'border-danger-text/50 bg-danger-fill/40',
+              : answer.uncertain
+                ? 'border-border bg-card'
+                : 'border-danger-text/50 bg-danger-fill/40',
           )}
         >
+          {/* An unsettled answer is compared, not judged: the student still sees the
+              reference answer and the explanation, without a confident "wrong". */}
           <p
             className={cn(
               'text-sm font-medium',
-              answer.correct ? 'text-success-text' : 'text-danger-text',
+              answer.correct
+                ? 'text-success-text'
+                : answer.uncertain
+                  ? 'text-text-secondary'
+                  : 'text-danger-text',
             )}
           >
-            {answer.correct ? 'Correct.' : 'Not quite.'}
+            {answer.correct ? 'Correct.' : answer.uncertain ? "Let's compare." : 'Not quite.'}
           </p>
           {!answer.correct ? (
             <div className="text-text-secondary flex items-baseline gap-1.5 text-sm">
@@ -485,15 +534,28 @@ function QuizResult({
           tabIndex={-1}
           className="font-heading text-text-primary text-2xl tracking-tight focus:outline-none"
         >
-          You scored {result.score} out of {result.total}
+          {/* With unsettled answers a score would count them as wrong, so the heading
+              claims only what is settled: how much was answered (PLA-496). */}
+          {result.unresolved > 0
+            ? `You answered ${result.answered} of ${result.total}`
+            : `You scored ${result.score} out of ${result.total}`}
         </h2>
         <p className="text-text-secondary text-sm">Review topics where you scored below 60%.</p>
+        {result.unresolved > 0 ? (
+          <p className="text-text-tertiary text-xs">
+            {result.unresolved} {result.unresolved === 1 ? 'answer' : 'answers'} left unresolved,
+            not counted as wrong.
+          </p>
+        ) : null}
       </div>
 
       <ul className="flex flex-col gap-3">
         {result.by_topic.map((entry) => {
+          const unresolved = entry.unresolved ?? 0
           const ratio = entry.total > 0 ? entry.correct / entry.total : 0
-          const weak = ratio < 0.6
+          // Only settled answers can make a topic weak. A topic with no settled answers
+          // (only unresolved) is reported, never flagged (PLA-496).
+          const weak = entry.total > 0 && ratio < 0.6
           return (
             <li key={entry.topic} className="flex flex-col gap-1">
               <div className="flex items-baseline justify-between gap-3">
@@ -507,15 +569,20 @@ function QuizResult({
                   )}
                 >
                   {entry.correct} of {entry.total}
+                  {unresolved > 0 ? ` · ${unresolved} unresolved` : ''}
                 </span>
               </div>
               <Progress
                 value={ratio * 100}
-                aria-label={`${entry.topic}: ${entry.correct} of ${entry.total} correct`}
+                aria-label={`${entry.topic}: ${entry.correct} of ${entry.total} correct${
+                  unresolved > 0 ? `, ${unresolved} unresolved` : ''
+                }`}
                 className={weak ? '[&_[data-slot=progress-indicator]]:bg-danger-text' : undefined}
               />
-              {/* A weak topic is a question waiting to be asked. The words travel to the
-                  tutor's composer, where the student can still change them before asking. */}
+              {/* Unsettled answers are reported here; they never become a confident
+                  weakness. A weak topic, by contrast, is a question waiting to be
+                  asked: the words travel to the tutor's composer, where the student can
+                  still change them before asking. */}
               {weak ? (
                 <Link
                   href={chatHandoffUrl(classId, { ask: weakTopicQuestion(entry.topic) })}
@@ -524,6 +591,11 @@ function QuizResult({
                   <MessageSquare aria-hidden className="size-3" />
                   Go over this with Lyra
                 </Link>
+              ) : null}
+              {unresolved > 0 && !weak ? (
+                <p className="text-text-tertiary text-xs">
+                  {unresolved} {unresolved === 1 ? 'answer' : 'answers'} left unresolved.
+                </p>
               ) : null}
             </li>
           )

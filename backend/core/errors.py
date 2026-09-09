@@ -30,6 +30,13 @@ class ConflictError(LyraError):
     status = 409
 
 
+class UnprocessableError(LyraError):
+    """A well-formed request that violates the contract (PLA-496: a typed answer
+    submitted without the student's words)."""
+
+    status = 422
+
+
 class StaleContentError(ConflictError):
     """A body write named a version the part has already moved past (PLA-289).
 

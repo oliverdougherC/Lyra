@@ -317,19 +317,81 @@ reply is the page's main content, so it gets the page.
   highlighting themed per mode, table/pre/code overflow contained in its surface, and KaTeX math
 - Equations use `$$...$$` on their own blank-line-separated display rows; `$...$` is reserved for
   short inline quantities, and wide display math scrolls horizontally rather than overlapping prose
-- Newly arriving prose words fade in in source order with a 180ms opacity/2px-rise reveal; code and
-  math remain intact and are never split into visual-only layers. A typeset equation is one unit of
-  the cascade, revealed whole in its own place
+- Newly arriving prose words fade in in reading order with an opacity-only 180ms reveal, at a
+  pace that tracks arrival — 26ms per word in a burst, 38ms at a steady drip, 55ms in a trickle,
+  with no more than 500ms of unread text ever queued behind the stream. Code blocks, tables,
+  rules, and checkboxes are each one unit of the cascade, revealed whole; a list marker arrives
+  with the first word of its item
 - **Math that has not finished arriving is withheld rather than typeset.** Code and prose grow a
   character at a time and read fine doing it; an equation does not. Closing `$\frac{1}{2` on the
-  reader's behalf draws a fraction with one arm, and a fragment long enough to look like display
-  math is centred on its own line only to snap back inline when the closing delimiter lands. That is
-  what made equations look like they populated ahead of the sentences holding them: they were being
-  drawn out of the text flow before the text existed
+  reader's behalf draws a fraction with one arm. The rule is drawn at the line, not the buffer: the
+  unclosed tail of an *open* line is withheld; a line that *ends* with a span that never closes is
+  repaired into a display block — the repair wraps it in `$$...$$`, so the display contract is
+  carried by explicit delimiters, not by a promotion pass; and an explicit `$...$` span stays
+  inline wherever it sits, in every later chunk and at the terminal handoff — there is no line-end
+  promotion, so a closed inline equation can never jump to its own line
+- **A `$$...$$` display block keeps the containment it was written in.** It is indented to the
+  content column of its line, so a fraction inside a list item or a blockquote stays on that
+  line's layer. A bare `$` that reads as currency — a digit, a space, or a line end behind it —
+  is escaped for rendering and never opened as math, while the raw text keeps the unescaped
+  dollar for copy and storage; when another unescaped `$` follows on the same line, the escape
+  is also the mispairing guard, because the real parser would otherwise pair the two dollars
+  into one bogus span. Digit-led spans like `$5x$` and `$2+2$` still render as mathematics;
+  the settled render of a finished answer is the same text the stream ends with
 - A unit's place in the cascade survives a re-render. Markdown is re-parsed on every frame, so the
   node holding a word can be replaced while its reveal is still pending, and re-applying the reveal
-  without its delay would jump it ahead of every word queued in front of it. The cascade lives in
-  `components/chat/reveal.ts` and is shared by every surface that shows written work
+  without its delay would jump it ahead of every word queued in front of it. A word's identity is
+  the offset of its core in the source it was read from — stable while the stream grows at the end
+  and across the delimiters that open and close around it — and a pending deadline may move
+  earlier but never later, so the cascade reads in order no matter how the parse reshuffles. A
+  range the reader already holds is remembered as the union of the extents its units have covered;
+  a brand-new unit born inside that range — a split-off half of a word that used to be one — takes
+  the range's past moment instead of the queue tail, and a pending unit that sits ahead of a held
+  past moment moves earlier to keep reading order, because a visible span never re-hides. The
+  cascade lives in `components/chat/reveal.ts` and is shared by every surface that shows written
+  work
+- **An answer is regenerated under a generation identity, and the pane owns the identity.** The
+  chat pane hands every turn its own `generation`, bumps it when the agent reports a `reset`,
+  and again when a new turn starts — a reset and the first token of the replacement can land in
+  the same batch, with no empty frame committed between them, and the replacement still starts
+  life with its own slots: the schedule is cleared on the generation change, so a replacement
+  answer never inherits the reveal times of the answer it replaces, and any drain the old
+  cascade still owes is reported under the old identity and ignored. The pane settles a turn
+  only when the drain arrives under the generation it is running and under the outcome that ended
+  the turn — an empty answer has nothing to drain and settles at once
+- **The streaming row is the row that persists, by ID, not by position.** The terminal frame of
+  a turn names the message the backend saved the answer under, and on settle the pane verifies
+  that ID in the refetched conversation before handing anything over: the user row is the saved
+  question (adjacent, same content), the answer row is the saved answer, and both keep the keys
+  the optimistic rows used — the same DOM node, the same mounted renderer — so a selection the
+  reader made in the live answer is measured against the stream's text and restored onto the
+  settled render of the identical content. A handoff that names an ID the transcript does not
+  hold yet is rechecked once (bounded), and a handoff that cannot verify itself falls back to the
+  plain settle. The handoff is scoped to the turn's conversation and is retired when the pane
+  moves to another one, so it can never claim another conversation's rows
+- **A word is published at frame cadence, and the terminal owes no frame.** Token arrivals
+  schedule at most one pending publication, which a requestAnimationFrame flushes at the next
+  frame with a timer backstop — hidden tabs withhold frames, not timers, and the turn's
+  terminal frame (done, result, error, stop) flushes synchronously on its own microtask, so the
+  last words never sit behind a frame the tab may not owe. A reset or an unmount invalidates
+  the pending publication before it can publish
+- **Completion is a drain, not a frame.** The cascade reports done from a settle-grace timer
+  (220ms after the last word's reveal is scheduled), which in a hidden tab simply waits until
+  the reader looks again: no timer chain, no requestAnimationFrame the terminal flush depends
+  on. Under `prefers-reduced-motion` there is nothing to wait for — the drain is immediate, and
+  the words read as words from the first frame, in the stylesheet as well as the timer: the
+  reveal's base state hides each word until its frame arrives, and a reduced-motion reader must
+  never sit in that hidden state, so the media query carries the only `!important` the cascade
+  uses, pinning every word visible while the terminal flush does its work.
+  Finished units also go quiet: once a unit has revealed with an unchanged delay, later commits
+  do not rewrite it, so a long finished answer costs no schedule work while a new tail streams.
+  Measured at the feed cadence (one content append per commit, jsdom, no FPS claim): a
+  representative 1,340-character answer costs ~9 style writes per commit and ~9 commit-ms mean,
+  and the deadline-inheritance scan is bounded, not O(new units × history) — it walks a
+  start-sorted snapshot toward earlier starts, stops the moment the earlier ranges can no
+  longer reach the unit, and skips the rest once a containing range is on hand. At an
+  18,000-character math-heavy source the scan per new unit stays around three hundred and the
+  worst commit around 127ms, versus 12.3 million scans and 153ms unbounded
 - There is no stream caret. Markdown blocks are block-level, so a trailing marker cannot sit
   at the end of the last word: it lands at the start of the line below, reading as stray
   punctuation. The word reveal is already the evidence that text is arriving
@@ -494,7 +556,7 @@ Every animation in Phase 1, so nothing is improvised:
 | Document list entry | staggered fade plus 8px rise, capped at five steps, with layout reordering | 250ms, gentle |
 | Batch loader | two counter-rotating token rings; rotation stops under reduced motion | motion-safe, linear |
 | Dialog, sheet, menu, popover, select, tooltip | fade plus at most 8px vertical movement | 200ms, never side-slide or zoom |
-| Streaming word reveal | New prose words fade in source order with a 24ms stagger capped at 160ms | 180ms, gentle |
+| Streaming word reveal | New prose words fade in in reading order, opacity only, at 26–55ms per word by arrival rate with no more than 500ms of text queued; equations, code, tables, rules, and checkboxes reveal whole, and list markers ride in with their first word | 180ms, gentle |
 | Thinking loader | `breathe` braille cell, one character wide at every frame so the label never shifts; holds at full brightness under reduced motion | 100ms per frame |
 | Thinking label | Light sweep clipped to the glyphs; removed outright under reduced motion, never frozen, because a paused clip leaves the text transparent | 2.6s, linear |
 | Mark at work | Orbit turns; the primary star breathes and its companions twinkle off-phase | 7s linear, 2.4s gentle |

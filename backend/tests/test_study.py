@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.core import artifacts, scheduler, solver, study
+from backend.core import artifacts, grading, scheduler, solver, study
 from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
@@ -712,6 +712,276 @@ def test_a_quiz_undershoot_is_retried_once_with_the_failures_named(
     assert len(llm.calls) == 2
     retry_messages = llm.calls[1]["args"][3]
     assert "correct_index out of range" in str(retry_messages)
+
+
+def _schema_violation(value: object, schema: dict[str, object]) -> str | None:
+    """The first violation of `value` against `schema`, or None when it conforms.
+
+    A structural walk over exactly the keywords the emitted grading contract uses -
+    type, properties, required, additionalProperties, enum, array and string bounds -
+    so the test can check a generated rubric against the schema the call was sent
+    without a schema-validation dependency.
+    """
+    kind = schema.get("type")
+    if kind is not None:
+        kinds = kind if isinstance(kind, list) else [kind]
+        for wanted in kinds:
+            if (
+                (wanted == "null" and value is None)
+                or (wanted == "object" and isinstance(value, dict))
+                or (wanted == "array" and isinstance(value, list))
+                or (wanted == "string" and isinstance(value, str))
+                or (
+                    wanted == "number"
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                )
+                or (wanted == "integer" and isinstance(value, int) and not isinstance(value, bool))
+                or (wanted == "boolean" and isinstance(value, bool))
+            ):
+                break
+        else:
+            return f"value {value!r} does not match type {kind!r}"
+    if isinstance(value, dict):
+        for key in schema.get("required") or []:
+            if key not in value:
+                return f"missing required {key!r}"
+        if schema.get("additionalProperties") is False:
+            unknown = set(value) - set(schema.get("properties") or {})
+            if unknown:
+                return f"unknown fields {sorted(unknown)}"
+        for key, sub in (schema.get("properties") or {}).items():
+            if key in value:
+                violation = _schema_violation(value[key], sub)  # type: ignore[arg-type]
+                if violation is not None:
+                    return f"{key}: {violation}"
+    if isinstance(value, list):
+        max_items = schema.get("maxItems")
+        if max_items is not None and len(value) > max_items:  # type: ignore[operator]
+            return f"more than {max_items} entries"
+        item_schema = schema.get("items")
+        for entry in value:
+            if item_schema is not None:
+                violation = _schema_violation(entry, item_schema)  # type: ignore[arg-type]
+                if violation is not None:
+                    return f"entry: {violation}"
+    if isinstance(value, str):
+        if "maxLength" in schema and len(value) > schema["maxLength"]:  # type: ignore[operator]
+            return "string exceeds maxLength"
+        if "minLength" in schema and len(value) < schema["minLength"]:  # type: ignore[operator]
+            return "string shorter than minLength"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "maximum" in schema and value > schema["maximum"]:  # type: ignore[operator]
+            return "above maximum"
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:  # type: ignore[operator]
+            return "at or below exclusiveMinimum"
+    if "enum" in schema and value not in schema["enum"]:
+        return f"value {value!r} not in the allowed enum"
+    return None
+
+
+def _good_rubric() -> dict[str, object]:
+    return {
+        "answer_kind": "numeric",
+        "tolerance": 0.01,
+        "units": "Hz",
+        "acceptable_alternatives": ["1/(2T)"],
+        "required_ideas": [],
+        "common_misconceptions": ["the period itself"],
+        "contradictions": ["x(0) = 1"],
+        "partial_understanding_accepted": False,
+    }
+
+
+def test_the_emitted_quiz_schema_is_a_complete_json_schema(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """The quiz call ships a real JSON Schema, not a field map: the `grading` property
+    must declare its shape (object, properties, required, no additions), the generated
+    rubric must conform to it, and the store-side validation the writer applies must
+    agree - so what the endpoint is asked for and what the store accepts are one
+    contract."""
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    rubric = _good_rubric()
+    blank = {
+        "type": "fill_blank",
+        "question": "The angular sampling frequency is ___ .",
+        "options": ["2pi/T"],
+        "correct_index": 0,
+        "explanation": "Omega_s is 2 pi over T.",
+        "topic": "sampling",
+        "difficulty": "intermediate",
+        "grading": rubric,
+    }
+    llm.replies = [{"questions": [blank]}]
+
+    study.run_generation(_quiz_job(artifact_id, document_id, count=1))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+
+    schema = llm.calls[0]["kwargs"]["schema"]  # type: ignore[index]
+    assert schema.name == "quiz_questions_grading"
+    item = schema.schema["properties"]["questions"]["items"]
+    contract = item["properties"]["grading"]
+    # The reported malformation: a field map without object shape is not a schema.
+    assert contract["type"] == "object"
+    assert set(contract["properties"]) == set(rubric)
+    assert set(contract["required"]) == set(rubric)
+    assert contract["additionalProperties"] is False
+    # The schema is a valid description of its own field map: the kind enum covers the
+    # four kinds plus null, and the array bounds mirror the store-side caps.
+    assert contract["properties"]["answer_kind"]["enum"] == [  # type: ignore[index]
+        "numeric",
+        "symbolic",
+        "set",
+        "text",
+        None,
+    ]
+    for list_field, max_entries, _ in study._GRADING_LIST_FIELDS:
+        assert contract["properties"][list_field]["maxItems"] == max_entries  # type: ignore[index]
+        assert contract["properties"][list_field]["items"]["maxLength"] == 200  # type: ignore[index]
+
+    # The generated rubric payload validates against the contract it was asked to emit.
+    assert _schema_violation(rubric, contract) is None
+    # ...and passes the store-side validation the writer applies - the existing rules,
+    # not a parallel copy.
+    assert study._grading_problem(rubric) is None
+    stored = json.loads(str(artifacts.list_parts(db, artifact_id)[0]["content"]))
+    assert stored["grading"] == rubric
+    assert grading.parse_rubric(rubric) is not None
+
+
+def test_a_rubric_that_violates_the_contract_fails_generation(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """A rubric the emitted schema rejects is also rejected store-side, and the question
+    it rides on drops out: schema and code-enforced validation agree on what is
+    malformed, so generation fails visibly instead of storing a contract the grader
+    cannot trust."""
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    bad = {**_good_rubric(), "tolerance": 0.5}
+    blank = {
+        "type": "fill_blank",
+        "question": "The angular sampling frequency is ___ .",
+        "options": ["2pi/T"],
+        "correct_index": 0,
+        "explanation": "Omega_s is 2 pi over T.",
+        "topic": "sampling",
+        "difficulty": "intermediate",
+        "grading": bad,
+    }
+    llm.replies = [
+        {"questions": [blank]},
+        {"questions": [blank]},
+    ]
+
+    study.run_generation(_quiz_job(artifact_id, document_id, count=1))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert "0 of the 1" in str(artifact["error_message"])
+    assert artifacts.list_parts(db, artifact_id) == []
+    # The retry names the broken contract field, and both the emitted schema and the
+    # store-side rules reject the same rubric.
+    retry_messages = llm.calls[1]["args"][3]
+    assert "tolerance" in str(retry_messages)
+    schema = llm.calls[0]["kwargs"]["schema"]  # type: ignore[index]
+    contract = schema.schema["properties"]["questions"]["items"]["properties"]["grading"]
+    assert _schema_violation(bad, contract) is not None
+    assert study._grading_problem(bad) is not None
+
+
+def _choice_rubric() -> dict[str, object]:
+    """The rubric the instruction sends for an mcq/true_false question: the nullable
+    scalars null, the four lists empty, the partial flag false - one shape for both
+    choice types, because a chosen option needs no free-response contract."""
+    return {
+        "answer_kind": None,
+        "tolerance": None,
+        "units": None,
+        "acceptable_alternatives": [],
+        "required_ideas": [],
+        "common_misconceptions": [],
+        "contradictions": [],
+        "partial_understanding_accepted": False,
+    }
+
+
+def _true_false_question() -> dict[str, object]:
+    return {
+        "type": "true_false",
+        "question": "The sifting property picks x(0).",
+        "options": ["True", "False"],
+        "correct_index": 0,
+        "explanation": "x(t) delta(t) = x(0).",
+        "topic": "delta",
+        "difficulty": "intermediate",
+    }
+
+
+def _fill_blank_question() -> dict[str, object]:
+    return {
+        "type": "fill_blank",
+        "question": "The angular sampling frequency is ___ .",
+        "options": ["2pi/T"],
+        "correct_index": 0,
+        "explanation": "Omega_s is 2 pi over T.",
+        "topic": "sampling",
+        "difficulty": "intermediate",
+    }
+
+
+@pytest.mark.parametrize(
+    ("question", "rubric"),
+    [
+        (dict(_mcq("delta")), _choice_rubric()),
+        (_true_false_question(), _choice_rubric()),
+        (_fill_blank_question(), _good_rubric()),
+    ],
+    ids=["mcq", "true_false", "fill_blank"],
+)
+def test_the_question_type_rubric_shapes_are_one_contract(
+    question: dict[str, object], rubric: dict[str, object]
+) -> None:
+    """Each question type's rubric is the same contract three ways: the shape the
+    instruction asks for validates against the emitted schema, the store-side check the
+    writer applies accepts it, and the grader's own parser reads it back."""
+    item = study._quiz_grading_schema().schema["properties"]["questions"]["items"]
+    full = {**question, "grading": rubric}
+    assert _schema_violation(full, item) is None  # type: ignore[arg-type]
+    assert study._question_problem(full) is None
+    assert study._grading_problem(rubric) is None
+    assert grading.parse_rubric(rubric) is not None
+
+
+def test_a_legacy_question_without_a_rubric_passes_the_code_but_not_the_schema() -> None:
+    """A stored pre-grading question carries no `grading` key at all. The emitted schema
+    (which constrains generated replies) requires the field on every question, but the
+    store side must still accept the legacy shape: the writer skips its rubric check and
+    the grader parses nothing, grading against the reference answer alone."""
+    legacy = dict(_mcq("legacy"))
+    item = study._quiz_grading_schema().schema["properties"]["questions"]["items"]
+    assert _schema_violation(legacy, item) is not None  # type: ignore[arg-type]
+    assert study._question_problem(legacy) is None
+    assert grading.parse_rubric(None) is None
+
+
+def test_a_null_flag_or_null_list_is_rejected_by_schema_and_code_together() -> None:
+    """The nullability fix has one shape: nullable scalars may be null, lists and the
+    partial flag may not. Both the emitted schema and the store-side check say so."""
+    item = study._quiz_grading_schema().schema["properties"]["questions"]["items"]
+    contract = item["properties"]["grading"]  # type: ignore[index]
+    null_flag = {**_choice_rubric(), "partial_understanding_accepted": None}
+    null_list = {**_choice_rubric(), "contradictions": None}
+    for broken in (null_flag, null_list):
+        assert _schema_violation(broken, contract) is not None  # type: ignore[arg-type]
+        assert study._grading_problem(broken) is not None
+    # And the instruction's own mcq/true_false shape is exactly what both accept.
+    assert _schema_violation(_choice_rubric(), contract) is None  # type: ignore[arg-type]
+    assert study._grading_problem(_choice_rubric()) is None
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { documentRowId } from '@/lib/attention'
 import { StatusWord } from '@/components/ex-libris'
 import { IngestionProgress } from '@/components/documents/ingestion-progress'
 import { Button } from '@/components/ui/button'
@@ -94,6 +95,11 @@ type DocumentRowProps = {
   onMove?: (document: DocumentRead) => void
   /** Make a practice quiz from this one document. Supplied where the pane can navigate. */
   onPractice?: (document: DocumentRead) => void
+  /**
+   * The arrival emphasis of an attention deep-link: a transient ring and tint that fades
+   * back to the list's colours, so the row is unmistakable without keeping a badge on it.
+   */
+  highlighted?: boolean
 }
 
 export function DocumentRow({
@@ -107,6 +113,7 @@ export function DocumentRow({
   mode = 'ask',
   onMove,
   onPractice,
+  highlighted = false,
 }: DocumentRowProps) {
   const polling = !isTerminal(document.state)
   const { data: status } = useDocumentStatus(document.id, polling)
@@ -155,10 +162,20 @@ export function DocumentRow({
 
   return (
     <div
+      // The stable id the attention anchors resolve against (`lyra-anchor=document-7`
+      // targets this row), shared with the list and the deep links that build it.
+      id={documentRowId(document.id)}
+      // Focusable for programmatic arrival only: an attention deep-link stands the
+      // reader on the exact row. tabIndex -1 keeps every row out of the ordinary tab order.
+      tabIndex={-1}
       className={cn(
-        'rounded-md border bg-card px-2.5 py-1.5 transition-colors duration-150',
+        'rounded-md border bg-card px-2.5 py-1.5 transition-colors duration-150 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
         busy && 'opacity-70',
-        selected ? 'border-accent-primary bg-accent-surface/50' : 'border-border hover:bg-muted',
+        highlighted
+          ? 'border-accent-primary bg-accent-surface/40 ring-1 ring-accent-primary/30'
+          : selected
+            ? 'border-accent-primary bg-accent-surface/50'
+            : 'border-border hover:bg-muted',
       )}
     >
       <div className="flex items-start gap-2">
@@ -412,7 +429,12 @@ function ScannedPopover({
         <p className="text-text-secondary mt-1">{blind ? NO_VISION_BODY : body}</p>
         {blind ? (
           <p className="mt-3">
-            <Link href="/settings" className="text-accent-primary underline underline-offset-2">
+            {/* The fix is the model choice (or the endpoint behind it), so the click
+                lands on the model field rather than the top of the page. */}
+            <Link
+              href="/settings?lyra-anchor=model"
+              className="text-accent-primary underline underline-offset-2"
+            >
               Check your endpoint settings
             </Link>
           </p>

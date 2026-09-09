@@ -20,6 +20,7 @@ const replace = vi.fn()
 const push = vi.fn()
 
 vi.mock('@/router/hooks', () => ({
+  ROUTE_ANCHOR_QUERY_KEY: 'lyra-anchor',
   useRouter: () => ({ replace, push, prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
@@ -98,8 +99,20 @@ beforeEach(() => {
     },
   ] as SolutionRead[])
   vi.spyOn(api, 'listDocuments').mockResolvedValue([
-    { id: 3, class_id: 1, filename: 'homework_2.pdf', state: 'ready' },
-    { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
+    {
+      id: 3,
+      class_id: 1,
+      filename: 'homework_2.pdf',
+      state: 'ready',
+      created_at: '2026-08-04 09:00:00',
+    },
+    {
+      id: 5,
+      class_id: 1,
+      filename: 'syllabus.pdf',
+      state: 'failed',
+      created_at: '2026-08-03 09:00:00',
+    },
   ] as DocumentRead[])
   vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
   vi.spyOn(api, 'listDrafts').mockResolvedValue([])
@@ -220,10 +233,11 @@ describe('ClassHub', () => {
     )
 
     // The fixture's syllabus.pdf failed ingestion, and a failure is a continuation item:
-    // it is the thing most worth the student's next click.
+    // it is the thing most worth the student's next click. The link carries the failed
+    // document's stable id, so the Files tab can stand the student on that exact row.
     expect(screen.getByRole('link', { name: /One document could not be used/ })).toHaveAttribute(
       'href',
-      '/#/classes/1?tab=files',
+      '/#/classes/1?tab=files&lyra-anchor=document-5',
     )
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
 
@@ -244,29 +258,49 @@ describe('ClassHub', () => {
   it('distinguishes an empty class from one whose documents are working or broken', async () => {
     const { wrapper } = createWrapper()
 
-    // Failed-only: the class is not "empty", it is broken, and must say so.
+    // Failed-only: the class is not "empty", it is broken, and must say so. The
+    // aggregate row points at the first affected document in the list's own order
+    // (syllabus.pdf, the newer of the two), not just at the tab.
     vi.spyOn(api, 'listDocuments').mockResolvedValue([
-      { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
-      { id: 6, class_id: 1, filename: 'notes.pdf', state: 'failed' },
+      {
+        id: 5,
+        class_id: 1,
+        filename: 'syllabus.pdf',
+        state: 'failed',
+        created_at: '2026-08-04 09:00:00',
+      },
+      {
+        id: 6,
+        class_id: 1,
+        filename: 'notes.pdf',
+        state: 'failed',
+        created_at: '2026-08-03 09:00:00',
+      },
     ] as DocumentRead[])
     const failedView = render(<ClassHub classId={1} tab="ask" />, { wrapper })
     expect(
       await screen.findByRole('link', { name: /2 documents could not be used/ }),
-    ).toBeInTheDocument()
+    ).toHaveAttribute('href', '/#/classes/1?tab=files&lyra-anchor=document-5')
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
     failedView.unmount()
 
     // Unsupported-only: nothing crashed, nothing is coming, and nothing here is usable.
     // Terminal-but-unusable is attention, not emptiness, whichever way it got there.
     vi.spyOn(api, 'listDocuments').mockResolvedValue([
-      { id: 8, class_id: 1, filename: 'lecture.key', state: 'unsupported' },
+      {
+        id: 8,
+        class_id: 1,
+        filename: 'lecture.key',
+        state: 'unsupported',
+        created_at: '2026-08-02 09:00:00',
+      },
     ] as DocumentRead[])
     const unsupportedView = render(<ClassHub classId={1} tab="ask" />, {
       wrapper: createWrapper().wrapper,
     })
     expect(
       await screen.findByRole('link', { name: /One document could not be used/ }),
-    ).toHaveAttribute('href', '/#/classes/1?tab=files')
+    ).toHaveAttribute('href', '/#/classes/1?tab=files&lyra-anchor=document-8')
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
     unsupportedView.unmount()
@@ -274,15 +308,27 @@ describe('ClassHub', () => {
     // Mixed: one failed plus one unsupported is one aggregate row counting both, not
     // two rows or a count that quietly drops the unsupported file.
     vi.spyOn(api, 'listDocuments').mockResolvedValue([
-      { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
-      { id: 8, class_id: 1, filename: 'lecture.key', state: 'unsupported' },
+      {
+        id: 5,
+        class_id: 1,
+        filename: 'syllabus.pdf',
+        state: 'failed',
+        created_at: '2026-08-04 09:00:00',
+      },
+      {
+        id: 8,
+        class_id: 1,
+        filename: 'lecture.key',
+        state: 'unsupported',
+        created_at: '2026-08-02 09:00:00',
+      },
     ] as DocumentRead[])
     const mixedView = render(<ClassHub classId={1} tab="ask" />, {
       wrapper: createWrapper().wrapper,
     })
     expect(
       await screen.findByRole('link', { name: /2 documents could not be used/ }),
-    ).toBeInTheDocument()
+    ).toHaveAttribute('href', '/#/classes/1?tab=files&lyra-anchor=document-5')
     mixedView.unmount()
 
     // Still processing: working, not empty.
@@ -359,9 +405,10 @@ it('leads an unconfigured empty class to tutor setup and upload, while retaining
   vi.mocked(api.getSettings).mockResolvedValue({ endpoint_url: null, model: null } as SettingsRead)
   vi.mocked(api.listDocuments).mockResolvedValue([])
   render(<ClassHub classId={1} tab="ask" />, { wrapper: createWrapper().wrapper })
+  // The setup row lands on the endpoint field, not the top of the Settings page.
   expect(await screen.findByRole('link', { name: 'Set up your tutor' })).toHaveAttribute(
     'href',
-    '/#/settings',
+    '/#/settings?lyra-anchor=endpoint-url',
   )
   expect(screen.getByRole('link', { name: 'Add course materials' })).toHaveAttribute(
     'href',

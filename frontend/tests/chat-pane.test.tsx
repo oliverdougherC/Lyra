@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { ApiError, api, streamChat } from '@/lib/api'
+import { ApiError, api, streamChat, type AgentStreamEvent } from '@/lib/api'
 import type { ChatEvent, DocumentRead, MessageRead, SessionRead, SettingsRead } from '@/types'
 
 vi.mock('@/lib/api', async () => {
@@ -1049,6 +1049,14 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     expect(container.querySelector('[data-stream-word]')).toHaveClass('stream-word-visible')
     expect(screen.getByLabelText('Stop generating')).toBeInTheDocument()
     await act(async () => emit?.({ type: 'token', text: ' is two seconds.' }))
+    // A second read in the same frame adds no commit of its own: it refreshes the one
+    // pending publication, which the frame boundary publishes.
+    expect(Array.from(container.querySelectorAll('.assistant-content')).at(-1)).toHaveTextContent(
+      'The period',
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
     expect(Array.from(container.querySelectorAll('.assistant-content')).at(-1)).toHaveTextContent(
       'The period is two seconds.',
     )
@@ -1736,5 +1744,877 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       const [first, second] = vi.mocked(api.sendAgentChat).mock.calls
       expect(second[6]).toBe(first[6])
     })
+  })
+})
+
+describe('ChatPane answer lifecycle (PLA-501)', () => {
+  function renderAgentPane() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ChatPane
+            classId={1}
+            className="ECE 203"
+            agent
+            selectedDocumentId={5}
+            sessionId={7}
+            onSessionIdChange={() => {}}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+  }
+
+  function primeApi(transcript: MessageRead[]) {
+    // A real fetch deserializes a fresh array on every call; hand back a copy the same
+    // way, so mutating the fixture's rows cannot silently rewrite a snapshot the pane
+    // took of them (the query cache and the turn base would share one reference).
+    vi.mocked(api.listMessages).mockImplementation(async () => [...transcript])
+    const document: DocumentRead = {
+      id: 5,
+      class_id: 1,
+      filename: 'notes.pdf',
+      mime: 'application/pdf',
+      byte_size: 1024,
+      state: 'ready',
+      stage_detail: null,
+      pages_total: 1,
+      pages_done: 1,
+      pages_skipped: 0,
+      pages_failed: 0,
+      recognize: false,
+      error_message: null,
+      created_at: '2026-08-04T12:00:00Z',
+    }
+    vi.mocked(api.listDocuments).mockResolvedValue([document])
+    vi.mocked(api.getClassProfile).mockResolvedValue({ facts: [], extraction_skipped_reason: null })
+    const settings: SettingsRead = {
+      endpoint_url: 'http://localhost:1234/v1',
+      model: 'local',
+      context_window: 8192,
+      extraction_enabled: false,
+      remote_ack: false,
+      api_key_set: false,
+      api_key_storage: 'file',
+      endpoint_is_local: true,
+      endpoint_host: 'localhost',
+      embedding_model: null,
+      embedding_dim: null,
+      tools_supported: true,
+      tools_message: null,
+      vision_supported: null,
+      vision_message: null,
+      allow_web_research: false,
+      parallel_requests: false,
+      parallel_concurrency: 1,
+      exa_api_key_set: false,
+      exa_api_key_storage: 'file',
+    }
+    vi.mocked(api.getSettings).mockResolvedValue(settings)
+  }
+
+  it('starts a fresh generation when a reset and its replacement land in one batch', async () => {
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'token', text: 'The period' }))
+    const firstWord = container.querySelector<HTMLElement>('.assistant-content [data-stream-word]')
+    expect(firstWord, 'no reveal unit for the first answer').not.toBeNull()
+    const oldSlot = Number(firstWord!.dataset.streamRevealAt)
+
+    // The transport can deliver a `reset` and the first token of the replacement in one
+    // read: no empty frame commits between them. The replacement must start its own
+    // generation — its words take slots from now, not the slots the answer they replace
+    // had.
+    const before = performance.now()
+    transcript.push(
+      message({ id: 90, role: 'user', content: 'Explain this' }),
+      message({ id: 91, role: 'assistant', content: 'Revised answer.' }),
+    )
+    await act(async () => {
+      emit?.({ type: 'reset' })
+      emit?.({ type: 'token', text: 'Revised answer.' })
+      resolveTurn({
+        message_id: 91,
+        content: 'Revised answer.',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+
+    const revised = container.querySelector<HTMLElement>('.assistant-content [data-stream-word]')
+    expect(revised, 'no reveal unit for the replacement').not.toBeNull()
+    expect(Number(revised!.dataset.streamRevealAt)).toBeGreaterThanOrEqual(before)
+    expect(Number(revised!.dataset.streamRevealAt)).toBeGreaterThan(oldSlot)
+    expect(container.querySelector('.assistant-content')!.textContent).toBe('Revised answer.')
+
+    // The settled handoff: the answer the reader has been watching persists under its
+    // real ID without a remount, so the row the cascade ran in is the row that settles.
+    const liveNode = container.querySelector('.assistant-content')
+    await waitFor(
+      () => {
+        expect(container.querySelector('.assistant-content [data-stream-word]')).toBeNull()
+      },
+      { timeout: 5000 },
+    )
+    expect(container.querySelector('.assistant-content')).toBe(liveNode)
+    expect(transcript.map((row) => row.id)).toEqual([90, 91])
+    expect(
+      Array.from(container.querySelectorAll('.assistant-content')).map((node) => node.textContent),
+    ).toEqual(['Revised answer.'])
+  })
+
+  it('reconciles the final result by replacement, not by appending it to the deltas', async () => {
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'token', text: 'Partial.' }))
+    transcript.push(
+      message({ id: 92, role: 'user', content: 'Explain this' }),
+      message({ id: 93, role: 'assistant', content: 'The corrected answer.' }),
+    )
+    await act(async () => {
+      resolveTurn({
+        message_id: 93,
+        content: 'The corrected answer.',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+
+    // The terminal result is authoritative: it replaces the accumulated deltas exactly,
+    // duplicating nothing and losing nothing.
+    await waitFor(
+      () => {
+        expect(container.querySelector('.assistant-content [data-stream-word]')).toBeNull()
+      },
+      { timeout: 5000 },
+    )
+    expect(container.querySelector('.assistant-content')!.textContent).toBe('The corrected answer.')
+  })
+
+  it('settles an empty answer without hanging the turn', async () => {
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    transcript.push(message({ id: 94, role: 'user', content: 'Explain this' }))
+    await act(async () => {
+      emit?.({ type: 'reasoning', text: 'There is nothing to answer.' })
+      resolveTurn({
+        message_id: 94,
+        content: '',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+
+    // An empty answer has no tail to drain: the turn finalizes and the composer frees up.
+    // The input, not the Send button, carries the busy state: the button is idle without
+    // a draft either way, so the input is the honest witness that the pane is free.
+    await waitFor(
+      () => {
+        expect(container.querySelector('.assistant-content [data-stream-word]')).toBeNull()
+        expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+      },
+      { timeout: 5000 },
+    )
+  })
+
+  it('keeps a settled answer identity when the next turn begins', async () => {
+    // The handoff is scoped to its turn and survives the next send: the settled row keeps
+    // the key its optimistic twin streamed under, and the new turn's rows take keys of
+    // their own. A shared placeholder pair would remount the old answer at every follow-up.
+    vi.mocked(api.sendAgentChat).mockClear()
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'token', text: 'The first answer.' }))
+    transcript.push(
+      message({ id: 100, role: 'user', content: 'Explain this' }),
+      message({ id: 101, role: 'assistant', content: 'The first answer.' }),
+    )
+    await act(async () => {
+      resolveTurn({
+        message_id: 101,
+        content: 'The first answer.',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+    const settledNode = container.querySelector('.assistant-content')
+    expect(settledNode).not.toBeNull()
+    await waitFor(() => {
+      expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+    })
+
+    // The follow-up: while the second turn streams, the settled answer must be the same
+    // node it was before the send. The settle's invalidation refetch settles first — the
+    // send is gated on it.
+    await user.type(screen.getByLabelText('Message Lyra'), 'And now this?')
+    await waitFor(() => {
+      expect(
+        (screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled,
+      ).toBe(false)
+    })
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+    await act(async () => emit?.({ type: 'token', text: 'The second answer.' }))
+
+    const nodes = Array.from(container.querySelectorAll('.assistant-content'))
+    expect(nodes).toHaveLength(2)
+    expect(nodes[0]).toBe(settledNode)
+    expect(nodes[0]!.textContent).toBe('The first answer.')
+    expect(nodes[1]!.textContent).toBe('The second answer.')
+
+    // A stopped follow-up has no accepted assistant ID. It must not reuse the
+    // preceding turn's ID and remount that older answer under the follow-up's key.
+    transcript.push(message({ id: 102, role: 'user', content: 'And now this?' }))
+    await act(async () => {
+      resolveTurn({
+        message_id: 102,
+        content: '',
+        stopped: 'stopped',
+        detail: '',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+    await waitFor(() => {
+      expect(container.querySelectorAll('.assistant-content')).toHaveLength(1)
+      expect(container.querySelector('.assistant-content')).toBe(settledNode)
+    })
+  })
+
+  it('hands identity by ID, not by position, when the transcript grows around the answer', async () => {
+    // A refetch can arrive with more rows than the turn created: a settled answer that is
+    // not at the tail still earns its handoff by the id the transport accepted, and the
+    // rows around it render under their own IDs.
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'token', text: 'The kept answer.' }))
+    // The accepted answer sits behind an earlier exchange the refetch now carries.
+    transcript.push(
+      message({ id: 110, role: 'user', content: 'Earlier question' }),
+      message({ id: 111, role: 'assistant', content: 'Earlier answer.' }),
+      message({ id: 112, role: 'user', content: 'Explain this' }),
+      message({ id: 113, role: 'assistant', content: 'The kept answer.' }),
+    )
+    await act(async () => {
+      resolveTurn({
+        message_id: 113,
+        content: 'The kept answer.',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+
+    await waitFor(
+      () => {
+        expect(container.querySelector('.assistant-content [data-stream-word]')).toBeNull()
+      },
+      { timeout: 5000 },
+    )
+    const nodes = Array.from(container.querySelectorAll('.assistant-content'))
+    expect(nodes).toHaveLength(2)
+    expect(nodes.map((node) => node.textContent)).toEqual(['Earlier answer.', 'The kept answer.'])
+    expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+  })
+
+  it('settles a missing accepted row under its own ID rather than a borrowed one', async () => {
+    // The accepted row never reached the refetch (a late write). No identity to verify
+    // means no identity handed over: after the one bounded recheck the optimistic rows
+    // come down and nothing borrows the handoff.
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'token', text: 'The late answer.' }))
+    // The refetch carries only the question: the accepted id 121 is not in the list.
+    transcript.push(message({ id: 120, role: 'user', content: 'Explain this' }))
+    const liveNode = container.querySelector('.assistant-content')
+    await act(async () => {
+      resolveTurn({
+        message_id: 121,
+        content: 'The late answer.',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+
+    // One bounded recheck runs while the reader keeps watching the answer; then the
+    // unverified twin comes down. The settle's invalidation and the recheck both commit
+    // outside act, so wait for the state they produce rather than racing it.
+    await waitFor(
+      () => {
+        expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+        expect(container.querySelectorAll('.assistant-content')).toHaveLength(0)
+      },
+      { timeout: 5000 },
+    )
+    // No borrowed identity: the optimistic twin is gone, and nothing rendered in its
+    // place under the handoff's key.
+    expect(liveNode!.isConnected).toBe(false)
+  })
+
+  it('carries a held selection across the settled handoff', async () => {
+    // The static render swaps the row's inner nodes under the same outer node: a live
+    // selection anchored in the streaming nodes vanishes with them. The handoff captures
+    // it as text offsets when the terminal content is unchanged, and the settled row puts
+    // the range back.
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'token', text: 'Pick out the middle words here.' }))
+    transcript.push(
+      message({ id: 130, role: 'user', content: 'Explain this' }),
+      message({ id: 131, role: 'assistant', content: 'Pick out the middle words here.' }),
+    )
+    // The reader selects across the live answer before the turn settles.
+    const answer = container.querySelector('.assistant-content')!
+    const walker = document.createTreeWalker(answer, NodeFilter.SHOW_TEXT)
+    const firstNode = walker.nextNode()!
+    const nodeText = firstNode.textContent ?? ''
+    expect(nodeText.length).toBeGreaterThanOrEqual(4)
+    const range = document.createRange()
+    range.setStart(firstNode, 0)
+    range.setEnd(firstNode, 4)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const heldText = selection.toString()
+    expect(heldText.length).toBeGreaterThan(0)
+
+    await act(async () => {
+      resolveTurn({
+        message_id: 131,
+        content: 'Pick out the middle words here.',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+
+    // The settled row rebuilds the same text and the range comes back with it.
+    await waitFor(
+      () => {
+        expect(container.querySelector('.assistant-content [data-stream-word]')).toBeNull()
+        expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+      },
+      { timeout: 5000 },
+    )
+    await waitFor(() => {
+      const current = window.getSelection()!
+      expect(current.toString()).toBe(heldText)
+      expect(current.rangeCount).toBe(1)
+      const held = current.getRangeAt(0)
+      expect(answer.contains(held.startContainer)).toBe(true)
+      expect(answer.contains(held.endContainer)).toBe(true)
+    })
+  })
+
+  it('settles when a reset clears the answer and the turn ends empty', async () => {
+    // The turn had a live answer, the transport reset it, and the replacement ended empty:
+    // the drain the empty replacement owes belongs to the reset's generation. If it
+    // reported the old one, the pane's generation guard would reject it and the turn
+    // would sit stuck with the composer locked.
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'token', text: 'A live answer.' }))
+    expect(container.querySelector('.assistant-content')).not.toBeNull()
+
+    transcript.push(
+      message({ id: 95, role: 'user', content: 'Explain this' }),
+      message({ id: 96, role: 'assistant', content: '' }),
+    )
+    await act(async () => {
+      emit?.({ type: 'reset' })
+      resolveTurn({
+        message_id: 96,
+        content: '',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      })
+    })
+
+    // The replacement's drain carries the reset's generation, the guard accepts it, and
+    // the turn finalizes: no reveal units left, the composer free.
+    await waitFor(
+      () => {
+        expect(container.querySelector('.assistant-content [data-stream-word]')).toBeNull()
+        expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+      },
+      { timeout: 5000 },
+    )
+  })
+})
+
+describe('frame-cadence token publication (PLA-501)', () => {
+  function renderAgentPane() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ChatPane
+            classId={1}
+            className="ECE 203"
+            agent
+            selectedDocumentId={5}
+            sessionId={7}
+            onSessionIdChange={() => {}}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+  }
+
+  function primeApi(transcript: MessageRead[]) {
+    vi.mocked(api.listMessages).mockImplementation(async () => [...transcript])
+    const document: DocumentRead = {
+      id: 5,
+      class_id: 1,
+      filename: 'notes.pdf',
+      mime: 'application/pdf',
+      byte_size: 1024,
+      state: 'ready',
+      stage_detail: null,
+      pages_total: 1,
+      pages_done: 1,
+      pages_skipped: 0,
+      pages_failed: 0,
+      recognize: false,
+      error_message: null,
+      created_at: '2026-08-04T12:00:00Z',
+    }
+    vi.mocked(api.listDocuments).mockResolvedValue([document])
+    vi.mocked(api.getClassProfile).mockResolvedValue({ facts: [], extraction_skipped_reason: null })
+    const settings: SettingsRead = {
+      endpoint_url: 'http://localhost:1234/v1',
+      model: 'local',
+      context_window: 8192,
+      extraction_enabled: false,
+      remote_ack: false,
+      api_key_set: false,
+      api_key_storage: 'file',
+      endpoint_is_local: true,
+      endpoint_host: 'localhost',
+      embedding_model: null,
+      embedding_dim: null,
+      tools_supported: true,
+      tools_message: null,
+      vision_supported: null,
+      vision_message: null,
+      allow_web_research: false,
+      parallel_requests: false,
+      parallel_concurrency: 1,
+      exa_api_key_set: false,
+      exa_api_key_storage: 'file',
+    }
+    vi.mocked(api.getSettings).mockResolvedValue(settings)
+  }
+
+  /** Send one turn and hand back its event sink. */
+  async function startTurn(): Promise<{
+    emit: (event: AgentStreamEvent) => void
+    container: HTMLElement
+  }> {
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise(() => {})
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+    return { emit: emit!, container }
+  }
+
+  const answerText = (container: HTMLElement): string | null =>
+    Array.from(container.querySelectorAll('.assistant-content')).at(-1)?.textContent ?? null
+
+  it('publishes at most once per frame when several reads resolve in it', async () => {
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let frame: (() => void) | null = null
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frame = () => callback(0)
+      return 0
+    })
+    const { emit, container } = await startTurn()
+    try {
+      await act(async () => emit({ type: 'token', text: 'One' }))
+      expect(answerText(container)).toBe('One')
+
+      // Two reads in the same frame: the second refreshes the one pending publication,
+      // it adds no commit of its own.
+      await act(async () => {
+        emit({ type: 'token', text: ' two' })
+        emit({ type: 'token', text: ' three' })
+      })
+      expect(answerText(container)).toBe('One')
+
+      // The frame boundary publishes the accumulated text once.
+      act(() => frame?.())
+      expect(answerText(container)).toBe('One two three')
+
+      // Let the backstop clock run out after the frame already won the race: it adds
+      // nothing.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120))
+      })
+      expect(answerText(container)).toBe('One two three')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps publishing while a hidden tab withholds the frame', async () => {
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    // The withheld rAF: nothing is ever scheduled into a frame.
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+    const { emit, container } = await startTurn()
+    try {
+      await act(async () => emit({ type: 'token', text: 'One' }))
+      await act(async () => emit({ type: 'token', text: ' two' }))
+      expect(answerText(container)).toBe('One')
+
+      // The bounded timer carries the publication while no frame comes.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120))
+      })
+      expect(answerText(container)).toBe('One two')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('publishes the terminal text synchronously, with no frame in the path', async () => {
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    let resolveTurn!: (value: {
+      message_id: number
+      content: string
+      stopped: string
+      detail: string
+      activity: []
+      source_ids: number[]
+      workspace_change_ids: number[]
+      command_request_ids: number[]
+      profile_fact_ids: number[]
+    }) => void
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise((resolve) => {
+        resolveTurn = resolve
+      })
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+    try {
+      transcript.push(
+        message({ id: 97, role: 'user', content: 'Explain this' }),
+        message({ id: 98, role: 'assistant', content: 'One two.' }),
+      )
+      // Token, one more token, and the terminal result: one batch, no frame owed.
+      await act(async () => {
+        emit?.({ type: 'token', text: 'One' })
+        emit?.({ type: 'token', text: ' two.' })
+        resolveTurn({
+          message_id: 98,
+          content: 'One two.',
+          stopped: 'complete',
+          detail: 'Complete.',
+          activity: [],
+          source_ids: [],
+          workspace_change_ids: [],
+          command_request_ids: [],
+          profile_fact_ids: [],
+        })
+      })
+      // The last text is on screen without waiting for a frame, and the turn settles to
+      // the persisted row on the same path.
+      await waitFor(
+        () => {
+          expect(answerText(container)).toBe('One two.')
+          expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+        },
+        { timeout: 5000 },
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('never surfaces a pending publication after a reset clears the answer', async () => {
+    const transcript: MessageRead[] = []
+    primeApi(transcript)
+    let frame: (() => void) | null = null
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frame = () => callback(0)
+      return 0
+    })
+    const { emit, container } = await startTurn()
+    try {
+      await act(async () => emit({ type: 'token', text: 'One' }))
+      await act(async () => emit({ type: 'token', text: ' two' }))
+      expect(answerText(container)).toBe('One')
+
+      // The reset publishes its clear on this microtask and invalidates the queue. An
+      // empty streaming answer shows its waiting indicator, so no answer node at all.
+      await act(async () => emit({ type: 'reset' }))
+      expect(answerText(container)).toBeNull()
+
+      // Neither the frame nor the backstop may bring the dead text back.
+      act(() => frame?.())
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120))
+      })
+      expect(answerText(container)).toBeNull()
+
+      // The replacement answer starts from empty: its first word publishes immediately.
+      await act(async () => emit({ type: 'token', text: 'Three' }))
+      expect(answerText(container)).toBe('Three')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

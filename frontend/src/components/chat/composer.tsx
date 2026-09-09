@@ -135,7 +135,9 @@ export function Composer({
       <div className="min-h-[var(--pane-control-row)] rounded-2xl border border-border-strong bg-muted p-4 text-sm">
         <p className="text-text-secondary">{disabledReason}</p>
         <Button asChild variant="outline" size="sm" className="mt-2">
-          <Link href="/settings">Open settings</Link>
+          {/* The blocked composer is blocked on the endpoint, so the click lands on the
+              endpoint field instead of the top of the Settings page. */}
+          <Link href="/settings?lyra-anchor=endpoint-url">Open settings</Link>
         </Button>
       </div>
     )

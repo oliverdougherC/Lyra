@@ -47,7 +47,7 @@ export const MathText = memo(function MathText({
         rehypePlugins={KATEX_REHYPE_PLUGINS}
         components={inline ? INLINE_COMPONENTS : undefined}
       >
-        {normalizeMarkdownForRender(children, false, { promoteInlineMath: false })}
+        {normalizeMarkdownForRender(children, false)}
       </Markdown>
     </div>
   )

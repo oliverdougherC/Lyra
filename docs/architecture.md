@@ -43,6 +43,28 @@ The frontend is now a Vite/React application with client-side routing.
 - Hash routes keep a selected same-page citation in the reserved `lyra-anchor` query parameter.
   Citation jumps therefore preserve the class/chat/draft/solution/study route, query parameters,
   reload state, and browser/WebKit history instead of replacing the route fragment.
+- The same parameter carries attention: any surface that asks the user to act (a "needs
+  attention" row, banner, or recovery CTA) links to the exact unresolved item by stable id,
+  not by display text. `document-<id>` anchors identify a document row in a class's Files tab;
+  the row's DOM id is the same string, so a destination resolves with one
+  `getElementById`. Setting-up surfaces link to the settings fields they need (for example
+  `endpoint-url`, `model`), which the settings form focuses and scrolls into view.
+- Arriving with an anchor reveals the item: it scrolls into view, receives transient row
+  emphasis, and is announced in a polite live region - with focus, but without stealing the
+  student's place mid-visit, and without a permanent badge. When several items need attention,
+  a transient strip names the position ("1 of 2") and steps between items; each step is a
+  history push, so Back walks the items back in order, and Dismiss, Back, or the last item
+  resolving quietly retires the visit. A list filter that would hide the target is shown as
+  cleared only for the duration of the visit - the student's stored filter is never written,
+  so it survives pane unmount, tab changes, Back/Forward, and reload, and anything the student
+  types mid-visit takes over as their own query. A target that no longer exists lands on the
+  next unresolved item and, when none remains, says so plainly while the URL keeps naming the
+  place it meant. While the visit stands, a background poll that resolves or deletes the row
+  it stands on does not move keyboard focus or scroll; the strip, the visible target, and the
+  live region follow the next live item, and an explicit step (or a new navigation) performs
+  the full reveal on it. The class overview's "documents could not be used" row is built from
+  the same per-class list query as the Files tab, so its first item and the tab's top row
+  always agree.
 - The UI talks only to the FastAPI API surface; it does not call tutor providers or Exa directly.
 - Scroll positions are tracked per history entry in memory and checkpointed to session storage,
   never to History on scroll. Navigation reserves History quota; refused updates fall back to

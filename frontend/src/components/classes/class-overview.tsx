@@ -12,11 +12,17 @@ import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
+import { documentAttentionHref } from '@/lib/attention'
 import { formatRelativeTime, formatSessionFallbackTitle } from '@/lib/format'
 import { chatHandoffUrl, untitledDraftTitle } from '@/lib/handoff'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { useSessions } from '@/lib/hooks/use-chat'
-import { isTerminal, needsAttention, useDocuments } from '@/lib/hooks/use-documents'
+import {
+  documentsInListOrder,
+  isTerminal,
+  needsAttention,
+  useDocuments,
+} from '@/lib/hooks/use-documents'
 import { useCreateDraft, useDrafts } from '@/lib/hooks/use-drafts'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSolutions } from '@/lib/hooks/use-solutions'
@@ -80,7 +86,14 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   const documentsLoaded = documents !== undefined
   const readyCount = documents?.filter((document) => document.state === 'ready').length ?? 0
   const ingestingCount = documents?.filter((document) => !isTerminal(document.state)).length ?? 0
-  const attentionCount = documents?.filter((document) => needsAttention(document.state)).length ?? 0
+  // Kept in the list's own order (newest first) so the destination's "first" and the
+  // Files tab's top row mean the same document on both sides of the click.
+  const attentionDocuments = useMemo(
+    () =>
+      documentsInListOrder(documents ?? []).filter((document) => needsAttention(document.state)),
+    [documents],
+  )
+  const attentionCount = attentionDocuments.length
   const suggestions = useMemo(() => buildSuggestedPrompts(profile?.facts ?? []), [profile?.facts])
 
   const items = useMemo<ContinueItem[]>(() => {
@@ -166,11 +179,13 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
     // should be one line saying so, not a screen of red (the Documents tab has the
     // per-file detail and the retry affordances). "Could not be used" covers both ways
     // a document ends up unusable, a failure during ingestion and a format Lyra does
-    // not read; the tab tells them apart.
+    // not read; the tab tells them apart. The click carries the first affected
+    // document's stable id: the Files tab reveals that exact row, and the rest are one
+    // step away from it rather than a hunt across the whole list.
     if (attentionCount > 0) {
       broken.push({
         key: 'documents-attention',
-        href: `/classes/${classId}?tab=files`,
+        href: documentAttentionHref(classId, attentionDocuments[0].id),
         title:
           attentionCount === 1
             ? 'One document could not be used'
@@ -276,7 +291,16 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
     )
 
     return [...waiting, ...broken, ...working, ...due, ...resume].slice(0, CONTINUE_ROWS)
-  }, [classId, drafts, attentionCount, ingestingCount, profile?.facts, sessions, solutions, study])
+  }, [
+    classId,
+    drafts,
+    attentionDocuments,
+    ingestingCount,
+    profile?.facts,
+    sessions,
+    solutions,
+    study,
+  ])
 
   function ask(text: string, send: boolean) {
     const trimmed = text.trim()
@@ -315,7 +339,9 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
           <div className="flex flex-wrap gap-2">
             {needsTutorSetup ? (
               <Button asChild>
-                <Link href="/settings">Set up your tutor</Link>
+                {/* The setup work starts at the endpoint field, so the click lands on it
+                    rather than at the top of the Settings page. */}
+                <Link href="/settings?lyra-anchor=endpoint-url">Set up your tutor</Link>
               </Button>
             ) : null}
             <Button variant={needsTutorSetup ? 'outline' : 'default'} asChild>

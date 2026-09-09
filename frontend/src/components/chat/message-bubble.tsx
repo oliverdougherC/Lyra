@@ -52,7 +52,19 @@ type MessageRowProps = {
   /** When the turn started, so the wait can report how long it has run. */
   turnStartedAt?: number | null
   turnEnded?: boolean
-  onRevealComplete?: () => void
+  onRevealComplete?: (generation?: string) => void
+  /**
+   * The generation of the answer streaming into this row. A change clears the reveal
+   * schedule, so a reset's replacement answer does not start life with the slots the
+   * answer it replaces had. The pane's turn lifecycle (PLA-501) owns the identity.
+   */
+  generation?: string
+  /**
+   * A selection the reader held inside the live answer, as text offsets from the start of
+   * the content. The settled row rebuilds the inner nodes under the same outer node,
+   * which resets a live selection, so the handoff carries the range back (PLA-501).
+   */
+  selectionRestore?: { anchor: number; focus: number } | null
   canRetry?: boolean
   onRetry?: () => void
 }
@@ -67,6 +79,8 @@ export function MessageRow({
   turnStartedAt,
   turnEnded,
   onRevealComplete,
+  generation,
+  selectionRestore,
   canRetry,
   onRetry,
 }: MessageRowProps) {
@@ -142,6 +156,8 @@ export function MessageRow({
             streaming={streaming}
             turnEnded={turnEnded}
             onRevealComplete={onRevealComplete}
+            generation={generation}
+            selectionRestore={selectionRestore}
           />
         ) : null}
 
@@ -325,10 +341,16 @@ function CopyButton({ content }: { content: string }) {
     <ActionButton
       label={copied ? 'Copied' : 'Copy message'}
       onClick={() => {
-        void navigator.clipboard.writeText(content).then(() => {
-          setCopied(true)
-          window.setTimeout(() => setCopied(false), 1500)
-        })
+        void navigator.clipboard.writeText(content).then(
+          () => {
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1500)
+          },
+          () => {
+            // A denied or unavailable write must not become an unhandled rejection: the
+            // row simply stays un-copied and the reader can try again.
+          },
+        )
       }}
     >
       {copied ? <Check className="size-3.5 text-success-text" /> : <Copy className="size-3.5" />}

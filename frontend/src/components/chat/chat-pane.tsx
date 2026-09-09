@@ -33,7 +33,7 @@ import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
-import type { ChatEvent, ChatMode, WriterActivity } from '@/types'
+import type { ChatEvent, ChatMode, MessageRead, WriterActivity } from '@/types'
 
 const MODES: { value: ChatMode; label: string; hint: string }[] = [
   {
@@ -233,6 +233,8 @@ export function ChatPane({
   const [pendingTurn, setPendingTurn] = useState<ChatMessage[] | null>(null)
   const [turnBase, setTurnBase] = useState<ChatMessage[] | null>(null)
   const [streamText, setStreamText] = useState('')
+  /** The id of the turn whose optimistic rows are on screen (its keys are `opt-N`). */
+  const [activeTurnId, setActiveTurnId] = useState<number | null>(null)
   const [streamThinking, setStreamThinking] = useState('')
   const [streamActivity, setStreamActivity] = useState<WriterActivity[]>([])
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
@@ -240,6 +242,18 @@ export function ChatPane({
   const [turnOutcome, setTurnOutcome] = useState<TurnOutcome | null>(null)
   const [turnKind, setTurnKind] = useState<TurnKind>('send')
   const [revealDrained, setRevealDrained] = useState(false)
+  /**
+   * The generation of the answer the streaming row is currently rendering.
+   *
+   * A new turn and an agent `reset` each start a new one — a reset and the first token of
+   * its replacement can land in the same network read and the same React batch, with no
+   * empty render between them, so "the text went away" is not evidence the reader saw
+   * anything go away. Handing the renderer a changed `generation` is what clears the old
+   * schedule instead, and the drain callback checks it, so a completion from the replaced
+   * answer cannot finalize the turn the replacement is running.
+   */
+  const revealGenRef = useRef('g0')
+  const [revealGen, setRevealGen] = useState('g0')
   /**
    * The pane has been pointed at a different conversation than the turn in flight.
    *
@@ -400,12 +414,164 @@ export function ChatPane({
     }
   }, [])
 
+  /**
+   * Rows handed off by settled turns. Each handoff maps the turn's *accepted persisted*
+   * rows back onto that turn's own placeholder keys, so the row the reader has been
+   * watching is neither unmounted nor re-laid-out under a new identity once the persisted
+   * IDs arrive.
+   *
+   * The keys are per turn (`opt-N` / `optu-N`), never a shared pair: a settled turn's
+   * answer keeps its identity when the next turn begins — the next turn's optimistic rows
+   * take keys of their own, so no row remounts at either handoff. A handoff is tied to the
+   * conversation its turn was sent to and to the message IDs the server actually
+   * persisted — verified against the refetched list, never to a tail position — so a
+   * late, failed, or reshuffled refetch cannot hand one message the identity of another.
+   * It is retired when the pane leaves the conversation.
+   */
+  type SettledHandoff = {
+    turnId: number
+    sessionId: number
+    /** The settled answer row keeps this key (the key its optimistic twin streamed under). */
+    assistantId: number
+    assistantKey: string
+    /** Set when the turn's user row verified (adjacent, same text); otherwise the user
+     *  row settles under its own persisted ID. */
+    userId?: number
+    userKey?: string
+    /** A selection the reader held inside the live answer, as text offsets: the static
+     *  renderer swaps the row's inner nodes, which resets a live selection even with the
+     *  same outer node, so the handoff carries the range back. */
+    selection?: { anchor: number; focus: number }
+  }
+  const [settledHandoffs, setSettledHandoffs] = useState<SettledHandoff[]>([])
+
+  /**
+   * The id of the answer this turn's transport accepted, captured on the `done`/result
+   * frame before the transcript refetch — the identity the handoff verifies against.
+   */
+  const acceptedMessageIdRef = useRef<number | null>(null)
+  /** The question a `send` turn was sent with: the handoff's check that the persisted
+   *  user row is this turn's, not an identical earlier question. */
+  const turnContentRef = useRef<string | null>(null)
+  /** The bounded recheck a missing-refetch settle schedules; a new turn retires it. */
+  const recheckTimerRef = useRef<number | null>(null)
+
+  /**
+   * Frame-cadence publication of the streaming answer.
+   *
+   * Tokens arrive in network reads, several of which can resolve inside one frame;
+   * publishing each read as its own state update is what turns a burst into a burst of
+   * commits. The queue holds at most one pending publication per frame: reads after the
+   * first just refresh the pending text, and the frame (a hidden tab: a bounded timer,
+   * since rAF is withheld there) publishes it once. The first useful text of an answer
+   * publishes immediately — the reader's wait for the first word does not run a cadence —
+   * and terminal, reset, and unmount publish or invalidate synchronously: the last text
+   * never waits on a frame that may not come.
+   */
+  const publishRef = useRef<{
+    owner: number | null
+    pending: string | null
+    raf: number | null
+    timer: number | null
+  }>({ owner: null, pending: null, raf: null, timer: null })
+  /** The last text actually published to the rows; '' until the answer's first word. */
+  const lastPublishedTextRef = useRef('')
+
+  const bumpRevealGeneration = useCallback(() => {
+    revealGenRef.current = `g${Number(revealGenRef.current.slice(1)) + 1}`
+    setRevealGen(revealGenRef.current)
+  }, [])
+
+  /** Drop a scheduled publication without publishing it: a reset or a turn that is going
+   *  away must not leak its pending text into the frame that follows. */
+  const invalidatePublication = useCallback(() => {
+    const pub = publishRef.current
+    if (pub.raf !== null) cancelAnimationFrame(pub.raf)
+    if (pub.timer !== null) window.clearTimeout(pub.timer)
+    pub.raf = null
+    pub.timer = null
+    pub.pending = null
+    pub.owner = null
+  }, [])
+
+  /** Publish the pending text now, on this microtask: no frame in the path. Used when a
+   *  terminal frame lands — the answer's last text must not wait on an animation frame
+   *  that a hidden tab may withhold — and by the frame callback itself. */
+  const flushPublication = useCallback(() => {
+    const pub = publishRef.current
+    if (pub.raf !== null) cancelAnimationFrame(pub.raf)
+    if (pub.timer !== null) window.clearTimeout(pub.timer)
+    pub.raf = null
+    pub.timer = null
+    const { owner, pending } = pub
+    pub.pending = null
+    if (owner === null || pending === null) return
+    lastPublishedTextRef.current = pending
+    setStreamText(pending)
+  }, [])
+
+  /**
+   * Queue one publication. If one is already queued this frame, the read only refreshes
+   * the pending text — at most one commit per frame no matter how many reads resolved in
+   * it. The first useful word of an answer skips the queue entirely.
+   */
+  const schedulePublication = useCallback(
+    (owner: number, text: string) => {
+      const pub = publishRef.current
+      if (pub.owner !== owner) {
+        // A different turn now owns the queue: its pending text belongs to a reset or
+        // replaced answer and must not surface in this turn's first frame.
+        invalidatePublication()
+        pub.owner = owner
+      }
+      if (lastPublishedTextRef.current === '' && text.length > 0) {
+        lastPublishedTextRef.current = text
+        setStreamText(text)
+        return
+      }
+      pub.pending = text
+      if (pub.raf !== null) return
+      const fire = () => {
+        const p = publishRef.current
+        if (p.raf !== null) cancelAnimationFrame(p.raf)
+        if (p.timer !== null) window.clearTimeout(p.timer)
+        p.raf = null
+        p.timer = null
+        if (p.pending === null || p.owner !== owner) return
+        lastPublishedTextRef.current = p.pending
+        setStreamText(p.pending)
+        p.pending = null
+      }
+      pub.raf = requestAnimationFrame(fire)
+      // A hidden tab withholds rAF until the reader looks again; a bounded timer keeps
+      // the published text from stranding the stream while the tab is away.
+      pub.timer = window.setTimeout(fire, 64)
+    },
+    [invalidatePublication],
+  )
+
+  /** Unmounted panes carry no frames: the pending publication dies with the pane. */
+  useEffect(
+    () => () => {
+      invalidatePublication()
+      turnIdRef.current += 1
+      if (recheckTimerRef.current !== null) window.clearTimeout(recheckTimerRef.current)
+    },
+    [invalidatePublication],
+  )
+
   const clearOptimisticTurn = useCallback(() => {
     // Nothing on screen belongs to a particular conversation any more, so leaving one is
     // no longer something that puts anything away.
     turnSessionRef.current = null
     setDetached(false)
     setPendingTurn(null)
+    setActiveTurnId(null)
+    // Retire only this turn's handoff, if it ever got one: other turns' settled rows keep
+    // their identities, and the terminal publication of this turn is already flushed.
+    setSettledHandoffs((current) =>
+      current.filter((handoff) => handoff.turnId !== turnIdRef.current),
+    )
     setTurnBase(null)
     setStreamText('')
     setStreamThinking('')
@@ -419,7 +585,8 @@ export function ChatPane({
     revealDrainedRef.current = false
     stopInFlightRef.current = false
     setStopping(false)
-  }, [])
+    invalidatePublication()
+  }, [invalidatePublication])
 
   /**
    * Which conversation the pane is showing, and whether the turn in flight is still in it.
@@ -460,7 +627,11 @@ export function ChatPane({
     sendingRef.current = null
     setSending(false)
     changeDraft('')
-  }, [activeSessionId, classId, writer?.artifactId, changeDraft])
+    // The handoffs belong to the conversation we are leaving; its rows re-enter under
+    // their persisted IDs on the next visit.
+    setSettledHandoffs([])
+    invalidatePublication()
+  }, [activeSessionId, classId, writer?.artifactId, changeDraft, invalidatePublication])
 
   const shownSessionRef = useRef(activeSessionId)
   useLayoutEffect(() => {
@@ -482,13 +653,120 @@ export function ChatPane({
       // now would leave the answer's own transcript holding a stale copy of itself.
       const turnSessionId = turnSessionRef.current
       const owner = turnIdRef.current
-      if (immediate) clearOptimisticTurn()
-      if (turnSessionId !== null) {
-        await queryClient.invalidateQueries({ queryKey: chatKeys.messages(turnSessionId) })
+      const kind = turnKind
+      const content = turnContentRef.current
+      if (immediate) {
+        // A failed turn: the optimistic rows come down now, and the durable readback that
+        // shows what the server actually kept runs in the background — no identity to
+        // hand over, so nothing waits on it.
+        clearOptimisticTurn()
+        if (turnSessionId !== null) {
+          void queryClient
+            .invalidateQueries({ queryKey: chatKeys.messages(turnSessionId) })
+            .catch(() => undefined)
+        }
+        return
       }
-      if (!immediate && turnIdRef.current === owner) clearOptimisticTurn()
+      if (turnSessionId !== null) {
+        await queryClient
+          .invalidateQueries({ queryKey: chatKeys.messages(turnSessionId) })
+          .catch(() => undefined)
+      }
+      if (turnIdRef.current !== owner) return
+      if (turnSessionId === null) return
+
+      // Build the handoff from what the transcript ACTUALLY holds: the accepted answer id
+      // the transport reported, verified in the refetched rows. A row that is not there —
+      // a late write, a failed refetch — earns no identity, and the rows settle under
+      // their own IDs rather than inheriting the optimistic ones.
+      const buildHandoff = (data: MessageRead[]): SettledHandoff | null => {
+        const acceptedId = acceptedMessageIdRef.current
+        if (turnSessionId === null || acceptedId === null) return null
+        const answerIndex = data.findIndex((row) => row.id === acceptedId)
+        if (answerIndex === -1 || data[answerIndex].role !== 'assistant') return null
+        const handoff: SettledHandoff = {
+          turnId: owner,
+          sessionId: turnSessionId,
+          assistantId: acceptedId,
+          assistantKey: `opt-${owner}`,
+        }
+        if (kind === 'send' && data[answerIndex - 1]?.role === 'user') {
+          const userRow = data[answerIndex - 1]
+          if (userRow.content === content) {
+            handoff.userId = userRow.id
+            handoff.userKey = `optu-${owner}`
+          }
+        }
+        // The live answer and the saved one agree text-for-text: any selection the reader
+        // holds inside it can be carried across the static swap as text offsets. A
+        // replacement changed the text, and the selection no longer names anything.
+        if (streamTextRef.current === data[answerIndex].content) {
+          const rows = viewportRef.current?.querySelectorAll('.assistant-content') ?? []
+          const root = rows.length > 0 ? (rows[rows.length - 1] as HTMLElement) : undefined
+          const selection = window.getSelection()
+          if (root && selection && selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0)
+            if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
+              const offsetOf = (node: Node, offset: number): number | null => {
+                let total = 0
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+                for (let step = walker.nextNode(); step; step = walker.nextNode()) {
+                  if (step === node) return total + offset
+                  total += step.textContent?.length ?? 0
+                }
+                return null
+              }
+              const anchor = offsetOf(range.startContainer, range.startOffset)
+              const focus = offsetOf(range.endContainer, range.endOffset)
+              if (anchor !== null && focus !== null) {
+                handoff.selection = { anchor, focus }
+              }
+            }
+          }
+        }
+        return handoff
+      }
+
+      const applySettle = (handoff: SettledHandoff | null) => {
+        clearOptimisticTurn()
+        if (handoff !== null) setSettledHandoffs((current) => [...current, handoff])
+      }
+
+      const data = (
+        queryClient.getQueryData<MessageRead[]>(chatKeys.messages(turnSessionId)) ?? []
+      ).slice()
+      const handoff = buildHandoff(data)
+      if (handoff !== null) {
+        applySettle(handoff)
+        return
+      }
+
+      // The accepted row has not reached the cache yet. Without a done frame there is no
+      // accepted ID to verify against, so nothing a recheck finds could hand over — settle
+      // now and let the rows fall back to their own IDs. With one, the row is simply late:
+      // the reader keeps watching their answer, and one bounded recheck runs before the
+      // turn surrenders the identity — a still-missing row settles under its own ID (a
+      // remount), never under another message's.
+      if (acceptedMessageIdRef.current === null) {
+        applySettle(null)
+        return
+      }
+      const recheck = window.setTimeout(() => {
+        if (turnIdRef.current !== owner) return
+        void (async () => {
+          await queryClient
+            .refetchQueries({ queryKey: chatKeys.messages(turnSessionId) })
+            .catch(() => undefined)
+          if (turnIdRef.current !== owner) return
+          const later = (
+            queryClient.getQueryData<MessageRead[]>(chatKeys.messages(turnSessionId)) ?? []
+          ).slice()
+          applySettle(buildHandoff(later))
+        })()
+      }, 750)
+      recheckTimerRef.current = recheck
     },
-    [clearOptimisticTurn, queryClient],
+    [clearOptimisticTurn, queryClient, turnKind],
   )
 
   useEffect(() => {
@@ -540,12 +818,29 @@ export function ChatPane({
       // was asked in, and stops writing to a pane that has become someone else's.
       const turnId = turnIdRef.current + 1
       turnIdRef.current = turnId
+      setActiveTurnId(turnId)
       const owns = () => turnIdRef.current === turnId
 
       const controller = new AbortController()
       abortRef.current = controller
       turnSessionRef.current = turnSessionId
       setDetached(false)
+      // A new answer generation: the previous answer's reveal slots, timers, and drain
+      // callbacks are not this turn's, whatever state the row is in. Settled handoffs from
+      // earlier turns stay: their rows keep per-turn keys, so this turn's rows never
+      // collide with them, and the answer they settled does not remount underneath a
+      // follow-up.
+      bumpRevealGeneration()
+      // The question this turn stands for: the handoff verifies the persisted user row
+      // against it, and the frame queue starts publishing this answer from empty.
+      turnContentRef.current = content
+      acceptedMessageIdRef.current = null
+      lastPublishedTextRef.current = ''
+      if (recheckTimerRef.current !== null) {
+        window.clearTimeout(recheckTimerRef.current)
+        recheckTimerRef.current = null
+      }
+      invalidatePublication()
       settledRef.current = false
       agentTurnRef.current = Boolean(agent)
       outcomeRef.current = 'active'
@@ -595,7 +890,9 @@ export function ChatPane({
         if (event.type === 'token') {
           assistantText += event.text
           streamTextRef.current = assistantText
-          setStreamText(assistantText)
+          // Several network reads can resolve in one frame; the queue keeps one
+          // publication per frame, with the first word publishing immediately.
+          schedulePublication(turnId, assistantText)
         } else if (event.type === 'reasoning') {
           reasoningText += event.text
           setStreamThinking(reasoningText)
@@ -630,7 +927,16 @@ export function ChatPane({
         } else if (event.type === 'comments') {
           writer?.onComments?.()
         } else if (event.type === 'done') {
+          // The identity the turn's answer persisted under: the settle verifies the
+          // refetched transcript against it before handing any key over.
+          if (typeof event.message_id === 'number') {
+            acceptedMessageIdRef.current = event.message_id
+          }
           setOutcome('completed')
+          // The terminal frame publishes the answer's final text on this microtask: a
+          // queued frame would strand the last words behind a frame the tab may not
+          // owe.
+          flushPublication()
           if (assistantText.trim().length === 0) {
             revealDrainedRef.current = true
             setRevealDrained(true)
@@ -638,6 +944,7 @@ export function ChatPane({
         } else if (event.type === 'error') {
           toast.error(event.message)
           setOutcome('failed')
+          flushPublication()
         }
       }
 
@@ -648,8 +955,17 @@ export function ChatPane({
           const onAgentEvent = (event: import('@/lib/api').AgentStreamEvent) => {
             if (!owns()) return
             if (event.type === 'reset') {
+              // A fresh answer generation even when the first replacement token lands in
+              // the same read: the old answer's reveal schedule dies with the reset, and
+              // the replacement must not start life with slots it never earned.
               assistantText = ''
+              acceptedMessageIdRef.current = null
               streamTextRef.current = ''
+              bumpRevealGeneration()
+              // A pending publication is the answer being replaced: it dies with the
+              // reset, and the clear publishes on this microtask.
+              invalidatePublication()
+              lastPublishedTextRef.current = ''
               setStreamText('')
             } else {
               onEvent(event)
@@ -713,8 +1029,13 @@ export function ChatPane({
               if (owns() && result.content !== assistantText) {
                 assistantText = result.content
                 streamTextRef.current = assistantText
+                // The authoritative answer supersedes whatever the queue still owes:
+                // publish it directly, and let the replacement's drain carry the settle.
+                invalidatePublication()
+                lastPublishedTextRef.current = assistantText
                 setStreamText(assistantText)
               }
+              acceptedMessageIdRef.current = result.message_id
               onEvent({ type: 'done', message_id: result.message_id })
               if (kind === 'send') {
                 // The operation is durably settled: the reply committed (or the failure is
@@ -792,6 +1113,8 @@ export function ChatPane({
               restoreDraft?.()
               submittedTextRef.current = null
             }
+            // The stopped answer keeps what it has: publish any queued text now.
+            flushPublication()
             if (streamTextRef.current.trim().length === 0) {
               revealDrainedRef.current = true
               setRevealDrained(true)
@@ -884,6 +1207,7 @@ export function ChatPane({
             }
           } else {
             // Restore an unaccepted question only if no newer draft owns the box.
+            flushPublication()
             toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
             if (submittedTextRef.current !== null) {
               restoreDraft?.()
@@ -898,6 +1222,10 @@ export function ChatPane({
           stopInFlightRef.current = false
           setStopping(false)
           if (outcomeRef.current === 'active') {
+            // The stream died without its terminal frame: whatever the answer had is
+            // the answer the reader keeps, published now rather than stranded in the
+            // queue.
+            flushPublication()
             toast.error('The answer stopped early.')
             setOutcome('failed')
           }
@@ -918,6 +1246,9 @@ export function ChatPane({
       persisted,
       placeholderReply,
       queryClient,
+      schedulePublication,
+      flushPublication,
+      invalidatePublication,
       scopedDocument,
       setOutcome,
       writer,
@@ -1162,11 +1493,18 @@ export function ChatPane({
   }, [classId, pollStopStatus])
 
   /**
-   * Called by the streaming renderer whenever its reveal queue drains. Mid-stream
-   * drains (between chunks) must not count: `revealDrained` only matters once the turn
-   * has ended, so the settle waits for the final words to finish fading in.
+   * Called by the streaming renderer whenever its reveal queue drains, with the
+   * generation the drain belongs to. Mid-stream drains (between chunks) must not
+   * count: `revealDrained` only matters once the turn has ended, so the settle waits
+   * for the final words to finish fading in. And a drain from a replaced generation —
+   * the cascade of an answer a reset just cleared — is stale: it cannot settle the
+   * turn the new generation is running, whatever outcome the pane shows. Only a
+   * string argument carries a generation to check; a manual finish calls this bare
+   * (or with whatever a control forwards it) and speaks for the surface the reader
+   * just watched, which is the current generation by construction.
    */
-  const handleRevealComplete = useCallback(() => {
+  const handleRevealComplete = useCallback((generation?: string) => {
+    if (typeof generation === 'string' && generation !== revealGenRef.current) return
     if (outcomeRef.current !== 'completed' && outcomeRef.current !== 'stopped') return
     revealDrainedRef.current = true
     setRevealDrained(true)
@@ -1183,6 +1521,49 @@ export function ChatPane({
         message.id === -2 ? { ...message, content: streamText, thinking: streamThinking } : message,
       )
     : messages
+
+  const handoffFor = (message: ChatMessage): SettledHandoff | null => {
+    if (activeSessionId === null) return null
+    for (const handoff of settledHandoffs) {
+      if (handoff.sessionId !== activeSessionId) continue
+      if (message.id === handoff.assistantId) return handoff
+      if (handoff.userId !== undefined && message.id === handoff.userId) return handoff
+    }
+    return null
+  }
+
+  /**
+   * Which React identity a row renders under.
+   *
+   * The optimistic rows stream under their turn's own keys (`optu-N`, `opt-N`), so two
+   * turns' rows can never claim one key. When a turn settles, its persisted rows keep
+   * those keys through the handoff — the settled answer row is the same React identity
+   * the reader has been watching, not a remount of it — and they keep them when a later
+   * turn begins, because each turn owns a key of its own.
+   *
+   * A handoff hands its keys out by IDENTITY, verified at settle: the persisted answer
+   * must be the message id the transport accepted, and the user row must sit beside it
+   * carrying the turn's question. A late, failed, or reshuffled refetch therefore hands
+   * nothing over at all — the rows settle under their own ids rather than one message
+   * inheriting another's place. Handoffs live on the conversation their turn was sent
+   * to and are retired when the pane leaves it.
+   */
+  const rowKey = (message: ChatMessage): string => {
+    // The rows the turn on screen streams into: this turn's own keys.
+    if (optimisticTurn && activeTurnId !== null) {
+      if (message.id === -1) return `optu-${activeTurnId}`
+      if (message.id === -2) return `opt-${activeTurnId}`
+    }
+    // Everything else: a settled row keeps the key its own handoff handed over —
+    // including while a NEW turn is streaming, since a new row appearing is not a
+    // reason the old one remounts. Rows no handoff covers render under their IDs.
+    const handoff = handoffFor(message)
+    if (handoff !== null) {
+      if (message.id === handoff.assistantId) return handoff.assistantKey
+      if (handoff.userId !== undefined) return handoff.userKey as string
+    }
+    return String(message.id)
+  }
   const lastAssistantIndex = rendered.reduce(
     (found, message, index) => (message.role === 'assistant' ? index : found),
     -1,
@@ -1416,9 +1797,12 @@ export function ChatPane({
       ) : (
         rendered.map((message, index) => {
           const isStreamingReply = optimisticTurn && message.id === -2
+          // A settled row can carry the selection its live twin held: the static swap
+          // rebuilds the inner nodes, and the range has to come back with it.
+          const handoff = isStreamingReply ? null : handoffFor(message)
           return (
             <MessageRow
-              key={message.id}
+              key={rowKey(message)}
               message={message}
               // A question and the answer under it are one turn, so they sit close; the
               // next question opens at a wider interval. Even spacing throughout is what
@@ -1435,6 +1819,8 @@ export function ChatPane({
                   : undefined
               }
               onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
+              generation={isStreamingReply ? revealGen : undefined}
+              selectionRestore={handoff?.selection}
               canRetry={
                 !historyError &&
                 !messagesPending &&

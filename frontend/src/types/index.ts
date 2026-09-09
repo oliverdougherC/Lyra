@@ -863,12 +863,17 @@ export interface CardUpdateRead {
 }
 
 /**
- * Body of `POST /api/attempts/{attemptId}/answers`. For a fill_blank question the runner
- * compares the typed answer against `options[0]` itself and sends 0 on a match, -1 on a miss.
+ * Body of `POST /api/attempts/{attemptId}/answers`. For a multiple-choice or true/false
+ * question the chosen index is the answer and `response_text` is optional - the server
+ * records the chosen option's text itself. For a fill_blank question the index carries
+ * no meaning (the contract keeps its miss marker, -1) and `response_text` is the
+ * student's actual words, which the server grades and persists beside the verdict;
+ * omitting it for a fill_blank is a client error the server rejects, not a miss.
  */
 export interface AnswerCreate {
   part_id: number
   selected_index: number
+  response_text?: string
 }
 
 /** One question's already-recorded answer, without the answer key of the question. */
@@ -876,6 +881,10 @@ export interface AttemptAnswer {
   part_id: number
   selected_index: number
   correct: boolean
+  /** True when the layered grader could not settle the answer either way. */
+  uncertain: boolean
+  /** The student's original response, or null for answers recorded before grading carried it. */
+  response_text: string | null
 }
 
 /**
@@ -897,6 +906,8 @@ export interface CurrentAttemptRead {
 
 export interface AnswerRead {
   correct: boolean
+  /** True when the grader could not settle the answer either way; the reveal is neutral. */
+  uncertain: boolean
   correct_index: number
   explanation: string
 }
@@ -906,7 +917,12 @@ export interface AttemptResult {
   score: number
   total: number
   answered: number
-  by_topic: { topic: string; correct: number; total: number }[]
+  /**
+   * Answers the grader could not settle either way. They are reported, never scored as
+   * wrong, and never flagged as confident weaknesses.
+   */
+  unresolved: number
+  by_topic: { topic: string; correct: number; total: number; unresolved?: number }[]
 }
 
 /**

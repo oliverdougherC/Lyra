@@ -42,6 +42,15 @@ function RouterProbe() {
       <button type="button" onClick={() => router.push('/settings')}>
         Settings
       </button>
+      <button
+        type="button"
+        onClick={() => router.push('/classes/7?tab=files&lyra-anchor=document-3')}
+      >
+        Jump to the failed document
+      </button>
+      <button type="button" onClick={() => router.push('/classes/7?tab=plan#document-3')}>
+        Jump to the failed document by fragment
+      </button>
       <main id="main-content" tabIndex={-1} />
     </div>
   )
@@ -119,6 +128,65 @@ describe('router hooks', () => {
 
     expect(Number(screen.getByTestId('nav-version').textContent)).toBeGreaterThan(firstVersion)
     expect(window.location.hash).toBe('#/classes/7/drafts/9?tab=plan&lyra-anchor=source-2')
+  })
+
+  it('keeps an anchor carried in the query string through an internal push', async () => {
+    // Attention destinations are built as `?tab=files&lyra-anchor=document-N` and handed to
+    // router.push (or a Link's click). The anchor is part of the destination, so a push must
+    // not treat it as a leftover to strip.
+    const user = userEvent.setup()
+    resetLocation('/#/')
+
+    render(
+      <RouterProvider>
+        <RouterProbe />
+      </RouterProvider>,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Jump to the failed document' }))
+
+    expect(window.location.hash).toBe('#/classes/7?tab=files&lyra-anchor=document-3')
+    expect(screen.getByTestId('tab')).toHaveTextContent('files')
+    expect(screen.getByTestId('anchor')).toHaveTextContent('document-3')
+  })
+
+  it('normalizes a fragment-form anchor into the reserved query parameter', async () => {
+    const user = userEvent.setup()
+    resetLocation('/#/classes/7?tab=plan')
+
+    render(
+      <RouterProvider>
+        <RouterProbe />
+      </RouterProvider>,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Jump to the failed document by fragment' }),
+    )
+
+    expect(window.location.hash).toBe('#/classes/7?tab=plan&lyra-anchor=document-3')
+    expect(screen.getByTestId('anchor')).toHaveTextContent('document-3')
+  })
+
+  it('clears a previous anchor when a navigation names none', async () => {
+    // Leaving a route that carries an anchor must not let the anchor leak into the next
+    // route: `?tab=files&lyra-anchor=...` is an argument to that navigation, not a
+    // session-wide setting.
+    const user = userEvent.setup()
+    resetLocation('/#/classes/7?tab=plan&lyra-anchor=source-9')
+
+    render(
+      <RouterProvider>
+        <RouterProbe />
+      </RouterProvider>,
+    )
+
+    expect(screen.getByTestId('anchor')).toHaveTextContent('source-9')
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(window.location.hash).toBe('#/settings')
+    expect(screen.getByTestId('anchor')).toHaveTextContent('')
   })
 
   it('preserves query state through back, forward, and a route remount', async () => {
