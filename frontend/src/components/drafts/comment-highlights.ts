@@ -356,18 +356,12 @@ export function stripMarkdownQuote(quote: string): string {
 }
 
 /** Where the quote sits in the document, as ProseMirror positions, or null. */
-export function findQuote(
-  flat: FlatDoc,
-  quote: string,
-): { from: number; to: number } | null {
+export function findQuote(flat: FlatDoc, quote: string): { from: number; to: number } | null {
   return findQuoteIn(buildDocIndex(flat), quote)
 }
 
 /** The same lookup against a shared pass index, so one pass normalizes once. */
-export function findQuoteIn(
-  index: DocIndex,
-  quote: string,
-): { from: number; to: number } | null {
+export function findQuoteIn(index: DocIndex, quote: string): { from: number; to: number } | null {
   const stripped = stripMarkdownQuote(quote)
   const target = normalizeSpace(stripped)
   if (!target || index.flat.text.length === 0) return null

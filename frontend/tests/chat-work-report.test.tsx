@@ -220,13 +220,11 @@ describe('ChatPane work report (PLA-510/511/509)', () => {
     const phase2 = snapshotPhase('reasoning+answer-bursts', p2)
     // The live answer is split across per-word reveal spans, so match on the accumulated
     // text content of any element rather than a single node.
-    const burstLanded = screen
-      .getAllByText((_content, element) => {
-        // The live answer is split across per-word reveal spans, so match on the
-        // accumulated text content of an element (the row container holds it all).
-        return (element?.textContent ?? '').includes('answer piece 39')
-      })
-      .length
+    const burstLanded = screen.getAllByText((_content, element) => {
+      // The live answer is split across per-word reveal spans, so match on the
+      // accumulated text content of an element (the row container holds it all).
+      return (element?.textContent ?? '').includes('answer piece 39')
+    }).length
     expect(burstLanded, 'the burst must land on screen').toBeGreaterThanOrEqual(1)
 
     // Phase 3: settle the turn.

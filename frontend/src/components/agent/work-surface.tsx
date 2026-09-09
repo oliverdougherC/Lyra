@@ -155,9 +155,11 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     retryAgentChat.isPending ||
     regenerateAgentChat.isPending ||
     turnsLive ||
-    (queryClient.getQueryData<AgentCommandRequestRead[]>(
-      agentKeys.commands(classId, sessionId ?? -1),
-    ) ?? []).some((command) => command.state === 'running')
+    (
+      queryClient.getQueryData<AgentCommandRequestRead[]>(
+        agentKeys.commands(classId, sessionId ?? -1),
+      ) ?? []
+    ).some((command) => command.state === 'running')
 
   const activity = useAgentActivity(classId, sessionId, inFlight)
   const changes = useAgentChanges(classId, sessionId, Boolean(workspaceData), inFlight)

@@ -46,8 +46,7 @@ function docOf(...paragraphs: string[]): Node {
 
 // This prosemirror-model version's d.ts omits the Mark constructor argument, but the
 // runtime takes the mark type: cast once, here where marks are created.
-const emMark = (): Mark =>
-  new (Mark as unknown as new (type: MarkType) => Mark)(schema.marks.em)
+const emMark = (): Mark => new (Mark as unknown as new (type: MarkType) => Mark)(schema.marks.em)
 
 /**
  * A live editor state carrying the production citation plugin (plus optional extra
@@ -131,7 +130,10 @@ describe('citation plugin: measured scans', () => {
   })
 
   it('visits only the edited text node for a local edit in a long draft', () => {
-    const paragraphs = Array.from({ length: 150 }, (_, i) => `Paragraph ${i} with ordinary writing.`)
+    const paragraphs = Array.from(
+      { length: 150 },
+      (_, i) => `Paragraph ${i} with ordinary writing.`,
+    )
     paragraphs[10] = 'Claim [source:12] in paragraph ten.'
     paragraphs[120] = 'Later claim [@lyra:77] down here.'
     const harness = new CitationHarness(docOf(...paragraphs))
@@ -155,7 +157,9 @@ describe('citation plugin: measured scans', () => {
   })
 
   it('keeps markers alive through edits that do not touch them, without rescanning', () => {
-    const harness = new CitationHarness(docOf('Claim [source:12] here.', 'Another [source:99] there.'))
+    const harness = new CitationHarness(
+      docOf('Claim [source:12] here.', 'Another [source:99] there.'),
+    )
     const before = harness.ps.stats
 
     // Insert at the end of the second paragraph, away from either marker.
@@ -180,7 +184,9 @@ describe('citation plugin: measured scans', () => {
 
     harness.expectMatchesOracle()
     expect(harness.actual()).toHaveLength(1)
-    expect(harness.doc.textBetween(harness.actual()[0].from, harness.actual()[0].to)).toBe('[source:12]')
+    expect(harness.doc.textBetween(harness.actual()[0].from, harness.actual()[0].to)).toBe(
+      '[source:12]',
+    )
   })
 
   it('heals a broken marker when the break is deleted (a pure deletion)', () => {
@@ -193,7 +199,9 @@ describe('citation plugin: measured scans', () => {
 
     harness.expectMatchesOracle()
     expect(harness.actual()).toHaveLength(1)
-    expect(harness.doc.textBetween(harness.actual()[0].from, harness.actual()[0].to)).toBe('[source:12]')
+    expect(harness.doc.textBetween(harness.actual()[0].from, harness.actual()[0].to)).toBe(
+      '[source:12]',
+    )
   })
 
   it('drops a marker its edit breaks, and restores it on undo/redo', () => {
@@ -305,7 +313,9 @@ describe('citation plugin: measured scans', () => {
 
     harness.expectMatchesOracle()
     expect(harness.actual()).toHaveLength(1)
-    expect(harness.doc.textBetween(harness.actual()[0].from, harness.actual()[0].to)).toBe('[source:12]')
+    expect(harness.doc.textBetween(harness.actual()[0].from, harness.actual()[0].to)).toBe(
+      '[source:12]',
+    )
   })
 
   it('rescans whole nodes for adjacent text and marks without losing the marker', () => {

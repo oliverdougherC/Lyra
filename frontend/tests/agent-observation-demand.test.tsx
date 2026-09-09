@@ -70,9 +70,7 @@ function createWrapper() {
   return { queryClient, wrapper }
 }
 
-function workspace(
-  overrides: Partial<AgentWorkspaceRead> = {},
-): AgentWorkspaceRead {
+function workspace(overrides: Partial<AgentWorkspaceRead> = {}): AgentWorkspaceRead {
   return {
     id: 1,
     class_id: CLASS_ID,
@@ -104,9 +102,7 @@ function accessEvent(overrides: Partial<AgentAuditEventRead> = {}): AgentAuditEv
   }
 }
 
-function runningCommand(
-  overrides: Partial<AgentCommandRequestRead> = {},
-): AgentCommandRequestRead {
+function runningCommand(overrides: Partial<AgentCommandRequestRead> = {}): AgentCommandRequestRead {
   return {
     id: 7,
     workspace_id: 1,
@@ -252,7 +248,10 @@ describe('dismissalPollInterval', () => {
 
   it('confirms an already-lapsed dismissal with a bounded short check, never a rapid loop', () => {
     const interval = dismissalPollInterval(
-      { data: { dismissals: [{ scope: 'read', dismissed_at: '2026-08-31T12:00:00Z' }] }, error: null },
+      {
+        data: { dismissals: [{ scope: 'read', dismissed_at: '2026-08-31T12:00:00Z' }] },
+        error: null,
+      },
       now,
     )
     expect(interval).toBe(DISMISSAL_POLL_MARGIN_MS)
@@ -643,9 +642,9 @@ describe('background job observation: hidden pauses the UI, return reconciles', 
   })
 
   it('pauses a draft pass observation while hidden and resumes it on return', async () => {
-    const list = vi.spyOn(api, 'listDrafts').mockResolvedValue([
-      { id: 1, title: 'Essay', state: 'generating' } as never,
-    ])
+    const list = vi
+      .spyOn(api, 'listDrafts')
+      .mockResolvedValue([{ id: 1, title: 'Essay', state: 'generating' } as never])
     const { wrapper } = createWrapper()
     renderHook(() => useDrafts(CLASS_ID), { wrapper })
     await act(async () => {
@@ -673,12 +672,10 @@ describe('background job observation: hidden pauses the UI, return reconciles', 
   })
 
   it('pauses study generation observation while hidden and resumes it on return', async () => {
-    const list = vi
-      .spyOn(api, 'listStudy')
-      .mockResolvedValue({
-        decks: [{ id: 1, title: 'Ch. 1', state: 'generating' }],
-        quizzes: [],
-      } as unknown as StudyListRead)
+    const list = vi.spyOn(api, 'listStudy').mockResolvedValue({
+      decks: [{ id: 1, title: 'Ch. 1', state: 'generating' }],
+      quizzes: [],
+    } as unknown as StudyListRead)
     const { wrapper } = createWrapper()
     renderHook(() => useStudyList(CLASS_ID), { wrapper })
     await act(async () => {

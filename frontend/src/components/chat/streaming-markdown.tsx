@@ -1,6 +1,14 @@
 'use client'
 
-import { memo, useLayoutEffect, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import {
+  memo,
+  useLayoutEffect,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from 'react'
 import Markdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 
@@ -77,11 +85,7 @@ const RenderedDocument = memo(function RenderedDocument({
 }) {
   chatWork.markdownRenders += 1
   return (
-    <Markdown
-      remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={plugins}
-      components={TABLE_COMPONENTS}
-    >
+    <Markdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={plugins} components={TABLE_COMPONENTS}>
       {content}
     </Markdown>
   )
@@ -237,11 +241,7 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
     // Short answers parse on every commit — the pipeline is sub-frame at that size, and
     // this is exactly the behavior the playback tests pin down. Long answers run on the
     // gap: at most one whole-document re-parse per gap.
-    if (
-      force ||
-      content.length < STREAM_REPARSE_MIN_CHARS ||
-      now - lastParseAtRef.current >= gap
-    ) {
+    if (force || content.length < STREAM_REPARSE_MIN_CHARS || now - lastParseAtRef.current >= gap) {
       lastParseAtRef.current = now
       lastParseHiddenRef.current = hidden
       returnFromHiddenRef.current = false

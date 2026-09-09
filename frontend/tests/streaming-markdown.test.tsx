@@ -244,9 +244,7 @@ describe('StreamingMarkdown', () => {
 
   describe('long-answer reparse edges (PLA-511)', () => {
     it('re-parses a held long answer in full the moment the turn ends', () => {
-      const { container, rerender } = render(
-        <StreamingMarkdown content="seed" streaming />,
-      )
+      const { container, rerender } = render(<StreamingMarkdown content="seed" streaming />)
       // Prime: a re-parse runs, stamping the schedule's last-parse time.
       rerender(<StreamingMarkdown content={LONG_A} streaming />)
       // A longer feed within the gap is held: the last document stays up, the tail is not
@@ -282,9 +280,7 @@ describe('StreamingMarkdown', () => {
       setVisibility('hidden')
       try {
         // A short first answer parses immediately (even hidden) and marks the hidden parse.
-        const { container, rerender } = render(
-          <StreamingMarkdown content="seed" streaming />,
-        )
+        const { container, rerender } = render(<StreamingMarkdown content="seed" streaming />)
         rerender(<StreamingMarkdown content="first words" streaming />)
         expect(container.textContent).toContain('first words')
         // A long feed while hidden is held: no frame is owed, the last document stays up.

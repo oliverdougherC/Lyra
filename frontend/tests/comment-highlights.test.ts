@@ -161,7 +161,13 @@ describe('the shared pass index (PLA-512)', () => {
 
   it('normalizes the document once per pass, no matter how many threads hit or miss', () => {
     const index = buildDocIndex(flat)
-    const hits = ['converges in probability', 'It is unbiased', 'unbiased and consistent', 'converges', 'probability']
+    const hits = [
+      'converges in probability',
+      'It is unbiased',
+      'unbiased and consistent',
+      'converges',
+      'probability',
+    ]
     const misses = ['a passage that was deleted', 'another absent passage', 'a third missing one']
 
     for (const quote of hits) expect(findQuoteIn(index, quote)).not.toBeNull()
@@ -190,7 +196,10 @@ describe('the shared pass index (PLA-512)', () => {
       'The estimator steadily converges under every tested sampling condition.', // fuzzy
       'a passage that was deleted', // missing
     ]
-    const longDoc = doc(['paragraph', 'The estimator quickly converges under every tested sampling condition.'])
+    const longDoc = doc([
+      'paragraph',
+      'The estimator quickly converges under every tested sampling condition.',
+    ])
     for (const [source, quote] of [
       [flat, quotes[0]],
       [flat, quotes[1]],
@@ -228,7 +237,7 @@ describe('comment plugin state, driven through a real EditorState', () => {
    * not in `spec`). The type field is internal to prosemirror-view, hence the cast.
    */
   const attrsOf = (deco: Decoration): Record<string, unknown> =>
-    ((deco as unknown as { type?: { attrs?: Record<string, unknown> } }).type?.attrs ?? {})
+    (deco as unknown as { type?: { attrs?: Record<string, unknown> } }).type?.attrs ?? {}
 
   class CommentHarness {
     private plugin = createCommentPlugin()
@@ -258,7 +267,9 @@ describe('comment plugin state, driven through a real EditorState', () => {
     }
 
     unflash(id: number): void {
-      this.state = this.state.apply(this.state.tr.setMeta(commentPluginKey, { type: 'unflash', id }))
+      this.state = this.state.apply(
+        this.state.tr.setMeta(commentPluginKey, { type: 'unflash', id }),
+      )
     }
 
     edit(mutate: (tr: Transaction) => void): void {
@@ -298,9 +309,9 @@ describe('comment plugin state, driven through a real EditorState', () => {
     harness.unflash(7)
     expect(harness.ps.rebuilds).toBe(2)
     expect(harness.ps.flashId).toBeNull()
-    expect(harness.inlines().every((deco) => !String(attrsOf(deco).class).includes('--flash'))).toBe(
-      true,
-    )
+    expect(
+      harness.inlines().every((deco) => !String(attrsOf(deco).class).includes('--flash')),
+    ).toBe(true)
   })
 
   it('treats an unflash for a non-flashed id as a no-op', () => {

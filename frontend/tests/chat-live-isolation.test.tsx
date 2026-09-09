@@ -234,7 +234,9 @@ describe('ChatPane live isolation (PLA-510/509)', () => {
       // date — not just the last published frame. (While the thought is still arriving the
       // header is a live indicator, not the settled 'Thought' word, so address the
       // disclosure by its stable slot, not its label.)
-      const trigger = container.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')
+      const trigger = container.querySelector<HTMLButtonElement>(
+        '[data-slot="collapsible-trigger"]',
+      )
       expect(trigger, 'the live reasoning disclosure').toBeDefined()
       await user.click(trigger as HTMLButtonElement)
       const opened = container.textContent ?? ''
@@ -492,9 +494,7 @@ describe('ChatPane live isolation (PLA-510/509)', () => {
       await act(async () => {
         document.dispatchEvent(new Event('visibilitychange'))
       })
-      expect(container.textContent).toContain(
-        ('a ' + 'b '.repeat(15) + 'c '.repeat(10)).trimEnd(),
-      )
+      expect(container.textContent).toContain(('a ' + 'b '.repeat(15) + 'c '.repeat(10)).trimEnd())
       expect(rafCount).toBe(armedOnce)
 
       // Hide again: the invariant holds for the next cycle, not just the first.
