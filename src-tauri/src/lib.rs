@@ -262,11 +262,7 @@ fn write_diagnostic_suffix(
 }
 
 impl AppState {
-    fn ensure_backend(
-        &self,
-        app: &AppHandle,
-        force_restart: bool,
-    ) -> Result<BootstrapPayload, LaunchError> {
+    fn ensure_backend(&self, app: &AppHandle) -> Result<BootstrapPayload, LaunchError> {
         let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
         if self.quitting.load(std::sync::atomic::Ordering::SeqCst)
             || self.updating.load(std::sync::atomic::Ordering::SeqCst)
@@ -274,22 +270,16 @@ impl AppState {
             return Err(LaunchError::Import("Lyra is shutting down"));
         }
 
-        if !force_restart {
-            if let Some(existing) = lifecycle.backend.as_mut() {
-                if child_is_running(&mut existing.child)? && backend_is_ready(&existing.bootstrap) {
-                    return Ok(existing.bootstrap.clone());
-                }
-                log_event("backend health probe failed or process exited; preparing a restart");
-                stop_backend(existing)?;
-                lifecycle.backend = None;
+        // A live, ready backend is reused as-is. Recovery callers ask precisely because
+        // one request failed; force-recycling a healthy backend would kill the in-flight
+        // uploads and ingestion of every other request. Only a dead process or a failed
+        // health probe earns a restart.
+        if let Some(existing) = lifecycle.backend.as_mut() {
+            if child_is_running(&mut existing.child)? && backend_is_ready(&existing.bootstrap) {
+                return Ok(existing.bootstrap.clone());
             }
-        }
-
-        if force_restart {
-            if let Some(existing) = lifecycle.backend.as_mut() {
-                log_event("retry_backend requested; recycling owned backend");
-                stop_backend(existing)?;
-            }
+            log_event("backend health probe failed or process exited; preparing a restart");
+            stop_backend(existing)?;
             lifecycle.backend = None;
         }
 
@@ -361,7 +351,7 @@ async fn desktop_bootstrap(
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, false))
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app))
         .await
         .map_err(|_| CommandError::from(LaunchError::Poisoned))?
         .map_err(|error| {
@@ -376,7 +366,7 @@ async fn retry_backend(
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, true))
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app))
         .await
         .map_err(|_| CommandError::from(LaunchError::Poisoned))?
         .map_err(|error| {
@@ -720,7 +710,7 @@ pub(crate) async fn resume_after_failed_update(app: AppHandle) -> Result<(), Str
     state
         .updating
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, false))
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app))
         .await
         .map_err(|_| "The update recovery worker stopped unexpectedly".to_string())?
         .map(|_| ())
