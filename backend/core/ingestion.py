@@ -327,6 +327,11 @@ def _store_chunks(
     """
     # A reingest must replace, not accumulate, so the old rows go before the first insert.
     delete_chunks(conn, document_id)
+    # Commit now, before the first embedding call: `delete_chunks` opened a write
+    # transaction, and holding the write lock across embedding HTTP makes every
+    # concurrent request INSERT wait out the busy timeout. Each batch below then holds
+    # the lock only for its inserts.
+    conn.commit()
 
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]

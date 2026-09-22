@@ -218,6 +218,38 @@ def test_a_poller_sees_the_embedding_stage_before_the_document_is_ready(
     assert _document(db, document_id)["state"] == "ready"
 
 
+def test_embedding_starts_with_the_write_lock_released(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user-visible bug: a second upload's INSERT died on `database is locked`
+    because `delete_chunks` opened a write transaction and the embedding HTTP calls
+    ran inside it. Embedding must start with no write transaction held."""
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    monkeypatch.setattr(ingestion, "EMBED_BATCH_SIZE", 1)
+    deleting: list[sqlite3.Connection] = []
+    original_delete = ingestion.delete_chunks
+
+    def watch_delete(conn: sqlite3.Connection, doc_id: int) -> None:
+        original_delete(conn, doc_id)
+        deleting.append(conn)
+
+    held: list[bool] = []
+
+    def spy(texts: list[str]) -> list[list[float]]:
+        assert deleting, "embedding ran before the old rows were deleted"
+        held.append(deleting[-1].in_transaction)
+        return _vectors(texts)
+
+    monkeypatch.setattr(ingestion, "delete_chunks", watch_delete)
+    monkeypatch.setattr(ingestion, "embed_documents", spy)
+    run_ingestion(document_id)
+
+    assert held, "embedding never ran"
+    assert not any(held), "a write transaction stayed open while embedding"
+    assert _document(db, document_id)["state"] == "ready"
+
+
 def test_extracted_text_is_kept_so_a_reindex_never_reparses(
     db: sqlite3.Connection, class_id: int
 ) -> None:
