@@ -168,16 +168,34 @@ function ClassDocumentsPane({
         const next = queueRef.current[0]
         setUploading(next.name)
         setBatch((current) => ({ ...current, currentName: next.name }))
+        let created: DocumentRead | undefined
+        let failure: unknown
         try {
-          const created = await uploadDocument.mutateAsync(next)
+          created = await uploadDocument.mutateAsync(next)
+        } catch (first) {
+          failure = first
+        }
+        // Status 0 means the request never landed, and `runtime.ts` has already asked
+        // the shell to recover the backend and adopted the fresh bootstrap before
+        // throwing. A backend that died mid-upload is exactly what this serial queue
+        // exists to survive, so the file gets one retry against the recovered service.
+        if (!created && failure instanceof ApiError && failure.status === 0) {
+          try {
+            created = await uploadDocument.mutateAsync(next)
+            failure = undefined
+          } catch (second) {
+            failure = second
+          }
+        }
+        if (created) {
           setBatch((current) => ({
             ...current,
             documentIds: [...current.documentIds, created.id],
           }))
-        } catch (caught) {
+        } else {
           setBatch((current) => ({ ...current, failed: current.failed + 1 }))
           toast.error(
-            caught instanceof ApiError ? caught.message : `Could not upload ${next.name}.`,
+            failure instanceof ApiError ? failure.message : `Could not upload ${next.name}.`,
           )
         }
         queueRef.current = queueRef.current.slice(1)

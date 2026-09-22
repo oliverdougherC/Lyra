@@ -5,7 +5,8 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DocumentsPane } from '@/components/documents/documents-pane'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
+import { toast } from 'sonner'
 import type { ClassRead, DocumentRead } from '@/types'
 
 vi.mock('@/router/hooks', () => ({
@@ -210,4 +211,54 @@ it('restores each class filter without copying the previous class query', async 
   )
   expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
   expect(sessionStorage.getItem('lyra:class:2:files-query')).toBe('syllabus')
+})
+
+// The six-restart storm: a request that never landed (`ApiError(0)`) after the runtime
+// already recovered and re-adopted the backend must cost the file one retry, not a
+// failure. The batch UI is the observable: a retried file ends in "All documents
+// processed", a failed one in "1 item needs attention".
+async function dropOneFile() {
+  const input = document.querySelector<HTMLInputElement>('#document-upload')
+  expect(input).not.toBeNull()
+  await userEvent.upload(input!, new File(['pdf'], 'lecture.pdf', { type: 'application/pdf' }))
+}
+
+it('retries once after a request that never reached the backend, without a failure', async () => {
+  vi.mocked(api.listDocuments).mockResolvedValue([
+    ...DOCUMENTS,
+    {
+      id: 7,
+      class_id: 1,
+      filename: 'lecture.pdf',
+      byte_size: 3,
+      state: 'ready',
+      created_at: '2026-08-05 09:00:00',
+    },
+  ] as DocumentRead[])
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockRejectedValueOnce(new ApiError(0, 'Could not reach the Lyra service.'))
+    .mockResolvedValue({ id: 7 } as DocumentRead)
+  const errorToast = vi.spyOn(toast, 'error')
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+
+  await dropOneFile()
+
+  expect(await screen.findByText('All documents processed')).toBeInTheDocument()
+  expect(upload).toHaveBeenCalledTimes(2)
+  expect(errorToast).not.toHaveBeenCalled()
+})
+
+it('counts the file as failed when the retry fails too', async () => {
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockRejectedValue(new ApiError(0, 'Could not reach the Lyra service.'))
+  const errorToast = vi.spyOn(toast, 'error')
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+
+  await dropOneFile()
+
+  expect(await screen.findByText('1 item needs attention')).toBeInTheDocument()
+  expect(upload).toHaveBeenCalledTimes(2)
+  expect(errorToast).toHaveBeenCalledTimes(1)
 })
