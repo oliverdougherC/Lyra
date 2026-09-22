@@ -107,24 +107,21 @@ def test_delayed_credentials_remain_authenticated_through_production_routes(
         secrets._slot_read_cache.clear()
         delayed_keychain.release.clear()
         request = client.get if route == "models" else client.post
-        first = request("/api/settings/" + route)
-        assert first.status_code == 400
-        assert "responding" in first.json()["detail"]
-        assert sent == []
-        assert secrets._keyring_ok is not False
+        # A healthy Keychain read that is merely slow must not push the first probe
+        # into a pending refusal: these async routes wait for the one Keychain worker
+        # and answer with the endpoint's real verdict, not "Keychain is still responding".
+        timer = threading.Timer(0.05, delayed_keychain.release.set)
+        timer.start()
+        try:
+            first = request("/api/settings/" + route)
+        finally:
+            timer.cancel()
+            delayed_keychain.release.set()
+        assert first.status_code == 200, first.json()
         worker = secrets._operation_thread
-        for _ in range(3):
-            response = request("/api/settings/" + route)
-            assert response.status_code == 400
-            assert secrets._operation_thread is worker
-        delayed_keychain.release.set()
-        worker.join(1)
-        for _ in range(5):
-            response = request("/api/settings/" + route)
-            if response.status_code == 200:
-                break
-            secrets._operation_thread.join(1)
-        assert response.status_code == 200
+        if worker is not None:
+            worker.join(1)
+        assert secrets._keyring_ok is not False
         assert sent == [(endpoint + "/models", "Bearer synthetic-tutor")]
         state = client.get("/api/settings").json()
         assert state["api_key_set"] and state["exa_api_key_set"]
