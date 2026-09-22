@@ -343,6 +343,83 @@ def test_a_webp_upload_is_refused_naming_the_types_that_work(
     assert "PNG" in response.json()["detail"]
 
 
+class _LockedInserts:
+    """A connection whose first `refused` INSERTs into `documents` raise the same
+    `database is locked` the student hit when ingestion held the write lock past the
+    busy timeout. Everything else passes straight through."""
+
+    def __init__(self, conn: sqlite3.Connection, refused: int) -> None:
+        self._conn = conn
+        self._remaining = refused
+
+    def execute(self, sql: str, *args, **kwargs):
+        if "insert into documents" in sql and self._remaining > 0:
+            self._remaining -= 1
+            raise sqlite3.OperationalError("database is locked")
+        return self._conn.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _client_refusing_inserts(refused: int) -> TestClient:
+    def flaky_db() -> Iterator[sqlite3.Connection]:
+        conn = _LockedInserts(connect(), refused)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    app = FastAPI()
+
+    @app.exception_handler(LyraError)
+    async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+    app.include_router(routes_documents.router)
+    app.dependency_overrides[get_db] = flaky_db
+    return TestClient(app)
+
+
+def test_upload_rides_out_a_transient_write_lock_on_the_row_insert(
+    db: sqlite3.Connection, class_id: int, no_worker: list[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The connection-reset storm started with one INSERT losing the write-lock race.
+    A lock that frees within the retry window must land the upload, not escape the route."""
+    monkeypatch.setattr(routes_documents, "INSERT_DOCUMENT_RETRY_SECONDS", 0)
+    with _client_refusing_inserts(2) as flaky_client:
+        response = flaky_client.post(
+            f"/api/classes/{class_id}/documents",
+            files={"file": ("hw3.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+
+    assert response.status_code == 202
+    document_id = response.json()["id"]
+    assert (
+        db.execute("select state from documents where id = ?", (document_id,)).fetchone()[0]
+        == "pending"
+    )
+    assert no_worker == [document_id]
+
+
+def test_upload_answers_retry_later_when_the_write_lock_never_frees(
+    db: sqlite3.Connection, class_id: int, no_worker: list[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every alternative to a clean JSON error was worse: the ASGI exception that used
+    to escape here dropped the connection and made the shell recycle the backend."""
+    monkeypatch.setattr(routes_documents, "INSERT_DOCUMENT_RETRY_SECONDS", 0)
+    with _client_refusing_inserts(99) as flaky_client:
+        response = flaky_client.post(
+            f"/api/classes/{class_id}/documents",
+            files={"file": ("hw3.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == routes_documents.BUSY_UPLOAD_MESSAGE
+    assert db.execute("select count(*) from documents").fetchone()[0] == 0
+    assert no_worker == []
+
+
 def _sectioned_chunk(
     db: sqlite3.Connection,
     document_id: int,

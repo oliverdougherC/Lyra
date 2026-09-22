@@ -10,6 +10,7 @@ in a threadpool, which is exactly where blocking work belongs.
 import logging
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -64,6 +65,16 @@ class UploadTooLargeError(LyraError):
 # A store that failed for a reason the student did not cause and can only retry: a disk
 # error, a dropped connection mid-upload, or a destination Lyra refused to write through.
 UPLOAD_FAILED_MESSAGE = "That file could not be saved. Try uploading it again."
+# A write lock held by the ingestion worker of a file uploaded seconds earlier can still
+# outrun a single INSERT's busy timeout. This is transient and the student did nothing
+# wrong, so the answer is a plain retry later - never an escaped ASGI exception, which
+# drops the connection and sends the desktop shell into backend-recovery storms.
+BUSY_UPLOAD_MESSAGE = "Lyra is still finishing another document. Try this upload again in a moment."
+
+# Total attempts for the documents-row INSERT: one try plus two retries, spaced past the
+# short lock windows that ingestion can still hold between embedding batches.
+INSERT_DOCUMENT_ATTEMPTS = 3
+INSERT_DOCUMENT_RETRY_SECONDS = 0.5
 
 # How much of a text source the reading pane serves. Well past a problem set, and short of
 # anything that would make the pane slow to render.
@@ -222,6 +233,33 @@ class StatusRead(BaseModel):
     error_message: str | None
 
 
+def _insert_document_row(conn: sqlite3.Connection, class_id: int, filename: str, mime: str) -> int:
+    """Insert the pending documents row, tolerating a transient write-lock loss.
+
+    Only this statement is retried. Ingestion commits per batch, so any residual
+    overlap is a short window; a rollback between attempts releases whatever
+    half-taken lock the failed statement left behind. If every attempt fails the
+    student gets an honest retry-later error rather than a dropped connection.
+    """
+    for attempt in range(INSERT_DOCUMENT_ATTEMPTS):
+        try:
+            cursor = conn.execute(
+                "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+                "values (?, ?, '', ?, 0, ?)",
+                (class_id, filename, mime, PENDING),
+            )
+            return int(cursor.lastrowid or 0)
+        except sqlite3.OperationalError:
+            conn.rollback()
+            if attempt + 1 >= INSERT_DOCUMENT_ATTEMPTS:
+                logger.warning(
+                    "Document insert kept losing the write lock; giving up", exc_info=True
+                )
+                raise LyraError(BUSY_UPLOAD_MESSAGE) from None
+            time.sleep(INSERT_DOCUMENT_RETRY_SECONDS)
+    raise AssertionError("unreachable: loop returns or raises")
+
+
 @router.post(
     "/classes/{class_id}/documents",
     response_model=DocumentRead,
@@ -245,14 +283,7 @@ def upload_document(
     # the startup orphan sweep removes those (docs/storage-consistency.md). `byte_size` is
     # a placeholder until the stream lands, because the true size is not known until the
     # last chunk; the row is not committed until it is corrected below.
-    document_id = int(
-        conn.execute(
-            "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
-            "values (?, ?, '', ?, 0, ?)",
-            (class_id, filename, mime, PENDING),
-        ).lastrowid
-        or 0
-    )
+    document_id = _insert_document_row(conn, class_id, filename, mime)
     stored_path = settings.uploads_dir / str(class_id) / f"{document_id}-{_safe_filename(filename)}"
     # The class upload directory is `0o700` and the stored file `0o600`: an uploaded source
     # is coursework, private like the rest of the data tree and not left to the umask.
