@@ -384,6 +384,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
       {tutorReady ? (
         <ClassAskComposer
           className={className}
+          draftKey={`lyra:class:${classId}:ask-question`}
           suggestions={readyCount > 0 ? suggestions : undefined}
           onSend={ask}
         />

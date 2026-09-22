@@ -12,17 +12,30 @@ const GENERAL_PROMPTS = [
   'Help me find a starting point for my writing…',
 ]
 
-/** A blank sheet, with ideas that yield as soon as the student starts writing. */
+/** A blank sheet, with ideas that yield as soon as the student starts writing.
+ *
+ * The draft lives under `draftKey` in sessionStorage: navigating to Settings and back
+ * used to unmount this component and wipe a half-typed question with it. A question
+ * that sends successfully clears the entry, so returning does not resurrect it.
+ */
 export function ClassAskComposer({
   className,
+  draftKey,
   suggestions = GENERAL_PROMPTS,
   onSend,
 }: {
   className?: string
+  draftKey: string
   suggestions?: string[]
   onSend: (question: string) => void | Promise<void>
 }) {
-  const [question, setQuestion] = useState('')
+  const [question, setQuestion] = useState(() => {
+    try {
+      return sessionStorage.getItem(draftKey) ?? ''
+    } catch {
+      return ''
+    }
+  })
   const [index, setIndex] = useState(0)
   const [focused, setFocused] = useState(false)
   const [sending, setSending] = useState(false)
@@ -34,6 +47,14 @@ export function ClassAskComposer({
   const prompts = suggestions.length ? suggestions : GENERAL_PROMPTS
   const prompt = prompts[index % prompts.length]
   const empty = question.length === 0
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(draftKey, question)
+    } catch {
+      /* Asking still works in memory. */
+    }
+  }, [draftKey, question])
 
   useEffect(() => {
     if (!empty || focused || reduceMotion || sending || prompts.length < 2) return
@@ -57,6 +78,12 @@ export function ClassAskComposer({
     setError(false)
     try {
       await onSend(question.trim())
+      // The handoff navigates away; the sent question must not wait on remount.
+      try {
+        sessionStorage.removeItem(draftKey)
+      } catch {
+        /* Nothing left to persist if the draft could not be cleared. */
+      }
     } catch {
       setError(true)
       textarea.current?.focus()

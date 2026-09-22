@@ -6,9 +6,17 @@ import { ClassAskComposer } from '@/components/classes/class-ask-composer'
 afterEach(() => vi.useRealTimers())
 
 const ideas = ['Explain convolution', 'Walk me through Fourier series']
-function setup(onSend = vi.fn()) {
-  render(<ClassAskComposer className="Signals" suggestions={ideas} onSend={onSend} />)
-  return { box: screen.getByRole('textbox', { name: 'Ask about Signals' }), onSend }
+let keySeq = 0
+function setup(onSend = vi.fn(), draftKey = `lyra:class:1:ask-question#${keySeq++}`) {
+  const view = render(
+    <ClassAskComposer className="Signals" draftKey={draftKey} suggestions={ideas} onSend={onSend} />,
+  )
+  return {
+    box: screen.getByRole('textbox', { name: 'Ask about Signals' }),
+    onSend,
+    view,
+    draftKey,
+  }
 }
 
 describe('class opening composer', () => {
@@ -69,5 +77,25 @@ describe('class opening composer', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Your question is still here')
     expect(box).toHaveValue('Explain convolution')
     expect(screen.getByRole('button', { name: 'Ask' })).toBeEnabled()
+  })
+
+  it('restores a half-typed question after the page unmounts and returns', () => {
+    const { box, view, draftKey } = setup()
+    fireEvent.change(box, { target: { value: 'Set up a study plan' } })
+    view.unmount()
+    setup(vi.fn(), draftKey)
+    expect(screen.getByRole('textbox', { name: 'Ask about Signals' })).toHaveValue(
+      'Set up a study plan',
+    )
+  })
+
+  it('drops the stored draft once the question sends', async () => {
+    const { box, view, draftKey } = setup(vi.fn().mockResolvedValue(undefined))
+    fireEvent.change(box, { target: { value: 'Already asked' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    await act(async () => {})
+    view.unmount()
+    setup(vi.fn(), draftKey)
+    expect(screen.getByRole('textbox', { name: 'Ask about Signals' })).toHaveValue('')
   })
 })
