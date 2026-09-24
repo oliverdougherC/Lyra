@@ -267,7 +267,7 @@ def visual_pages(
         return [], 0
     doc = conn.execute(
         "select stored_path, mime, created_at, pages_total from documents "
-        "where id = ? and class_id = ? and state = 'ready'",
+        "where id = ? and class_id = ? and state in ('ready', 'unsupported')",
         (selected_id, class_id),
     ).fetchone()
     if doc is None:

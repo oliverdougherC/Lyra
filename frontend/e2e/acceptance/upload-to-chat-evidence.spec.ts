@@ -246,4 +246,154 @@ pdf.save(sys.argv[1])`,
     expect(prompt).not.toContain('x = 9')
     await clearTutorState()
   })
+
+  test('a pure scan reaches the provider as visual evidence before text recognition', async () => {
+    const state = await readAcceptanceState()
+    if (!state) throw new Error('An isolated acceptance profile is required')
+    const cls = await createClass('Acceptance: pure scan')
+    const directory = await mkdtemp(join(tmpdir(), 'lyra-pure-scan-'))
+    const fixture = join(directory, 'scan.pdf')
+    execFileSync(
+      'uv',
+      [
+        'run',
+        'python',
+        '-c',
+        `import pymupdf, sys
+source = pymupdf.open()
+source.new_page().insert_text((72, 90), 'Problem 4: find 13 plus 29 from the diagram.')
+image = source[0].get_pixmap(dpi=144).tobytes('png')
+pdf = pymupdf.open()
+page = pdf.new_page()
+page.insert_image(page.rect, stream=image)
+pdf.save(sys.argv[1])`,
+        fixture,
+      ],
+      { cwd: resolve(__dirname, '../../..') },
+    )
+    const form = new FormData()
+    form.append('file', new Blob([await readFile(fixture)]), 'scan.pdf')
+    const uploaded = await fetch(`${BACKEND}/api/classes/${cls.id}/documents`, {
+      method: 'POST',
+      headers: { 'X-Lyra-Client': 'acceptance-test', 'X-Idempotency-Key': crypto.randomUUID() },
+      body: form,
+    })
+    expect(uploaded.status).toBe(202)
+    const document = await uploaded.json()
+    let detail: { state?: string; page_coverage?: Array<{ state: string }> } = {}
+    for (let i = 0; i < 100; i += 1) {
+      detail = await (await apiGet(`/api/documents/${document.id}`)).json()
+      if (detail.state === 'unsupported') break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    expect(detail.state).toBe('unsupported')
+    expect(detail.page_coverage).toEqual(
+      expect.arrayContaining([expect.objectContaining({ state: 'not_attempted' })]),
+    )
+    execFileSync(
+      'uv',
+      [
+        'run',
+        'python',
+        '-c',
+        `import sqlite3, sys
+c=sqlite3.connect(sys.argv[1]); c.execute('update settings set vision_supported=1 where id=1'); c.commit(); c.close()`,
+        join(state.dataDir, 'lyra.db'),
+      ],
+      { cwd: resolve(__dirname, '../../..') },
+    )
+    await clearTutorState()
+    await enqueueTutorResponse({ content: 'The scan contains the problem on page one.' })
+    const session = await createSession(cls.id)
+    const answer = await apiPost(`/api/classes/${cls.id}/sessions/${session.id}/agent-chat`, {
+      content: 'Solve the scanned worksheet',
+      document_id: document.id,
+      mode: 'show',
+    })
+    expect(answer.ok).toBe(true)
+    const chat = (await getTutorRequests()).find(
+      (request) => request.url === '/v1/chat/completions',
+    )
+    expect(chat).toBeDefined()
+    const messages = (chat!.body as { messages: Array<{ content: unknown }> }).messages
+    const parts = messages.at(-1)?.content as Array<{ type: string; image_url?: { url: string } }>
+    expect(
+      parts.some(
+        (part) =>
+          part.type === 'image_url' && part.image_url?.url.startsWith('data:image/png;base64,'),
+      ),
+    ).toBe(true)
+    expect(JSON.stringify(messages[0].content)).toContain('coverage is incomplete')
+    await clearTutorState()
+  })
+
+  test('native matrix text also carries its page layout to the provider', async () => {
+    const state = await readAcceptanceState()
+    if (!state) throw new Error('An isolated acceptance profile is required')
+    const cls = await createClass('Acceptance: matrix layout')
+    const directory = await mkdtemp(join(tmpdir(), 'lyra-matrix-'))
+    const fixture = join(directory, 'matrix.pdf')
+    execFileSync(
+      'uv',
+      [
+        'run',
+        'python',
+        '-c',
+        `import pymupdf, sys
+pdf = pymupdf.open()
+page = pdf.new_page()
+page.insert_text((72, 72), 'Matrix A has these four entries; find its determinant.')
+page.insert_text((100, 110), '2       7')
+page.insert_text((100, 134), '5       11')
+pdf.save(sys.argv[1])`,
+        fixture,
+      ],
+      { cwd: resolve(__dirname, '../../..') },
+    )
+    const form = new FormData()
+    form.append('file', new Blob([await readFile(fixture)]), 'matrix.pdf')
+    const uploaded = await fetch(`${BACKEND}/api/classes/${cls.id}/documents`, {
+      method: 'POST',
+      headers: { 'X-Lyra-Client': 'acceptance-test', 'X-Idempotency-Key': crypto.randomUUID() },
+      body: form,
+    })
+    expect(uploaded.status).toBe(202)
+    const document = await uploaded.json()
+    await waitForDocumentReady(document.id, 60_000)
+    execFileSync(
+      'uv',
+      [
+        'run',
+        'python',
+        '-c',
+        `import sqlite3, sys
+c=sqlite3.connect(sys.argv[1]); c.execute('update settings set vision_supported=1 where id=1'); c.commit(); c.close()`,
+        join(state.dataDir, 'lyra.db'),
+      ],
+      { cwd: resolve(__dirname, '../../..') },
+    )
+    await clearTutorState()
+    await enqueueTutorResponse({ content: 'The determinant uses the arranged entries.' })
+    const session = await createSession(cls.id)
+    const answer = await apiPost(`/api/classes/${cls.id}/sessions/${session.id}/agent-chat`, {
+      content: 'Explain this matrix on page 1',
+      document_id: document.id,
+      mode: 'show',
+    })
+    expect(answer.ok).toBe(true)
+    const chat = (await getTutorRequests()).find(
+      (request) => request.url === '/v1/chat/completions',
+    )
+    expect(chat).toBeDefined()
+    const messages = (chat!.body as { messages: Array<{ content: unknown }> }).messages
+    expect(JSON.stringify(messages[0].content)).toContain('Matrix A')
+    const parts = messages.at(-1)?.content as Array<{ type: string; image_url?: { url: string } }>
+    expect(
+      parts.some(
+        (part) =>
+          part.type === 'image_url' && part.image_url?.url.startsWith('data:image/png;base64,'),
+      ),
+    ).toBe(true)
+    await clearTutorState()
+  })
 })

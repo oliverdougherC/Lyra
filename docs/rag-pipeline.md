@@ -75,7 +75,8 @@ conversation, selected-document scope, and document-text consent; citations reta
 page provenance. Incomplete short worksheets are refused before inference when the requested
 problem page is unreadable and the configured tutor has no confirmed vision capability. With
 confirmed vision and consent, Lyra may attach at most three relevant rendered pages from a
-selected document; it never sends all pages of a long book merely because they are scanned.
+selected document, including a pure scan that has no text index yet; it never sends all pages
+of a long book merely because they are scanned.
 
 Chat, solutions, study, drafting, and agent workflows build their own bounded prompts from the
 selected scope. They use the configured OpenAI-compatible tutor. Source references remain tied to
