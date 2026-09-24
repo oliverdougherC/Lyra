@@ -115,7 +115,9 @@ export function DocumentRow({
   onPractice,
   highlighted = false,
 }: DocumentRowProps) {
-  const polling = !isTerminal(document.state)
+  const polling =
+    !isTerminal(document.state) ||
+    (document.refresh_state != null && document.refresh_state !== 'failed')
   const { data: status } = useDocumentStatus(document.id, polling)
 
   // The row's own poll is finer grained than the list, but only while it is running. It is
@@ -128,19 +130,40 @@ export function DocumentRow({
   const state: DocumentState = live?.state ?? document.state
   const pagesTotal = live?.pages_total ?? document.pages_total
   const pagesDone = live?.pages_done ?? document.pages_done
-  const pagesSkipped = live?.pages_skipped ?? document.pages_skipped
-  const pagesFailed = live?.pages_failed ?? document.pages_failed
+  const pageCoverage = live?.page_coverage ?? document.page_coverage
+  const pagesSkipped = pageCoverage?.length
+    ? pageCoverage.filter((page) => page.state === 'not_attempted').length
+    : (live?.pages_skipped ?? document.pages_skipped)
+  const pagesFailed = pageCoverage?.length
+    ? pageCoverage.filter((page) => page.state === 'recognition_failed').length
+    : (live?.pages_failed ?? document.pages_failed)
+  const coverageComplete = live?.coverage_complete ?? document.coverage_complete
+  const partialCoverage =
+    state === 'ready' &&
+    (coverageComplete === false ||
+      (coverageComplete === undefined && (pagesSkipped > 0 || pagesFailed > 0)))
+  const affectedPages = pageCoverage
+    ?.filter((page) => page.state === 'not_attempted' || page.state === 'recognition_failed')
+    .map((page) => page.page_number)
+  const unindexedPages = pageCoverage
+    ?.filter((page) => page.state === 'readable' && page.indexed === false)
+    .map((page) => page.page_number)
+  const blankPages = pageCoverage
+    ?.filter((page) => page.state === 'blank')
+    .map((page) => page.page_number)
   const stageDetail = live?.stage_detail ?? document.stage_detail
   const requested = live?.recognize ?? document.recognize
   const errorMessage = live?.error_message ?? document.error_message
+  const refreshState = live?.refresh_state ?? document.refresh_state
 
   // Announce the transition once, not on every poll that still reports `ready`.
   const announced = useRef(isTerminal(document.state))
   useEffect(() => {
     if (announced.current || !isTerminal(state)) return
     announced.current = true
-    if (state === 'ready') toast.success(`${document.filename} is ready.`)
-  }, [state, document.filename])
+    if (state === 'ready')
+      toast.success(`${document.filename} is ${partialCoverage ? 'partly readable' : 'ready'}.`)
+  }, [state, document.filename, partialCoverage])
 
   // Every poll, not only the last one. The row reads its own stage straight off this query,
   // but everything else on screen - the batch readout's stage verb, the class hub's counts,
@@ -212,7 +235,11 @@ export function DocumentRow({
                   {formatFileSize(document.byte_size)}
                 </span>
               ) : null}
-              <StateIndicator state={state} />
+              {partialCoverage ? (
+                <span className="text-info-text text-xs">Partly readable</span>
+              ) : (
+                <StateIndicator state={state} />
+              )}
             </span>
           </span>
         </button>
@@ -329,6 +356,50 @@ export function DocumentRow({
         <div className="mt-2 pl-6">
           <PageFailureNotice count={pagesFailed} onRetry={() => onRecognize(document.id)} />
         </div>
+      ) : null}
+
+      {partialCoverage && affectedPages && affectedPages.length > 0 ? (
+        <p className="text-text-secondary mt-1 pl-6 text-xs">
+          Pages needing a read: {affectedPages.join(', ')}.
+        </p>
+      ) : null}
+      {partialCoverage &&
+      (!affectedPages || affectedPages.length === 0) &&
+      (!unindexedPages || unindexedPages.length === 0) ? (
+        <p className="text-info-text mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs">
+          <span>Page coverage is incomplete.</span>
+          <button
+            type="button"
+            className="underline underline-offset-2"
+            onClick={() => onRetry(document.id)}
+          >
+            Retry indexing
+          </button>
+        </p>
+      ) : null}
+      {state === 'ready' && unindexedPages && unindexedPages.length > 0 ? (
+        <p className="text-info-text mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs">
+          <span>Readable pages not indexed: {unindexedPages.join(', ')}.</span>
+          <button
+            type="button"
+            className="underline underline-offset-2"
+            onClick={() => onRetry(document.id)}
+          >
+            Retry indexing
+          </button>
+        </p>
+      ) : null}
+      {state === 'ready' && blankPages && blankPages.length > 0 ? (
+        <p className="text-text-tertiary mt-1 pl-6 text-xs">
+          Blank {blankPages.length === 1 ? 'page' : 'pages'}: {blankPages.join(', ')}.
+        </p>
+      ) : null}
+      {state === 'ready' && refreshState ? (
+        <p className="text-text-tertiary mt-1 pl-6 text-xs">
+          {refreshState === 'failed'
+            ? 'Refresh failed. Existing readable pages remain available.'
+            : 'Refreshing pages. Existing readable pages remain available.'}
+        </p>
       ) : null}
 
       {state === 'ready' ? (

@@ -190,6 +190,7 @@ type RequestOptions = {
   signal?: AbortSignal
   errorFactory?: (status: number, payload: unknown | undefined) => Error
   accept?: string
+  headers?: Record<string, string>
 }
 
 function readDetail(payload: unknown, status: number): string {
@@ -352,7 +353,7 @@ function normalizeLiveDraftSuggestion(payload: unknown): LiveDraftSuggestion | n
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
   const isFormData = options.body instanceof FormData
   const runtime = await getRuntimeConfig()
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { ...options.headers }
   if (options.body !== undefined && !isFormData) {
     headers['content-type'] = 'application/json'
   }
@@ -444,14 +445,18 @@ export const api = {
   listDocuments: (classId: number, signal?: AbortSignal) =>
     requestJson<DocumentRead[]>(`/api/classes/${classId}/documents`, { signal }),
 
-  uploadDocument: (classId: number, file: File) => {
+  uploadDocument: (classId: number, file: File, operationId?: string) => {
     const form = new FormData()
     form.append('file', file)
     return requestJson<DocumentRead>(`/api/classes/${classId}/documents`, {
       method: 'POST',
       body: form,
+      headers: operationId ? { 'X-Idempotency-Key': operationId } : undefined,
     })
   },
+
+  reconcileUpload: (classId: number, operationId: string) =>
+    requestJson<DocumentRead>(`/api/classes/${classId}/documents/uploads/${encodeURIComponent(operationId)}`),
 
   getDocument: (documentId: number, signal?: AbortSignal) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}`, { signal }),

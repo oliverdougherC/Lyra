@@ -315,10 +315,6 @@ export function ChatPane({
     sessionId === null && !isDraft && !writer && newestMode !== 'writer'
       ? (newestMode ?? mode)
       : mode
-  const scopedDocument = useMemo(
-    () => documents?.find((document) => document.id === selectedDocumentId) ?? null,
-    [documents, selectedDocumentId],
-  )
 
   const {
     data: persisted,
@@ -981,7 +977,7 @@ export function ChatPane({
               onEvent(event)
             }
           }
-          const agentDocumentId = scopedDocument?.id ?? null
+          const agentDocumentId = selectedDocumentId
           try {
             const result =
               kind === 'tutor-retry'
@@ -1071,7 +1067,7 @@ export function ChatPane({
           )
           return
         }
-        const documentId = scopedDocument?.id ?? null
+        const documentId = selectedDocumentId
         await (kind === 'writer-retry' && writer
           ? streamWriterChatRetry(writer.artifactId, turnSessionId, onEvent, controller.signal)
           : writer
@@ -1259,7 +1255,7 @@ export function ChatPane({
       schedulePublication,
       flushPublication,
       invalidatePublication,
-      scopedDocument,
+      selectedDocumentId,
       setOutcome,
       writer,
     ],

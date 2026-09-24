@@ -28,6 +28,8 @@ from urllib.parse import urlsplit
 from backend.core import (
     agent_attempts,
     agent_store,
+    app_settings,
+    document_access,
     profiles,
     sessions,
     source_ledger,
@@ -489,6 +491,8 @@ def build_agent_registry(
     private_context: PrivateContextLedger | Sequence[str] = (),
     snapshot: AgentCapabilitySnapshot | None = None,
     stop: ToolStopGate | None = None,
+    selected_document_id: int | None = None,
+    document_endpoint: str | None = None,
 ) -> tuple[dict[str, ToolDefinition], AgentRunActivity]:
     """Build the smallest raw registry allowed for one class-agent turn.
 
@@ -568,6 +572,17 @@ def build_agent_registry(
         )
 
     if profile == "agent":
+        _add_document_tools(
+            conn,
+            class_id,
+            session_id,
+            definitions,
+            activity,
+            ledger,
+            selected_document_id,
+            document_endpoint,
+            stop,
+        )
         # The contextual turn plans across research, workspace, and command work on its
         # own: every group is added and self-gates on the same frozen snapshot, so the
         # exposed registry is the union of what the snapshot admits - no more, no less. The
@@ -605,6 +620,144 @@ def build_agent_registry(
 
     selected = tool_profiles.build_tool_profile(profile, definitions)
     return {item.name: item.definition for item in selected.definitions}, activity
+
+
+def _add_document_tools(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    definitions: list[tool_profiles.AnnotatedToolDefinition],
+    activity: AgentRunActivity,
+    ledger: PrivateContextLedger,
+    selected_document_id: int | None,
+    document_endpoint: str | None,
+    stop: ToolStopGate | None,
+) -> None:
+    """Read indexed coursework under the conversation's immutable source selection."""
+
+    def authorize() -> object:
+        _session_scope(conn, class_id, session_id)
+        row = app_settings.get_settings_row(conn)
+        if app_settings.document_text_allowed(conn) is not None:
+            raise _RefusalError("Course material may not be sent to this tutor endpoint.")
+        if document_endpoint is not None and str(row["endpoint_url"]).strip() != document_endpoint:
+            raise _RefusalError("Tutor settings changed during this reply. Try again.")
+        document_access._scope(conn, class_id, selected_document_id)
+        return None
+
+    specs = (
+        (
+            "list_documents",
+            "List uploaded coursework in this class, including page coverage and search readiness.",
+            {},
+            (),
+            lambda **_: document_access.inventory(conn, class_id, selected_document_id),
+        ),
+        (
+            "search_documents",
+            "Search uploaded coursework by exact terms and return bounded cited excerpts. "
+            "Works without the embedding helper.",
+            {"query": {"type": "string", "maxLength": 200}},
+            ("query",),
+            lambda query: document_access.search(
+                conn,
+                class_id,
+                selected_document_id,
+                _text(query, "query", maximum=200),
+            ),
+        ),
+        (
+            "read_document_page",
+            "Read bounded text and coverage of a numbered uploaded page. Cite the returned source.",
+            {
+                "document_id": {"type": "integer", "minimum": 1},
+                "page_number": {"type": "integer", "minimum": 1},
+            },
+            ("document_id", "page_number"),
+            lambda document_id, page_number: document_access.read_page(
+                conn,
+                class_id,
+                selected_document_id,
+                _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1),
+                _integer(page_number, "page_number", minimum=1, maximum=100000),
+            ),
+        ),
+        (
+            "read_document_problem",
+            "Read indexed parts of one numbered uploaded problem with page citations.",
+            {
+                "document_id": {"type": "integer", "minimum": 1},
+                "problem_number": {"type": "string", "maxLength": 40},
+                "page_number": {"type": "integer", "minimum": 1},
+            },
+            ("document_id", "problem_number"),
+            lambda document_id, problem_number, page_number=None: document_access.read_problem(
+                conn,
+                class_id,
+                selected_document_id,
+                _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1),
+                _text(problem_number, "problem_number", maximum=40),
+                _integer(page_number, "page_number", minimum=1, maximum=100000)
+                if page_number is not None
+                else None,
+            ),
+        ),
+        (
+            "read_document_section",
+            "Read bounded chunks of one numbered section with page citations.",
+            {
+                "document_id": {"type": "integer", "minimum": 1},
+                "section_number": {"type": "string", "maxLength": 40},
+            },
+            ("document_id", "section_number"),
+            lambda document_id, section_number: document_access.read_section(
+                conn,
+                class_id,
+                selected_document_id,
+                _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1),
+                _text(section_number, "section_number", maximum=40),
+            ),
+        ),
+    )
+    for name, description, properties, required, primitive in specs:
+
+        def action(_authorization: object, _primitive=primitive, **arguments: object) -> _Outcome:
+            result = _primitive(**arguments)
+            for source in result.get("sources", []):
+                if isinstance(source, Mapping):
+                    ledger.add(source.get("text"), source.get("filename"))
+            return _Outcome(
+                success(**result),
+                {
+                    "source_count": len(result.get("sources", [])),
+                    "truncated": result.get("truncated", False),
+                },
+                target_kind="document",
+            )
+
+        definition = _definition(
+            name,
+            description,
+            _audited_handler(
+                conn,
+                class_id=class_id,
+                session_id=session_id,
+                name=name,
+                capability="document_read",
+                effect="database_read",
+                activity=activity,
+                authorize=authorize,
+                action=action,
+                stop=stop,
+            ),
+            properties=properties,
+            required=required,
+        )
+        definitions.append(
+            _annotated(
+                definition, capability="document_read", effect="database_read", trust="database"
+            )
+        )
 
 
 def _add_research_tools(

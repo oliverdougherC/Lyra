@@ -287,7 +287,9 @@ def test_the_upload_route_never_reads_the_whole_body_into_memory() -> None:
     The size limit must stay a streaming check, so the route must publish through the
     bounded streaming primitive and must not call an argument-less `read()` on the upload.
     """
-    source = inspect.getsource(routes_documents.upload_document)
+    source = inspect.getsource(routes_documents.upload_document) + inspect.getsource(
+        routes_documents._upload_document_impl
+    )
     assert "publish_private_stream" in source
     assert "file.file.read()" not in source
     assert ".read()" not in source

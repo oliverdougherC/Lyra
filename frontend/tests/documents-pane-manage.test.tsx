@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DocumentsPane } from '@/components/documents/documents-pane'
 import { api, ApiError } from '@/lib/api'
+import { clearUploadHistory } from '@/lib/hooks/use-documents'
 import { toast } from 'sonner'
 import type { ClassRead, DocumentRead } from '@/types'
 
@@ -55,9 +56,11 @@ const DOCUMENTS = [
 
 beforeEach(() => {
   sessionStorage.clear()
+  clearUploadHistory(1)
   vi.restoreAllMocks()
   vi.spyOn(api, 'listDocuments').mockResolvedValue(DOCUMENTS)
   vi.spyOn(api, 'getDocumentStatus').mockResolvedValue({ state: 'ready' } as never)
+  vi.spyOn(api, 'reconcileUpload').mockRejectedValue(new ApiError(404, 'Not found'))
   vi.spyOn(api, 'listClasses').mockResolvedValue([
     { id: 1, name: 'Signals', archived: false },
     { id: 2, name: 'Linear Algebra', archived: false },
@@ -246,7 +249,32 @@ it('retries once after a request that never reached the backend, without a failu
 
   expect(await screen.findByText('All documents processed')).toBeInTheDocument()
   expect(upload).toHaveBeenCalledTimes(2)
+  expect(upload.mock.calls[0][2]).toBeTruthy()
+  expect(upload.mock.calls[1][2]).toBe(upload.mock.calls[0][2])
   expect(errorToast).not.toHaveBeenCalled()
+})
+
+it('reconciles a committed upload after its response is lost without retransmitting the file', async () => {
+  vi.mocked(api.listDocuments).mockResolvedValue([
+    ...DOCUMENTS,
+    {
+      id: 18,
+      class_id: 1,
+      filename: 'lecture.pdf',
+      byte_size: 3,
+      state: 'ready',
+      created_at: '2026-08-05 09:00:00',
+    },
+  ] as DocumentRead[])
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockRejectedValueOnce(new ApiError(0, 'Connection lost'))
+  const reconcile = vi.spyOn(api, 'reconcileUpload').mockResolvedValue({ id: 18 } as DocumentRead)
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  await dropOneFile()
+  expect(await screen.findByText('All documents processed')).toBeInTheDocument()
+  expect(upload).toHaveBeenCalledTimes(1)
+  expect(reconcile).toHaveBeenCalledWith(1, upload.mock.calls[0][2])
 })
 
 it('counts the file as failed when the retry fails too', async () => {
@@ -260,5 +288,78 @@ it('counts the file as failed when the retry fails too', async () => {
 
   expect(await screen.findByText('1 item needs attention')).toBeInTheDocument()
   expect(upload).toHaveBeenCalledTimes(2)
-  expect(errorToast).toHaveBeenCalledTimes(1)
+  expect(errorToast).not.toHaveBeenCalled()
+  expect(screen.getByText(/Could not reach the Lyra service/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+})
+
+it('keeps a failed upload and its identity after the documents pane is remounted', async () => {
+  vi.spyOn(api, 'reconcileUpload')
+    .mockRejectedValueOnce(new ApiError(0, 'Could not check upload'))
+    .mockRejectedValue(new ApiError(404, 'Not found'))
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockRejectedValueOnce(new ApiError(0, 'Connection lost'))
+    .mockResolvedValueOnce({ id: 17 } as DocumentRead)
+  const { wrapper } = createWrapper()
+  const view = render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  await dropOneFile()
+  await screen.findByText(/Upload may have completed; retry will check it/)
+  const operationId = upload.mock.calls[0][2]
+  view.unmount()
+
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(2))
+  expect(upload.mock.calls[1][2]).toBe(operationId)
+})
+
+it('checks an uncertain upload before retrying its file body', async () => {
+  vi.mocked(api.listDocuments).mockResolvedValue([
+    ...DOCUMENTS,
+    {
+      id: 19,
+      class_id: 1,
+      filename: 'lecture.pdf',
+      byte_size: 3,
+      state: 'ready',
+      created_at: '2026-08-05 09:00:00',
+    },
+  ] as DocumentRead[])
+  const reconcile = vi
+    .spyOn(api, 'reconcileUpload')
+    .mockRejectedValueOnce(new ApiError(0, 'Could not check upload'))
+    .mockResolvedValueOnce({ id: 19 } as DocumentRead)
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockRejectedValueOnce(new ApiError(0, 'Connection lost'))
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  await dropOneFile()
+  await screen.findByText(/Upload may have completed; retry will check it/)
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(await screen.findByText('All documents processed')).toBeInTheDocument()
+  expect(upload).toHaveBeenCalledTimes(1)
+  expect(reconcile).toHaveBeenCalledTimes(2)
+})
+
+it('finishes a class queue after navigation and retains the failed file on return', async () => {
+  let finishFirst: ((value: DocumentRead) => void) | undefined
+  const first = new Promise<DocumentRead>((resolve) => {
+    finishFirst = resolve
+  })
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockReturnValueOnce(first)
+    .mockRejectedValueOnce(new ApiError(422, 'Unreadable upload'))
+  const { wrapper } = createWrapper()
+  const view = render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  const input = document.querySelector<HTMLInputElement>('#document-upload')!
+  await userEvent.upload(input, [new File(['a'], 'a.pdf'), new File(['b'], 'b.pdf')])
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+  view.rerender(<DocumentsPane classId={2} variant="manage" />)
+  finishFirst!({ id: 17 } as DocumentRead)
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(2))
+  view.rerender(<DocumentsPane classId={1} variant="manage" />)
+  expect(await screen.findByText(/b\.pdf: Unreadable upload/)).toBeInTheDocument()
+  expect(upload.mock.calls[0][2]).not.toBe(upload.mock.calls[1][2])
 })

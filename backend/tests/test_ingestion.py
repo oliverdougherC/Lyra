@@ -7,6 +7,7 @@ or touches the network. PDFs are built with PyMuPDF at test time rather than com
 as binary fixtures, so what a page contains is readable in the test that needs it.
 """
 
+import queue
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -147,6 +148,157 @@ def test_a_mixed_document_ends_ready_with_the_scanned_page_counted(
     assert pages == {1, 3}
 
 
+def test_a_valid_short_markdown_note_is_searchable(db: sqlite3.Connection, class_id: int) -> None:
+    stored = _write_markdown(settings.uploads_dir / "formula.md", "x = 2")
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    run_ingestion(document_id)
+    assert _document(db, document_id)["state"] == "ready"
+    assert _chunk_count(db, document_id) == 1
+
+
+def test_empty_text_file_does_not_offer_image_recognition(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    stored = _write_markdown(settings.uploads_dir / "empty.md", "  \n")
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    run_ingestion(document_id)
+    row = _document(db, document_id)
+    assert row["state"] == "unsupported"
+    assert row["error_message"] == "This text file is empty."
+    assert (
+        db.execute(
+            "select skip_reason from document_pages where document_id = ?", (document_id,)
+        ).fetchone()[0]
+        == "blank"
+    )
+
+
+def test_failed_refresh_preserves_published_chunks_and_searchability(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    run_ingestion(document_id)
+    old = [
+        tuple(row)
+        for row in db.execute(
+            "select id, content from chunks where document_id = ? order by id", (document_id,)
+        )
+    ]
+    db.execute("update documents set refresh_state = 'pending' where id = ?", (document_id,))
+    db.commit()
+
+    def unavailable(_texts: list[str]) -> list[list[float]]:
+        observer = connect()
+        try:
+            assert (
+                observer.execute(
+                    "select state from documents where id = ?", (document_id,)
+                ).fetchone()[0]
+                == "ready"
+            )
+            assert [
+                tuple(row)
+                for row in observer.execute(
+                    "select id, content from chunks where document_id = ? order by id",
+                    (document_id,),
+                )
+            ] == old
+        finally:
+            observer.close()
+        raise RuntimeError("embedding helper unavailable")
+
+    monkeypatch.setattr(ingestion, "embed_documents", unavailable)
+    run_ingestion(document_id)
+    assert _document(db, document_id)["state"] == "ready"
+    assert _document(db, document_id)["refresh_state"] == "failed"
+    assert [
+        tuple(row)
+        for row in db.execute(
+            "select id, content from chunks where document_id = ? order by id", (document_id,)
+        )
+    ] == old
+
+
+def test_refresh_publishes_new_index_and_readiness_in_one_commit(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    run_ingestion(document_id)
+    old_ids = [
+        row[0]
+        for row in db.execute(
+            "select id from chunks where document_id = ? order by id", (document_id,)
+        )
+    ]
+    db.execute("update documents set refresh_state = 'pending' where id = ?", (document_id,))
+    db.commit()
+    real_mark_ready = ingestion._mark_ready
+
+    def inspect_before_commit(*args, **kwargs):
+        observer = connect()
+        try:
+            assert tuple(
+                observer.execute(
+                    "select state, refresh_state from documents where id = ?", (document_id,)
+                ).fetchone()
+            ) == ("ready", "embedding")
+            assert [
+                row[0]
+                for row in observer.execute(
+                    "select id from chunks where document_id = ? order by id", (document_id,)
+                )
+            ] == old_ids
+        finally:
+            observer.close()
+        return real_mark_ready(*args, **kwargs)
+
+    monkeypatch.setattr(ingestion, "_mark_ready", inspect_before_commit)
+    run_ingestion(document_id)
+    assert _document(db, document_id)["refresh_state"] is None
+    assert [
+        row[0]
+        for row in db.execute(
+            "select id from chunks where document_id = ? order by id", (document_id,)
+        )
+    ] != old_ids
+
+
+def test_optional_profile_work_starts_only_after_readiness(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    submitted = []
+
+    class WaitingExecutor:
+        def submit(self, callback, *args):
+            submitted.append((callback, args))
+
+    monkeypatch.setattr(ingestion, "_profile_executor", WaitingExecutor())
+    run_ingestion(document_id, defer_profile=True)
+    assert _document(db, document_id)["state"] == "ready"
+    assert _chunk_count(db, document_id) > 0
+    assert len(submitted) == 1
+
+
+def test_restart_during_refresh_keeps_old_index(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    run_ingestion(document_id)
+    old = _chunk_count(db, document_id)
+    db.execute("update documents set refresh_state = 'embedding' where id = ?", (document_id,))
+    db.commit()
+    monkeypatch.setattr(ingestion, "enqueue", lambda _id: None)
+    assert reconcile_interrupted(db) == (0, 1)
+    assert _document(db, document_id)["state"] == "ready"
+    assert _document(db, document_id)["refresh_state"] == "failed"
+    assert _chunk_count(db, document_id) == old
+
+
 def test_every_chunk_lands_with_an_embedding_row(db: sqlite3.Connection, class_id: int) -> None:
     stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
     document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
@@ -227,26 +379,23 @@ def test_embedding_starts_with_the_write_lock_released(
     stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
     document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
     monkeypatch.setattr(ingestion, "EMBED_BATCH_SIZE", 1)
-    deleting: list[sqlite3.Connection] = []
-    original_delete = ingestion.delete_chunks
-
-    def watch_delete(conn: sqlite3.Connection, doc_id: int) -> None:
-        original_delete(conn, doc_id)
-        deleting.append(conn)
-
     held: list[bool] = []
 
     def spy(texts: list[str]) -> list[list[float]]:
-        assert deleting, "embedding ran before the old rows were deleted"
-        held.append(deleting[-1].in_transaction)
+        observer = connect()
+        try:
+            observer.execute("begin immediate")
+            held.append(True)
+        finally:
+            observer.rollback()
+            observer.close()
         return _vectors(texts)
 
-    monkeypatch.setattr(ingestion, "delete_chunks", watch_delete)
     monkeypatch.setattr(ingestion, "embed_documents", spy)
     run_ingestion(document_id)
 
     assert held, "embedding never ran"
-    assert not any(held), "a write transaction stayed open while embedding"
+    assert all(held), "a write transaction stayed open while embedding"
     assert _document(db, document_id)["state"] == "ready"
 
 
@@ -606,3 +755,15 @@ def test_reconcile_interrupted_counts_every_non_terminal_state(
     assert reconcile_interrupted(db) == (1, 4)
     # Idempotent: the requeued one is still pending, and nothing new is failed.
     assert reconcile_interrupted(db) == (1, 0)
+
+
+def test_optional_profile_backlog_is_bounded_without_blocking_ingestion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending: queue.Queue[tuple[object, tuple[object, ...]]] = queue.Queue(maxsize=1)
+    monkeypatch.setattr(ingestion, "_profile_queue", pending)
+    monkeypatch.setattr(ingestion, "_profile_started", True)
+    executor = ingestion._ProfileExecutor()
+    assert executor.submit(lambda: None) is True
+    assert executor.submit(lambda: None) is False
+    assert pending.qsize() == 1

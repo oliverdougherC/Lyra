@@ -6,6 +6,7 @@ with it.
 """
 
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -308,6 +309,123 @@ def test_an_image_upload_is_accepted(
     # The extension decides the mime, not the header the browser guessed.
     assert response.json()["mime"] == "image/png"
     assert no_worker == [response.json()["id"]]
+
+
+def test_committed_upload_replay_returns_same_document_without_queuing_again(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list[int]
+) -> None:
+    key = str(uuid.uuid4())
+    url = f"/api/classes/{class_id}/documents"
+    headers = {"X-Idempotency-Key": key}
+    first = client.post(
+        url, headers=headers, files={"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")}
+    )
+    second = client.post(
+        url, headers=headers, files={"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")}
+    )
+    assert first.status_code == second.status_code == 202
+    assert second.json()["id"] == first.json()["id"]
+    recovered = client.get(f"{url}/uploads/{key}")
+    assert recovered.status_code == 200
+    assert recovered.json()["id"] == first.json()["id"]
+    assert db.execute("select count(*) from documents").fetchone()[0] == 1
+    assert no_worker == [first.json()["id"]]
+    mismatch = client.post(
+        url, headers=headers, files={"file": ("sheet.pdf", b"different", "application/pdf")}
+    )
+    assert mismatch.status_code == 409
+    distinct = client.post(
+        url,
+        headers={"X-Idempotency-Key": str(uuid.uuid4())},
+        files={"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")},
+    )
+    assert distinct.status_code == 202
+    assert distinct.json()["id"] != first.json()["id"]
+
+
+def test_deleted_upload_identity_cannot_resurrect_old_file(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    key = str(uuid.uuid4())
+    url = f"/api/classes/{class_id}/documents"
+    files = {"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")}
+    response = client.post(url, headers={"X-Idempotency-Key": key}, files=files)
+    assert response.status_code == 202
+    assert client.delete(f"/api/documents/{response.json()['id']}").status_code == 204
+    assert client.get(f"{url}/uploads/{key}").status_code == 404
+    retry = client.post(url, headers={"X-Idempotency-Key": key}, files=files)
+    assert retry.status_code == 409
+    assert db.execute("select count(*) from documents").fetchone()[0] == 0
+
+
+def test_page_coverage_distinguishes_missing_failed_and_blank(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    db.executemany(
+        "insert into document_pages (document_id, page_number, state, skip_reason, error_message) "
+        "values (?, ?, ?, ?, ?)",
+        [
+            (document_id, 1, "text", None, None),
+            (document_id, 2, "scanned", "photographed", None),
+            (document_id, 3, "failed", "sparse", "This page could not be read."),
+            (document_id, 4, "scanned", "blank", None),
+        ],
+    )
+    db.execute("update documents set pages_total = 4 where id = ?", (document_id,))
+    db.commit()
+    body = client.get(f"/api/documents/{document_id}/status").json()
+    assert body["coverage_complete"] is False
+    assert [(page["page_number"], page["state"]) for page in body["page_coverage"]] == [
+        (1, "readable"),
+        (2, "not_attempted"),
+        (3, "recognition_failed"),
+        (4, "blank"),
+    ]
+    assert body["page_coverage"][1]["reason"] == "photographed"
+
+
+def test_transcribed_but_unindexed_page_does_not_claim_complete_coverage(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    db.executemany(
+        "insert into document_pages (document_id, page_number, state, text) values (?, ?, ?, ?)",
+        [(document_id, 1, "text", None), (document_id, 2, "recognized", "Problem 2: x = 7")],
+    )
+    db.execute(
+        "insert into document_index_pages (document_id, page_number) values (?, 1)",
+        (document_id,),
+    )
+    db.commit()
+    body = client.get(f"/api/documents/{document_id}/status").json()
+    assert body["coverage_complete"] is False
+    assert [(page["state"], page["indexed"]) for page in body["page_coverage"]] == [
+        ("readable", True),
+        ("readable", False),
+    ]
+
+
+def test_historical_model_empty_page_is_not_called_blank_or_complete(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    db.execute(
+        "insert into document_pages (document_id, page_number, state, text) "
+        "values (?, 1, 'recognized', '')",
+        (document_id,),
+    )
+    db.commit()
+    body = client.get(f"/api/documents/{document_id}/status").json()
+    assert body["page_coverage"] == [
+        {
+            "page_number": 1,
+            "state": "recognition_failed",
+            "indexed": False,
+            "reason": "no_text_found",
+        }
+    ]
+    assert body["coverage_complete"] is False
 
 
 def test_a_folder_upload_is_named_after_the_file_rather_than_the_folder(

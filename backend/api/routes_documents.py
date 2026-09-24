@@ -7,16 +7,18 @@ Handlers are sync `def`: `sqlite3` and file writes block, and FastAPI runs sync 
 in a threadpool, which is exactly where blocking work belongs.
 """
 
+import hashlib
 import logging
 import re
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, UploadFile, status
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.config import settings
 from backend.core import figures, ownership, recognition, storage_intents
@@ -127,9 +129,16 @@ _PAGES_FAILED_COLUMN = (
 
 _DOCUMENT_COLUMNS = (
     "id, class_id, filename, mime, byte_size, state, stage_detail, "
-    "pages_total, pages_done, pages_skipped, error_message, created_at, recognize, "
+    "pages_total, pages_done, pages_skipped, error_message, created_at, recognize, refresh_state, "
     + _PAGES_FAILED_COLUMN
 )
+
+
+class PageCoverage(BaseModel):
+    page_number: int
+    state: str
+    indexed: bool = False
+    reason: str | None = None
 
 
 class DocumentRead(BaseModel):
@@ -152,6 +161,9 @@ class DocumentRead(BaseModel):
     # which counts pages that had no text to find, and both can be true at once: the
     # document is still `ready` and `PageFailureNotice` reports this quietly beside it.
     pages_failed: int
+    page_coverage: list[PageCoverage] = Field(default_factory=list)
+    coverage_complete: bool = False
+    refresh_state: str | None = None
     # Whether the student has asked for this document to be read as images.
     recognize: bool
     error_message: str | None
@@ -229,6 +241,9 @@ class StatusRead(BaseModel):
     pages_done: int
     pages_skipped: int
     pages_failed: int
+    page_coverage: list[PageCoverage] = Field(default_factory=list)
+    coverage_complete: bool = False
+    refresh_state: str | None = None
     recognize: bool
     error_message: str | None
 
@@ -266,13 +281,63 @@ def _insert_document_row(conn: sqlite3.Connection, class_id: int, filename: str,
     status_code=status.HTTP_202_ACCEPTED,
 )
 def upload_document(
-    class_id: int, file: Annotated[UploadFile, File()], conn: DbConn
+    class_id: int,
+    file: Annotated[UploadFile, File()],
+    conn: DbConn,
+    upload_key: Annotated[str | None, Header(alias="X-Idempotency-Key")] = None,
+) -> dict[str, object]:
+    with ownership.lifecycle_mutation():
+        return _upload_document_impl(class_id, file, conn, upload_key)
+
+
+def _upload_document_impl(
+    class_id: int, file: UploadFile, conn: sqlite3.Connection, upload_key: str | None
 ) -> dict[str, object]:
     get_class(conn, class_id)
     filename = _display_filename(file.filename or "")
     # The type gate runs before a single byte touches disk: an unsupported extension is
     # refused up front, so a rejected type never stages a file or leaves a row to roll back.
     mime = _mime_for(filename)
+    digest = None
+    if upload_key is not None:
+        try:
+            upload_key = str(uuid.UUID(upload_key))
+        except (ValueError, AttributeError):
+            raise LyraError(
+                "This upload identity is invalid. Retry the file from its queue."
+            ) from None
+        try:
+            digest_builder = hashlib.sha256()
+            file.file.seek(0)
+            while chunk := file.file.read(UPLOAD_CHUNK_BYTES):
+                digest_builder.update(chunk)
+            file.file.seek(0)
+            digest = digest_builder.hexdigest()
+        except OSError:
+            raise LyraError(UPLOAD_FAILED_MESSAGE) from None
+        prior = conn.execute(
+            "select class_id, filename, mime, sha256, document_id "
+            "from upload_operations where operation_key = ?",
+            (upload_key,),
+        ).fetchone()
+        if prior is not None:
+            if (prior["class_id"], prior["filename"], prior["mime"], prior["sha256"]) != (
+                class_id,
+                filename,
+                mime,
+                digest,
+            ):
+                raise ConflictError("This upload identity belongs to a different file or class.")
+            if prior["document_id"] is None:
+                raise ConflictError(
+                    "That upload was already removed. Start a new upload to add it again."
+                )
+            existing = _document_row(conn, int(prior["document_id"]))
+            if existing["class_id"] != class_id:
+                raise ConflictError(
+                    "That upload was moved to another class. Start a new upload here."
+                )
+            return existing
 
     # The stored name needs the row id to be unique within a class, so the row is
     # inserted first and pointed at the file once it is written. Nothing is committed
@@ -318,6 +383,13 @@ def upload_document(
         "update documents set stored_path = ?, byte_size = ? where id = ?",
         (str(stored_path), byte_size, document_id),
     )
+    if upload_key is not None:
+        conn.execute(
+            "insert into upload_operations "
+            "(operation_key, class_id, filename, mime, sha256, document_id) "
+            "values (?, ?, ?, ?, ?, ?)",
+            (upload_key, class_id, filename, mime, digest, document_id),
+        )
     conn.commit()
 
     touch_class(conn, class_id)
@@ -334,7 +406,27 @@ def list_documents(class_id: int, conn: DbConn) -> list[dict[str, object]]:
         "order by created_at desc, id desc",
         (class_id,),
     )
-    return [dict(row) for row in rows]
+    return [_with_coverage(conn, dict(row)) for row in rows]
+
+
+@router.get("/classes/{class_id}/documents/uploads/{operation_key}", response_model=DocumentRead)
+def reconcile_upload(class_id: int, operation_key: str, conn: DbConn) -> dict[str, object]:
+    """Resolve a lost upload response without sending the file a second time."""
+    get_class(conn, class_id)
+    try:
+        key = str(uuid.UUID(operation_key))
+    except ValueError:
+        raise NotFoundError("That upload was not found.") from None
+    row = conn.execute(
+        "select document_id from upload_operations where operation_key = ? and class_id = ?",
+        (key, class_id),
+    ).fetchone()
+    if row is None or row["document_id"] is None:
+        raise NotFoundError("That upload was not found.")
+    document = _document_row(conn, int(row["document_id"]))
+    if document["class_id"] != class_id:
+        raise NotFoundError("That upload was not found.")
+    return document
 
 
 @router.get("/documents/{document_id}", response_model=DocumentDetail)
@@ -451,7 +543,10 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
         # worker is reading this row and about to write its state, so the `pending`
         # written below would be overwritten by whatever the in-flight run lands in, and
         # the chunk delete below would race the batches that run is still committing.
-        if document["state"] not in TERMINAL_STATES:
+        if document["state"] not in TERMINAL_STATES or document["refresh_state"] not in (
+            None,
+            "failed",
+        ):
             raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
 
         if document["state"] == "failed":
@@ -462,23 +557,32 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
             recognition.reset_failed_pages(conn, document_id)
         # Clearing the previous run's chunks here as well as in the job keeps the document
         # from serving stale results while it waits in the queue.
-        delete_chunks(conn, document_id)
+        if document["state"] != "ready":
+            delete_chunks(conn, document_id)
         # Same reason for the rendered pages: a stale image would show a page from the
         # file that used to be there. Best-effort by explicit choice, unlike the delete
         # paths: there is no durable intent to keep here, the file itself is unchanged,
         # and a page being read this instant must not fail the re-ingest - so an
         # incomplete discard is logged rather than raised.
-        if not render.discard_pages(document_id):
+        if document["state"] != "ready" and not render.discard_pages(document_id):
             logger.warning(
                 "The page cache for document %s could not be fully cleared before "
                 "re-ingest; leftover entries will be overwritten as pages re-render",
                 document_id,
             )
-        changed = conn.execute(
-            "update documents set state = ?, stage_detail = null, error_message = null, "
-            "pages_done = 0 where id = ? and state = ?",
-            (PENDING, document_id, str(document["state"])),
-        ).rowcount
+        if document["state"] == "ready":
+            changed = conn.execute(
+                "update documents set refresh_state = ?, stage_detail = null, error_message = null "
+                "where id = ? and state = ? "
+                "and (refresh_state is null or refresh_state = 'failed')",
+                (PENDING, document_id, "ready"),
+            ).rowcount
+        else:
+            changed = conn.execute(
+                "update documents set state = ?, stage_detail = null, error_message = null, "
+                "pages_done = 0 where id = ? and state = ?",
+                (PENDING, document_id, str(document["state"])),
+            ).rowcount
         if changed != 1:
             conn.rollback()
             raise ConflictError(CHANGED_UNDERNEATH_MESSAGE.format(filename=document["filename"]))
@@ -597,23 +701,35 @@ def recognize_document(document_id: int, conn: DbConn) -> dict[str, object]:
         document = _document_row(conn, document_id)
         # The worker is reading this row and about to write its state, and the `pending`
         # set below would be overwritten by whatever it lands in.
-        if document["state"] not in TERMINAL_STATES:
+        if document["state"] not in TERMINAL_STATES or document["refresh_state"] not in (
+            None,
+            "failed",
+        ):
             raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
 
         # This is the explicit "attempt them again", so failed pages rejoin the pending
         # set. An in-flight run never re-attempts `failed` pages on its own - that would
         # make every plain re-index re-pay for pages that failed for good.
         recognition.reset_failed_pages(conn, document_id)
-        delete_chunks(conn, document_id)
+        if document["state"] != "ready":
+            delete_chunks(conn, document_id)
         # Deliberately no `render.discard_pages` here, unlike the re-ingest below. The
         # rendered pages are what recognition reads, they were rendered from bytes that
         # have not changed, and throwing them away would make every retry pay to
         # rasterize the document again.
-        changed = conn.execute(
-            "update documents set recognize = 1, state = ?, stage_detail = null, "
-            "error_message = null, pages_done = 0 where id = ? and state = ?",
-            (PENDING, document_id, str(document["state"])),
-        ).rowcount
+        if document["state"] == "ready":
+            changed = conn.execute(
+                "update documents set recognize = 1, refresh_state = ?, stage_detail = null, "
+                "error_message = null where id = ? and state = 'ready' "
+                "and (refresh_state is null or refresh_state = 'failed')",
+                (PENDING, document_id),
+            ).rowcount
+        else:
+            changed = conn.execute(
+                "update documents set recognize = 1, state = ?, stage_detail = null, "
+                "error_message = null, pages_done = 0 where id = ? and state = ?",
+                (PENDING, document_id, str(document["state"])),
+            ).rowcount
         if changed != 1:
             conn.rollback()
             raise ConflictError(CHANGED_UNDERNEATH_MESSAGE.format(filename=document["filename"]))
@@ -655,7 +771,10 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
 
         # A document mid-ingestion is being read by the worker from the path this would
         # move, and the state it lands in would overwrite the `pending` written here.
-        if document["state"] not in TERMINAL_STATES:
+        if document["state"] not in TERMINAL_STATES or document["refresh_state"] not in (
+            None,
+            "failed",
+        ):
             raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
 
         used_by = int(
@@ -739,7 +858,7 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
         # whole transaction - chunk invalidation, evidence, intent - rolls back together.
         moved = conn.execute(
             "update documents set class_id = ?, stored_path = ?, state = ?, "
-            "stage_detail = null, error_message = null, pages_done = 0 "
+            "refresh_state = null, stage_detail = null, error_message = null, pages_done = 0 "
             "where id = ? and class_id = ? and stored_path = ? and state = ?",
             (
                 payload.class_id,
@@ -882,7 +1001,56 @@ def _document_row(conn: sqlite3.Connection, document_id: int) -> dict[str, objec
     ).fetchone()
     if row is None:
         raise NotFoundError("That document does not exist.")
-    return dict(row)
+    return _with_coverage(conn, dict(row))
+
+
+def _with_coverage(conn: sqlite3.Connection, document: dict[str, object]) -> dict[str, object]:
+    """Expose every page's bounded readability outcome without private page text."""
+    pages = []
+    for row in conn.execute(
+        "select p.page_number, p.state, p.skip_reason, p.error_message, "
+        "length(trim(coalesce(p.text, ''))) as text_length, "
+        "i.page_number is not null as indexed "
+        "from document_pages p left join document_index_pages i "
+        "on i.document_id = p.document_id and i.page_number = p.page_number "
+        "where p.document_id = ? order by p.page_number",
+        (document["id"],),
+    ):
+        if row["skip_reason"] == "blank" and row["state"] == recognition.SCANNED:
+            state, reason = "blank", None
+        elif row["state"] == recognition.SCANNED:
+            state, reason = "not_attempted", row["skip_reason"] or "no_text_layer"
+        elif row["state"] == recognition.FAILED:
+            state = "recognition_failed"
+            reason = (
+                "no_text_found"
+                if row["error_message"] == recognition.NO_TEXT_FOUND_MESSAGE
+                else "reading_failed"
+            )
+        elif row["state"] == recognition.RECOGNIZED and not row["text_length"]:
+            # Historical model-empty rows may predate the migration below. They are
+            # uncertain too, even if their old internal state says recognized.
+            state, reason = "recognition_failed", "no_text_found"
+        else:
+            state, reason = "readable", None
+        pages.append(
+            {
+                "page_number": int(row["page_number"]),
+                "state": state,
+                "indexed": bool(row["indexed"]),
+                "reason": reason,
+            }
+        )
+    document["page_coverage"] = pages
+    document["coverage_complete"] = (
+        bool(pages)
+        and all(
+            page["state"] == "blank" or (page["state"] == "readable" and page["indexed"])
+            for page in pages
+        )
+        and document["state"] == "ready"
+    )
+    return document
 
 
 def _mime_for(filename: str) -> str:

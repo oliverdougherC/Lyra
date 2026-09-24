@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
+import pymupdf
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -37,6 +38,179 @@ from backend.storage import secrets
 from backend.storage.database import connect, get_db
 
 
+def test_selected_mixed_worksheet_sends_scanned_problem_image_to_provider(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Instructions alone never stand in for the scanned problem page."""
+    pdf = tmp_path / "mixed.pdf"
+    source = pymupdf.open()
+    first = source.new_page()
+    first.insert_text((72, 72), "Instructions: solve the problems on page two")
+    second = source.new_page()
+    second.draw_rect(pymupdf.Rect(80, 80, 300, 200), color=(0, 0, 0))
+    second.insert_text((95, 115), "Problem 9: resistor 12 ohm")
+    source.save(pdf)
+    source.close()
+    db.execute(
+        "update documents set stored_path = ?, pages_total = 2 where id = 7",
+        (str(pdf),),
+    )
+    db.execute(
+        "insert into document_pages (document_id, page_number, state) values (7, 2, 'scanned')"
+    )
+    db.execute("update settings set vision_supported = 1, allow_web_research = 1 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="I can see page two."))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Solve the worksheet", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    last = messages[-1]
+    assert isinstance(last["content"], list)
+    assert any(part.get("type") == "image_url" for part in last["content"])
+    assert any("page 2" in str(part.get("text")) for part in last["content"])
+    assert "coverage is incomplete" in str(messages[0]["content"])
+    assert "search_web" not in captured["registry"]
+
+
+def test_unreadable_short_worksheet_refuses_before_inference_without_vision(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute("update documents set pages_total = 2 where id = 7")
+    db.execute(
+        "insert into document_pages (document_id, page_number, state) values (7, 2, 'scanned')"
+    )
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Invented answer"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Solve the worksheet", "document_id": 7},
+    )
+    assert response.status_code == 409
+    assert "Recognize" in response.json()["detail"]
+    assert captured == {}
+    assert sessions.list_messages(db, session_id) == []
+
+
+def test_native_matrix_layout_is_sent_as_page_image_when_text_is_insufficient(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "matrix.pdf"
+    source = pymupdf.open()
+    page = source.new_page()
+    page.insert_text((72, 72), "Matrix A")
+    page.insert_text((100, 110), "2     7")
+    page.insert_text((100, 134), "5     11")
+    source.save(pdf)
+    source.close()
+    db.execute("update documents set stored_path = ?, pages_total = 1 where id = 7", (str(pdf),))
+    db.execute("insert into document_pages (document_id, page_number, state) values (7, 1, 'text')")
+    db.execute(
+        "insert into document_figures (document_id, page_number, figure_index, bbox) "
+        "values (7, 1, 0, '[0.1, 0.1, 0.6, 0.4]')"
+    )
+    db.execute("update settings set vision_supported = 1 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Layout preserved."))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain this matrix", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    user_parts = captured["messages"][-1]["content"]
+    assert isinstance(user_parts, list)
+    assert any(part.get("type") == "image_url" for part in user_parts)
+    assert any("page 1" in str(part.get("text")) for part in user_parts)
+
+
+def test_required_matrix_figure_without_vision_refuses_before_provider(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute(
+        "insert into document_figures (document_id, page_number, figure_index, bbox) "
+        "values (7, 1, 0, '[0.1, 0.1, 0.6, 0.4]')"
+    )
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Invented matrix."))
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain this matrix", "document_id": 7},
+    )
+    assert response.status_code == 409
+    assert "vision-capable" in response.json()["detail"]
+    assert captured == {}
+
+
+def test_selected_later_problem_and_followup_reach_provider_from_exact_index(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poor semantic first pass cannot hide an explicitly numbered later problem."""
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "problem_number, doc_type, embedding_model, embedding_dim) "
+        "values (7, ?, 'Problem 9(a): solve 3x = 12', 9, 9, '9', 'generic', 'test', 768)",
+        (class_id,),
+    )
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "problem_number, doc_type, embedding_model, embedding_dim) "
+        "values (7, ?, 'Problem 9(b): check x = 4', 9, 9, '9', 'generic', 'test', 768)",
+        (class_id,),
+    )
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "problem_number, doc_type, embedding_model, embedding_dim) "
+        "values (3, ?, 'Problem 9: unrelated answer is 88', 9, 9, '9', 'generic', 'test', 768)",
+        (class_id,),
+    )
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Check the source."))
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Solve problem 9", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    prompt = str(captured["messages"][0]["content"])
+    assert "3x = 12" in prompt and "x = 4" in prompt
+    assert "unrelated answer" not in prompt
+    assert "signals.pdf" in prompt and "page 9" in prompt
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "What about part b?", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert "Problem 9(b): check x = 4" in str(captured["messages"][0]["content"])
+
+
 def _request_db() -> Iterator[sqlite3.Connection]:
     conn = connect()
     try:
@@ -59,7 +233,23 @@ def empty_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def client(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def client(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    # Scope tests use document 7. It is a real class-owned source so the live
+    # selected-document guard can distinguish it from a moved/deleted selection.
+    db.execute(
+        "insert into documents "
+        "(id, class_id, filename, stored_path, mime, byte_size, state) "
+        "values (7, ?, 'signals.pdf', 'unused/signals.pdf', 'application/pdf', 100, 'ready')",
+        (class_id,),
+    )
+    db.execute(
+        "insert into documents "
+        "(id, class_id, filename, stored_path, mime, byte_size, state) "
+        "values (3, ?, 'legacy.pdf', 'unused/legacy.pdf', 'application/pdf', 100, 'ready')",
+        (class_id,),
+    )
     db.execute(
         "update settings set endpoint_url = 'http://127.0.0.1:8080/v1', tools_supported = 1 "
         "where id = 1"
