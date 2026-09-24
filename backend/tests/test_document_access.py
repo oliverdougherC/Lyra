@@ -91,14 +91,25 @@ def test_selected_document_tools_refuse_other_class_and_other_selected_file(
     )
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(RuntimeError("helper stopped"), id="stopped"),
+        pytest.param(ConnectionError("helper cold"), id="cold"),
+        pytest.param(ValueError("corrupt embedding response"), id="corrupt"),
+    ],
+)
 def test_embedding_outage_returns_cited_lexical_evidence(
-    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
 ) -> None:
     selected = _document(db, class_id, "worksheet.pdf")
     _chunk(db, class_id, selected, 3, "Problem 9: the circuit uses a 12 ohm resistor.", "9")
 
     def unavailable(_: str) -> list[float]:
-        raise RuntimeError("helper stopped")
+        raise failure
 
     monkeypatch.setattr(retrieval, "embed_query", unavailable)
     result = retrieval.retrieve(db, class_id, "circuit resistor", 500, document_id=selected)
