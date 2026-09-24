@@ -4,6 +4,7 @@ The tutor key and Exa key are the sensitive parts: they are accepted, stored, an
 echoed back.
 """
 
+import asyncio
 import socket
 import sqlite3
 from collections.abc import Iterator
@@ -593,7 +594,7 @@ def test_credential_invalidation_commits_before_keychain_io(
     assert response.json()["context_window"] == 16384
     assert response.json()["tools_supported"] is None
     assert response.json()["vision_supported"] is None
-    _, config = routes_settings._probe_snapshot(db)
+    _, config = asyncio.run(routes_settings._probe_snapshot(db))
     assert config.api_key == "replacement"
 
 

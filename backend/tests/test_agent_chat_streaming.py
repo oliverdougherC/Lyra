@@ -66,6 +66,32 @@ def test_stream_persists_reasoning_and_replays_without_synthetic_tokens(
     assert sessions.active_turn(session_id) is None
 
 
+def test_stream_shows_tool_start_and_result_in_the_conversation(client, db, class_id, monkeypatch):  # noqa: F811
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    async def model(*args, registry, **kwargs):
+        result = registry["request_workspace_access"].handler(
+            scope="attach", reason="Read the requested local notes."
+        )
+        assert result.ok
+        return tools.ToolLoopResult(content="Please attach your notes folder.")
+
+    monkeypatch.setattr(routes, "run_tool_loop", model)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read my local notes"},
+        headers={"Accept": "text/event-stream"},
+    )
+    events = frames(response)
+    progress = [event["activity"] for event in events if event["type"] == "activity"]
+    assert [event["state"] for event in progress] == ["started", "succeeded"]
+    assert progress[0]["audit_id"] == progress[1]["audit_id"]
+    assert progress[0]["tool"] == "request_workspace_access"
+    assert events[-1]["result"]["activity"] == [progress[1]]
+    saved = sessions.list_messages(db, session_id)[-1]
+    assert saved["tool_activity"] == [progress[1]]
+
+
 @pytest.mark.parametrize("action", ["retry", "regenerate"])
 def test_stream_retry_and_regenerate(client, db, class_id, monkeypatch, action):  # noqa: F811
     session_id = int(sessions.create_session(db, class_id)["id"])

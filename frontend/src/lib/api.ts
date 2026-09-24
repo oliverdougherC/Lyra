@@ -190,6 +190,7 @@ type RequestOptions = {
   signal?: AbortSignal
   errorFactory?: (status: number, payload: unknown | undefined) => Error
   accept?: string
+  headers?: Record<string, string>
 }
 
 function readDetail(payload: unknown, status: number): string {
@@ -352,7 +353,7 @@ function normalizeLiveDraftSuggestion(payload: unknown): LiveDraftSuggestion | n
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
   const isFormData = options.body instanceof FormData
   const runtime = await getRuntimeConfig()
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { ...options.headers }
   if (options.body !== undefined && !isFormData) {
     headers['content-type'] = 'application/json'
   }
@@ -444,14 +445,20 @@ export const api = {
   listDocuments: (classId: number, signal?: AbortSignal) =>
     requestJson<DocumentRead[]>(`/api/classes/${classId}/documents`, { signal }),
 
-  uploadDocument: (classId: number, file: File) => {
+  uploadDocument: (classId: number, file: File, operationId?: string) => {
     const form = new FormData()
     form.append('file', file)
     return requestJson<DocumentRead>(`/api/classes/${classId}/documents`, {
       method: 'POST',
       body: form,
+      headers: operationId ? { 'X-Idempotency-Key': operationId } : undefined,
     })
   },
+
+  reconcileUpload: (classId: number, operationId: string) =>
+    requestJson<DocumentRead>(
+      `/api/classes/${classId}/documents/uploads/${encodeURIComponent(operationId)}`,
+    ),
 
   getDocument: (documentId: number, signal?: AbortSignal) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}`, { signal }),
@@ -1259,7 +1266,15 @@ const CHAT_FRAME_TYPES = new Set([
 ])
 
 /** The agent route's frames: live deltas, the status narration, and its terminals. */
-const AGENT_FRAME_TYPES = new Set(['token', 'reasoning', 'reset', 'status', 'result', 'error'])
+const AGENT_FRAME_TYPES = new Set([
+  'token',
+  'reasoning',
+  'reset',
+  'status',
+  'activity',
+  'result',
+  'error',
+])
 
 /** A bounded message for a frame that is not a JSON object of a known type. */
 const MALFORMED_FRAME_MESSAGE = 'Lyra could not read part of the reply. Try again.'
@@ -1308,6 +1323,9 @@ function validateAgentFrame(data: string): {
     throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
   }
   if ((event.type === 'token' || event.type === 'reasoning') && typeof event.text !== 'string') {
+    throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
+  }
+  if (event.type === 'activity' && !isAgentChatActivity(event.activity)) {
     throw new SseStreamError(MALFORMED_FRAME_MESSAGE)
   }
   return event as { type: string; status?: number; result?: unknown }
@@ -1361,7 +1379,10 @@ async function streamTurn<StreamEvent extends { type: string }>(
   if (!terminalSeen) throw new ApiError(0, 'The answer stopped early. Try again.')
 }
 
-export type AgentStreamEvent = { type: 'token' | 'reasoning'; text: string } | { type: 'reset' }
+export type AgentStreamEvent =
+  | { type: 'token' | 'reasoning'; text: string }
+  | { type: 'reset' }
+  | { type: 'activity'; activity: AgentChatActivity }
 
 /** Opt-in streaming keeps background actions and older JSON callers compatible. */
 async function requestAgentTurn(

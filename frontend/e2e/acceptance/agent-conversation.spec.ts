@@ -147,6 +147,10 @@ test.describe('One ordinary class conversation (PLA-401)', () => {
     await expect(
       page.getByText('I need to open the project folder before I can explain'),
     ).toBeVisible({ timeout: 30_000 })
+    const turnActivity = page.getByLabel('What Lyra did for this reply')
+    await expect(turnActivity).toBeVisible()
+    await expect(turnActivity).toContainText('request workspace access')
+    await expect(turnActivity).toContainText('Done')
     const accessCard = page.locator('[data-access-request="attach"]')
     await expect(accessCard).toBeVisible()
     await expect(
@@ -174,6 +178,7 @@ test.describe('One ordinary class conversation (PLA-401)', () => {
     await expect(page.getByText('It is two files: main.py is the entry point')).toBeVisible({
       timeout: 30_000,
     })
+    await expect(page.getByLabel('What Lyra did for this reply')).toContainText('list workspace')
     // The interrupted reply is superseded, not joined by a second answer: its waiting note
     // is gone from the transcript, replaced by the real answer in the same thread.
     await expect(page.getByText('approve the request above')).toBeHidden({ timeout: 30_000 })

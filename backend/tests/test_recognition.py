@@ -594,15 +594,10 @@ def test_the_page_count_advances_while_the_run_is_in_flight(
     assert {entry[:2] for entry in seen} == {("parsing", recognition.RECOGNIZING_DETAIL)}
 
 
-def test_a_page_that_transcribes_to_nothing_is_read_but_not_indexed(
+def test_a_model_empty_page_is_uncertain_retryable_and_not_indexed(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A blank page is a page with nothing to find, not a page that failed.
-
-    It stays out of the chunker, because an empty chunk answers nothing and dilutes every
-    search that touches it, and it stays out of the retry set, because reading it again
-    would return the same nothing.
-    """
+    """A vision model returning no text has not proved that the source is blank."""
     _configure_endpoint(db)
     stored = _write_pdf(settings.uploads_dir / "scanned.pdf", ["1", "2"])
     document_id = _seed_document(db, class_id, stored, recognize=True)
@@ -610,11 +605,19 @@ def test_a_page_that_transcribes_to_nothing_is_read_but_not_indexed(
 
     run_ingestion(document_id)
 
-    assert _page_states(db, document_id) == {1: "recognized", 2: "recognized"}
+    assert _page_states(db, document_id) == {1: "failed", 2: "recognized"}
     row = _document(db, document_id)
     assert row["state"] == "ready"
     assert (row["pages_done"], row["pages_skipped"]) == (1, 1)
     assert _chunk_pages(db, document_id) == {2}
+    assert (
+        db.execute(
+            "select error_message from document_pages where document_id = ? and page_number = 1",
+            (document_id,),
+        ).fetchone()[0]
+        == recognition.NO_TEXT_FOUND_MESSAGE
+    )
+    assert recognition.reset_failed_pages(db, document_id) == 1
 
 
 def test_an_uploaded_image_is_a_one_page_scan(

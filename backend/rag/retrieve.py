@@ -22,6 +22,7 @@ answers, produces an empty `RetrievalResult` and the turn is built with no conte
 block. It is not an error and must not be reported as one.
 """
 
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from backend.rag.rerank import RerankStatus, rerank
 from backend.rag.tokens import estimate_tokens
 
 K = 8
+logger = logging.getLogger(__name__)
 
 # How many neighbours the KNN returns. The served width stays `K`; this is how much
 # material the fusion, and the cross-encoder where one is installed, gets to choose from.
@@ -78,6 +80,8 @@ SECTION_REFERENCE = re.compile(
     r"\b(?:section|chapter|part|§)\s*\.?\s*([A-Za-z]?\.?\d+(?:\.\d+)*)\b",
     re.IGNORECASE,
 )
+PAGE_REFERENCE = re.compile(r"\b(?:page|p\.)\s*(\d{1,5})\b", re.IGNORECASE)
+PROBLEM_REFERENCE = re.compile(r"\b(?:problem|question|exercise|#)\s*(\d+[a-z]?)\b", re.IGNORECASE)
 
 # How much of the retrieval budget one resolved section may take. A section reference says
 # where to look, not what is wanted from it, so the KNN keeps at least half the room to
@@ -214,6 +218,7 @@ class RetrievalResult:
     omitted_document_count: int
     omitted_document_ids: frozenset[int] = frozenset()
     rerank_status: RerankStatus = RerankStatus.NOT_REQUESTED
+    lexical_fallback: bool = False
 
 
 def retrieve(
@@ -267,7 +272,20 @@ def retrieve(
         is None
     ):
         return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
-    vector = embed_query(query)
+    try:
+        vector = embed_query(query)
+    except Exception:
+        # The local embedding helper is optional for reading existing indexed text.
+        # Keep this bounded and label it as lexical evidence, never semantic coverage.
+        logger.warning("Embedding query unavailable; using bounded lexical document search")
+        return lexical_fallback(
+            conn,
+            class_id,
+            query,
+            budget_tokens,
+            document_id=document_id,
+            document_ids=document_ids,
+        )
     resolved = _resolve_sections(
         conn, class_id, query, vector, budget_tokens, document_id, document_ids
     )
@@ -319,6 +337,77 @@ def retrieve(
         omitted_document_ids=omitted_document_ids,
         rerank_status=rerank_status,
     )
+
+
+def lexical_fallback(
+    conn: sqlite3.Connection,
+    class_id: int,
+    query: str,
+    budget_tokens: int,
+    *,
+    document_id: int | None = None,
+    document_ids: tuple[int, ...] | None = None,
+) -> RetrievalResult:
+    """Serve exact indexed terms when semantic search cannot run."""
+    ids = _lexical_ranks(conn, class_id, query, LEXICAL_FETCH_K, document_id, document_ids)
+    if not ids:
+        return RetrievalResult([], False, 0, lexical_fallback=True)
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        _CHUNK_SELECT + f"where c.id in ({placeholders}) and c.class_id = ? and {_READY_ONLY}",  # noqa: S608
+        (*ids, class_id),
+    ).fetchall()
+    by_id = {int(row["chunk_id"]): row for row in rows}
+    ranked = [
+        _chunk_from_row(by_id[id], 0.0, float(len(ids) - rank))
+        for rank, id in enumerate(ids)
+        if id in by_id
+    ]
+    kept, dropped = _fit_to_budget(ranked[:K], budget_tokens)
+    omitted = frozenset(chunk.document_id for chunk in dropped)
+    return RetrievalResult(
+        chunks=kept,
+        trimmed=bool(dropped) and len(dropped) * 2 > len(ranked[:K]),
+        omitted_document_count=len(omitted),
+        omitted_document_ids=omitted,
+        lexical_fallback=True,
+    )
+
+
+def exact_reference_chunks(
+    conn: sqlite3.Connection,
+    class_id: int,
+    document_id: int | None,
+    question: str,
+    budget_tokens: int,
+) -> list[RetrievedChunk]:
+    """Resolve an explicit page or problem in the selected document before ranking."""
+    if document_id is None:
+        return []
+    pages = {int(match.group(1)) for match in PAGE_REFERENCE.finditer(question)}
+    problems = {match.group(1) for match in PROBLEM_REFERENCE.finditer(question)}
+    if not pages and not problems:
+        return []
+    clauses: list[str] = []
+    params: list[object] = [class_id, document_id]
+    if pages:
+        clauses.append("c.page_number in (" + ",".join("?" for _ in pages) + ")")
+        params.extend(sorted(pages))
+    if problems:
+        clauses.append("c.problem_number in (" + ",".join("?" for _ in problems) + ")")
+        params.extend(sorted(problems))
+    sql = (
+        _CHUNK_SELECT
+        + f"where c.class_id = ? and c.document_id = ? and {_READY_ONLY} and ("  # noqa: S608
+        + " or ".join(clauses)
+        + ") order by c.page_number, c.id limit 17"
+    )
+    rows = conn.execute(sql, params).fetchall()
+    chunks = [
+        _chunk_from_row(row, 1.0, float(len(rows) - index)) for index, row in enumerate(rows[:16])
+    ]
+    kept, _ = _fit_to_budget(chunks, max(0, budget_tokens))
+    return kept
 
 
 def _resolve_sections(

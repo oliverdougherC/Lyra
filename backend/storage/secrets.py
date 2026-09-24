@@ -22,6 +22,7 @@ import asyncio
 import os
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from contextlib import suppress
 from functools import wraps
 from pathlib import Path
@@ -110,6 +111,25 @@ class CredentialPendingError(ConfigurationError):
 
     def __init__(self) -> None:
         super().__init__("Keychain is still responding. Retry shortly.")
+
+
+async def wait_for_credential_read[T](read: Callable[[], T]) -> T:
+    """Resolve a read-only credential snapshot without blocking the event loop.
+
+    Only pending Keychain reads are retried, under one deadline. The callable must
+    not persist anything or send requests: it may run again while the single
+    Keychain worker finishes. Cancellation and actual access failures propagate.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _PROBE_TIMEOUT_SECONDS
+    while True:
+        try:
+            return read()
+        except CredentialPendingError:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise
+            await asyncio.sleep(min(0.025, remaining))
 
 
 def _remember_pending_read(backend, args, thread, outcome) -> None:

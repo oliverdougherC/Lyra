@@ -98,6 +98,13 @@ failure, while UI generation checks prevent obsolete turns from changing the act
 EOF is not completion: chat and writing require their `done` or `error` event, and agent
 streams require a valid `result` or structured error. Agent JSON replay remains supported.
 
+Agent streams also emit `activity` frames as audited tools start and settle. The chat replaces
+each running item by audit ID with its terminal status, then renders the saved terminal activity
+beside the answer after a reload. The separate activity history retains the full durable audit
+and results. An uploaded course document is retrieved as study context; it does not require an
+attached local workspace. The agent requests workspace access only for work that needs files in
+an attached folder.
+
 The backend prefers explicit provider reasoning fields. Legacy inline reasoning markers are
 recognized only at the start of content, before answer prose begins; tags in subsequent answer
 prose or code remain literal. A recognized explicit reasoning field holding a string, including

@@ -597,14 +597,21 @@ def _store_facts(
     # followed by a re-upload can put a different file behind this id, and attesting the
     # old file's facts against it would contaminate the new document permanently. Facts
     # only land on the row the text actually came from.
+    # Reserve the short write window before checking identity. Otherwise a move could
+    # commit between this SELECT and the first attestation INSERT.
+    conn.execute("begin immediate")
     current = conn.execute(
-        "select created_at from documents where id = ?", (document["id"],)
+        "select created_at, class_id from documents where id = ?", (document["id"],)
     ).fetchone()
-    if current is None or str(current["created_at"]) != str(document["created_at"]):
+    if current is None or (str(current["created_at"]), int(current["class_id"])) != (
+        str(document["created_at"]),
+        int(document["class_id"]),
+    ):
         logger.warning(
-            "Discarding extracted facts for document %s: deleted or replaced mid-run",
+            "Discarding extracted facts for document %s: deleted, moved, or replaced mid-run",
             document["id"],
         )
+        conn.rollback()
         return
 
     class_id = document["class_id"]

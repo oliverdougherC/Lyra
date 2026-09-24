@@ -45,8 +45,7 @@ import { ApiError } from '@/lib/api'
 import { formatCount } from '@/lib/format'
 import { documentStudyTitle } from '@/lib/handoff'
 import {
-  batchSummaryTitle,
-  classifyBatch,
+  clearUploadedReceipts,
   documentsInListOrder,
   isTerminal,
   documentKeys,
@@ -54,7 +53,7 @@ import {
   useDocuments,
   useRecognizeDocument,
   useReingestDocument,
-  useUploadDocument,
+  useUploadQueue,
 } from '@/lib/hooks/use-documents'
 import { profileKeys } from '@/lib/hooks/use-profile'
 import { useCreateQuiz } from '@/lib/hooks/use-study'
@@ -106,26 +105,14 @@ function ClassDocumentsPane({
   const [deleting, setDeleting] = useState<DocumentRead[]>([])
   const [deletingBusy, setDeletingBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
-  const queueRef = useRef<File[]>([])
-  const drainingRef = useRef(false)
   // Hoisted to the pane root: the collapsed strip header's Upload button must be able to
   // open the pickers even when the dropzone (and its inputs) are not rendered.
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
-  const [terminalStateById, setTerminalStateById] = useState(() => new Map<number, DocumentState>())
-  const [uploading, setUploading] = useState<string | null>(null)
   // A dropped folder is walked before a single byte is uploaded, and a term of notes takes
   // long enough that silence reads as nothing having happened.
   const [scanning, setScanning] = useState(false)
   const [rejectedFiles, setRejectedFiles] = useState<string[] | null>(null)
-  const [batch, setBatch] = useState<{
-    total: number
-    uploaded: number
-    failed: number
-    documentIds: number[]
-    currentName: string | null
-  }>({ total: 0, uploaded: 0, failed: 0, documentIds: [], currentName: null })
-  const batchActive = batch.total > 0
 
   // The list polls itself while anything in it is mid-ingestion, so no interval is asked
   // for here. Tying it to the upload batch was the bug: the batch clears a couple of
@@ -134,7 +121,7 @@ function ClassDocumentsPane({
   const router = useRouter()
   const { data, isPending, isError, error, refetch } = useDocuments(classId)
   const createQuiz = useCreateQuiz(classId)
-  const uploadDocument = useUploadDocument(classId)
+  const uploads = useUploadQueue(classId)
   const reingestDocument = useReingestDocument(classId)
   const recognizeDocument = useRecognizeDocument(classId)
   const deleteDocument = useDeleteDocument(classId)
@@ -157,89 +144,54 @@ function ClassDocumentsPane({
     }
   }, [filterKey, filter])
 
-  // Uploads run one at a time so the progress readout names a single file, and so a large
-  // multi-file drop does not open a dozen request bodies at once. The queue lives in a ref
-  // because the drain loop is driven by the drop event, not by a render.
-  const drain = useCallback(async () => {
-    if (drainingRef.current) return
-    drainingRef.current = true
-    try {
-      while (queueRef.current.length > 0) {
-        const next = queueRef.current[0]
-        setUploading(next.name)
-        setBatch((current) => ({ ...current, currentName: next.name }))
-        try {
-          const created = await uploadDocument.mutateAsync(next)
-          setBatch((current) => ({
-            ...current,
-            documentIds: [...current.documentIds, created.id],
-          }))
-        } catch (caught) {
-          setBatch((current) => ({ ...current, failed: current.failed + 1 }))
-          toast.error(
-            caught instanceof ApiError ? caught.message : `Could not upload ${next.name}.`,
-          )
-        }
-        queueRef.current = queueRef.current.slice(1)
-        setBatch((current) => ({ ...current, uploaded: current.uploaded + 1 }))
-      }
-    } finally {
-      drainingRef.current = false
-      setUploading(null)
-      setBatch((current) => ({ ...current, currentName: null }))
-    }
-  }, [uploadDocument])
-
   const onFiles = (files: File[]) => {
     const { accepted, rejected } = partitionFiles(files)
     setRejectedFiles(rejected.length > 0 ? rejected : null)
-    if (accepted.length === 0) return
-    queueRef.current = [...queueRef.current, ...accepted]
-    setBatch((current) => ({ ...current, total: current.total + accepted.length }))
-    void drain()
+    if (accepted.length > 0) uploads.enqueue(accepted)
   }
 
   const documentsById = useMemo(
     () => new Map(data?.map((document) => [document.id, document]) ?? []),
     [data],
   )
-  const batchTerminalStates = batch.documentIds
-    .map((id) => terminalStateById.get(id) ?? documentsById.get(id)?.state)
-    .filter((state): state is DocumentState => state !== undefined && isTerminal(state))
-  const terminalCount = batchTerminalStates.length
-  // Classified by what each terminal state means, through the same helper the rows use, so
-  // an `unsupported` item is counted as needing attention rather than as a success. Upload
-  // requests that never reached the server (`batch.failed`) never produced a document to
-  // classify, so they are added to the attention total here.
-  const outcome = classifyBatch(batchTerminalStates)
-  const successfulDocumentCount = outcome.ready
-  const batchAttentionCount = batch.failed + outcome.needsAttention
-  const batchFinished =
-    batchActive && batch.uploaded >= batch.total && terminalCount >= batch.total - batch.failed
-  // Once every uploaded document has finished ingesting, let the finished summary linger
-  // briefly, then clear the batch so the next drop starts from a clean counter.
-  useEffect(() => {
-    if (!batchFinished) return
-    const timer = window.setTimeout(() => {
-      setTerminalStateById(new Map())
-      setBatch({ total: 0, uploaded: 0, failed: 0, documentIds: [], currentName: null })
-    }, 2000)
-    return () => window.clearTimeout(timer)
-  }, [batchFinished])
-
-  const batchDocument = batch.documentIds
-    .map((id) => documentsById.get(id))
-    .find(
-      (document) =>
-        document !== undefined && !isTerminal(terminalStateById.get(document.id) ?? document.state),
+  const uploading = uploads.attempts.find((attempt) => attempt.state === 'uploading')?.label ?? null
+  const failedUploads = uploads.attempts.filter(
+    (attempt) => attempt.state === 'failed' || attempt.state === 'uncertain',
+  )
+  const pendingUploads = uploads.attempts.filter(
+    (attempt) => attempt.state === 'uploading' || attempt.state === 'queued',
+  )
+  const uploadedCount = uploads.attempts.filter((attempt) => attempt.state === 'uploaded').length
+  const batchDocument = uploads.attempts
+    .filter((attempt) => attempt.documentId !== null)
+    .map((attempt) => documentsById.get(attempt.documentId!))
+    .find((document) => document && !isTerminal(document.state))
+  const uploadedDocuments = uploads.attempts
+    .filter((attempt) => attempt.state === 'uploaded')
+    .map((attempt) =>
+      attempt.documentId === null ? undefined : documentsById.get(attempt.documentId),
     )
-  const batchTitle = uploading
-    ? `Uploading ${batch.currentName ?? ''}`
-    : batchDocument
-      ? `${STATE_ACTIONS[batchDocument.state]} ${batchDocument.filename}`
-      : batchFinished
-        ? batchSummaryTitle(batchAttentionCount)
-        : 'Preparing documents'
+  const batchActive =
+    pendingUploads.length > 0 ||
+    Boolean(batchDocument) ||
+    uploadedDocuments.some((document) => !document)
+  const batchFinished =
+    uploads.attempts.length > 0 && !batchActive && uploadedDocuments.every(Boolean)
+  const batchAttentionCount =
+    failedUploads.length +
+    uploadedDocuments.filter(
+      (document) =>
+        document &&
+        (document.state === 'failed' ||
+          document.state === 'unsupported' ||
+          document.coverage_complete === false),
+    ).length
+
+  useEffect(() => {
+    if (!batchFinished || uploadedCount === 0) return
+    const timer = window.setTimeout(() => clearUploadedReceipts(classId), 2000)
+    return () => window.clearTimeout(timer)
+  }, [batchFinished, classId, uploadedCount])
 
   const onRetry = useCallback(
     (documentId: number) => {
@@ -310,14 +262,6 @@ function ClassDocumentsPane({
 
   const onStatus = useCallback(
     (documentId: number, status: DocumentStatus) => {
-      if (isTerminal(status.state)) {
-        setTerminalStateById((current) => {
-          if (current.get(documentId) === status.state) return current
-          const next = new Map(current)
-          next.set(documentId, status.state)
-          return next
-        })
-      }
       queryClient.setQueryData<DocumentRead[]>(documentKeys.list(classId), (current) => {
         const listed = current?.find((document) => document.id === documentId)
         // Same array back when the poll reported nothing new. Every row now reports each
@@ -388,10 +332,13 @@ function ClassDocumentsPane({
         event.preventDefault()
         // `filesFromDrop` claims the dropped entries synchronously, so it has to be called
         // here rather than after any await: the item list is gone once this handler yields.
-        void filesFromDrop(event.dataTransfer, () => setScanning(true)).then(({ files }) => {
-          setScanning(false)
-          onFiles(files)
-        })
+        void filesFromDrop(event.dataTransfer, () => setScanning(true)).then(
+          ({ files, errors }) => {
+            setScanning(false)
+            uploads.reportScanErrors(errors)
+            onFiles(files)
+          },
+        )
       }}
     >
       {/* The arrival announcement, kept mounted so a screen reader is listening when it
@@ -635,21 +582,67 @@ function ClassDocumentsPane({
       <div className="shrink-0 border-t bg-background px-3 py-4">
         {batchActive ? (
           <BatchLoader
-            title={batchTitle}
+            title={
+              uploading
+                ? `Uploading ${uploading}`
+                : batchDocument
+                  ? `${STATE_ACTIONS[batchDocument.state]} ${batchDocument.filename}`
+                  : 'Preparing documents'
+            }
             detail={batchDocument?.stage_detail}
-            processed={successfulDocumentCount}
-            total={batch.total}
-            complete={batchFinished}
-            needsAttention={batchAttentionCount}
+            processed={uploadedCount}
+            total={uploads.attempts.length}
+            complete={false}
+            needsAttention={failedUploads.length}
             className="mb-3"
           />
+        ) : null}
+        {batchFinished ? (
+          <p className="text-text-secondary mb-2 text-sm">
+            {batchAttentionCount === 0
+              ? 'All documents processed'
+              : `${batchAttentionCount} ${batchAttentionCount === 1 ? 'item needs' : 'items need'} attention`}
+          </p>
+        ) : null}
+        {uploads.scanErrors.length > 0 ? (
+          <div role="alert" className="text-danger-text mb-2 text-xs">
+            <p>Folder scan was incomplete. Check these entries and choose them again:</p>
+            <ul>
+              {uploads.scanErrors.map((error, index) => (
+                <li key={`${index}-${error}`}>{error}</li>
+              ))}
+            </ul>
+            <Button variant="ghost" size="sm" onClick={uploads.clearScanErrors}>
+              Dismiss
+            </Button>
+          </div>
+        ) : null}
+        {failedUploads.length > 0 ? (
+          <div role="alert" className="mb-2 space-y-1 text-xs">
+            {failedUploads.map((attempt) => (
+              <div key={attempt.id} className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 break-words">
+                  {attempt.label}:{' '}
+                  {attempt.state === 'uncertain'
+                    ? 'Upload may have completed; retry will check it.'
+                    : attempt.error}
+                </span>
+                <Button variant="outline" size="sm" onClick={() => uploads.retry(attempt.id)}>
+                  Retry
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => uploads.dismiss(attempt.id)}>
+                  Dismiss
+                </Button>
+              </div>
+            ))}
+          </div>
         ) : null}
         <DocumentDropzone
           rejectedFiles={rejectedFiles}
           uploadingName={uploading}
           scanning={scanning}
-          uploadedCount={batch.uploaded}
-          queueLength={Math.max(batch.total - batch.uploaded, 0)}
+          uploadedCount={uploadedCount}
+          queueLength={pendingUploads.length}
           fileInputRef={fileInputRef}
           folderInputRef={folderInputRef}
         />
@@ -715,6 +708,9 @@ function hasProgressed(listed: DocumentRead, status: DocumentStatus): boolean {
     listed.pages_done !== status.pages_done ||
     listed.pages_total !== status.pages_total ||
     listed.pages_skipped !== status.pages_skipped ||
+    listed.pages_failed !== status.pages_failed ||
+    listed.coverage_complete !== status.coverage_complete ||
+    listed.refresh_state !== status.refresh_state ||
     listed.error_message !== status.error_message
   )
 }

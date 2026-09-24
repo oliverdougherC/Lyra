@@ -1289,6 +1289,7 @@ def fit_retrieval_to_budget(
         trimmed=result.trimmed or len(dropped) * 2 > len(chunks),
         omitted_document_count=omitted_document_count,
         omitted_document_ids=omitted_document_ids,
+        lexical_fallback=result.lexical_fallback,
     )
 
 

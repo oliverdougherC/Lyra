@@ -722,12 +722,20 @@ def test_the_eval_class_chat_surface_offers_only_what_a_fresh_class_grants() -> 
         tool_names = {str(schema.get("function", {}).get("name")) for schema in assembly.tools}
         assert "cas_evaluate" in tool_names
         assert "request_workspace_access" in tool_names
-        # Nothing the class has not granted.
+        # Uploaded coursework is class-authorized independently of the optional
+        # filesystem workspace. A fresh empty class exposes reads that will return
+        # no documents, but it must not expose ungranted web/workspace operations.
+        assert {
+            "list_documents",
+            "search_documents",
+            "read_document_page",
+            "read_document_problem",
+            "read_document_section",
+        } <= tool_names
         assert "search_web" not in tool_names
         assert "fetch_source" not in tool_names
-        assert not any(
-            name.startswith(("read_", "list_", "write_", "run_", "apply_")) for name in tool_names
-        )
+        assert not {"list_workspace", "search_workspace", "read_workspace_file"} & tool_names
+        assert not any(name.startswith(("write_", "run_", "apply_")) for name in tool_names)
         # The registry is the executable face of the schemas the loop will send.
         assert set(assembly.registry) == tool_names
         # The default run carries no retrieved material, even for a case written with

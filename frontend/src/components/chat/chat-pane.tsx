@@ -33,7 +33,7 @@ import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
-import type { ChatEvent, ChatMode, MessageRead, WriterActivity } from '@/types'
+import type { AgentChatActivity, ChatEvent, ChatMode, MessageRead, WriterActivity } from '@/types'
 
 const MODES: { value: ChatMode; label: string; hint: string }[] = [
   {
@@ -236,7 +236,7 @@ export function ChatPane({
   /** The id of the turn whose optimistic rows are on screen (its keys are `opt-N`). */
   const [activeTurnId, setActiveTurnId] = useState<number | null>(null)
   const [streamThinking, setStreamThinking] = useState('')
-  const [streamActivity, setStreamActivity] = useState<WriterActivity[]>([])
+  const [streamActivity, setStreamActivity] = useState<(WriterActivity | AgentChatActivity)[]>([])
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [processingStage, setProcessingStage] = useState<ProcessingStage | null>(null)
   const [turnOutcome, setTurnOutcome] = useState<TurnOutcome | null>(null)
@@ -315,10 +315,6 @@ export function ChatPane({
     sessionId === null && !isDraft && !writer && newestMode !== 'writer'
       ? (newestMode ?? mode)
       : mode
-  const scopedDocument = useMemo(
-    () => documents?.find((document) => document.id === selectedDocumentId) ?? null,
-    [documents, selectedDocumentId],
-  )
 
   const {
     data: persisted,
@@ -954,7 +950,17 @@ export function ChatPane({
           // turns. A new tool round replaces its intermediate prose, retaining reasoning.
           const onAgentEvent = (event: import('@/lib/api').AgentStreamEvent) => {
             if (!owns()) return
-            if (event.type === 'reset') {
+            if (event.type === 'activity') {
+              setStreamActivity((current) => {
+                const index = current.findIndex(
+                  (entry) => 'audit_id' in entry && entry.audit_id === event.activity.audit_id,
+                )
+                if (index < 0) return [...current, event.activity]
+                const updated = [...current]
+                updated[index] = event.activity
+                return updated
+              })
+            } else if (event.type === 'reset') {
               // A fresh answer generation even when the first replacement token lands in
               // the same read: the old answer's reveal schedule dies with the reset, and
               // the replacement must not start life with slots it never earned.
@@ -971,7 +977,7 @@ export function ChatPane({
               onEvent(event)
             }
           }
-          const agentDocumentId = scopedDocument?.id ?? null
+          const agentDocumentId = selectedDocumentId
           try {
             const result =
               kind === 'tutor-retry'
@@ -1061,7 +1067,7 @@ export function ChatPane({
           )
           return
         }
-        const documentId = scopedDocument?.id ?? null
+        const documentId = selectedDocumentId
         await (kind === 'writer-retry' && writer
           ? streamWriterChatRetry(writer.artifactId, turnSessionId, onEvent, controller.signal)
           : writer
@@ -1249,7 +1255,7 @@ export function ChatPane({
       schedulePublication,
       flushPublication,
       invalidatePublication,
-      scopedDocument,
+      selectedDocumentId,
       setOutcome,
       writer,
     ],
@@ -1811,6 +1817,7 @@ export function ChatPane({
               startsTimeGap={startsTimeGap(rendered, index)}
               streaming={isStreamingReply}
               activity={isStreamingReply ? streamActivity : undefined}
+              agent={agent}
               processingStage={isStreamingReply ? processingStage : null}
               turnStartedAt={isStreamingReply ? turnStartedAt : null}
               turnEnded={

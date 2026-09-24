@@ -1114,6 +1114,50 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     expect(await screen.findByText('Here is how the starter works.')).toBeInTheDocument()
   })
 
+  it('keeps an explicit document ID when the document list has not loaded', async () => {
+    vi.mocked(api.listDocuments).mockImplementation(() => new Promise(() => {}))
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    vi.mocked(api.sendAgentChat).mockResolvedValue({
+      message_id: 42,
+      content: 'Answer',
+      stopped: 'complete',
+      detail: 'Complete.',
+      activity: [],
+      source_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+      profile_fact_ids: [],
+    })
+    renderAgentPane()
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Read my worksheet')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.sendAgentChat).mock.calls[0][4]).toBe(5)
+  })
+
+  it('does not broaden a selected file after it disappears from a refreshed list', async () => {
+    vi.mocked(api.listDocuments).mockResolvedValue([])
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    vi.mocked(api.sendAgentChat).mockResolvedValue({
+      message_id: 43,
+      content: 'Selected file unavailable',
+      stopped: 'complete',
+      detail: 'Selected file unavailable',
+      activity: [],
+      source_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+      profile_fact_ids: [],
+    })
+    renderAgentPane()
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Read the selected file')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.sendAgentChat).mock.calls[0][4]).toBe(5)
+  })
+
   it('mints one operation ID per agent send and clears it once the turn settles', async () => {
     vi.mocked(api.sendAgentChat).mockClear()
     const transcript: MessageRead[] = []

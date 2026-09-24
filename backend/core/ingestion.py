@@ -21,6 +21,7 @@ import logging
 import queue
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import sqlite_vec
@@ -30,12 +31,18 @@ from backend.core import ownership, recognition, storage_intents
 from backend.core.consolidation import consolidate_class
 from backend.core.errors import LyraError, UpstreamError
 from backend.core.figures import store_figures
-from backend.core.profiles import ENDPOINT_FAILED, EXTRACTION_FAILED, extract_facts
+from backend.core.profiles import (
+    ENDPOINT_FAILED,
+    EXTRACTION_FAILED,
+    EXTRACTION_MAX_TOKENS,
+    extract_facts,
+)
 from backend.rag.chunk import Chunk, chunk_document, detect_doc_type
 from backend.rag.embed import BATCH_SIZE as EMBED_BATCH_SIZE
 from backend.rag.embed import EMBEDDING_DIM, EMBEDDING_MODEL, embed_documents
 from backend.rag.figures import extract_figures
 from backend.rag.parse import ParsedDocument, parse_document
+from backend.rag.tokens import CHARS_PER_TOKEN
 from backend.storage import private
 from backend.storage.database import connect
 
@@ -76,6 +83,44 @@ insert into chunks (
 _queue: queue.Queue[int] = queue.Queue()
 _worker_lock = threading.Lock()
 _worker_started = False
+PROFILE_QUEUE_LIMIT = 32
+_profile_queue: queue.Queue[tuple[Callable[..., None], tuple[object, ...]]] = queue.Queue(
+    maxsize=PROFILE_QUEUE_LIMIT
+)
+_profile_lock = threading.Lock()
+_profile_started = False
+
+
+class _ProfileExecutor:
+    """One daemon reader for optional work; it never owns ingestion readiness."""
+
+    def submit(self, callback: Callable[..., None], *args: object) -> bool:
+        global _profile_started
+        try:
+            _profile_queue.put_nowait((callback, args))
+        except queue.Full:
+            return False
+        with _profile_lock:
+            if not _profile_started:
+                threading.Thread(
+                    target=_drain_profile_queue, name="lyra-profile", daemon=True
+                ).start()
+                _profile_started = True
+        return True
+
+
+_profile_executor = _ProfileExecutor()
+
+
+def _drain_profile_queue() -> None:
+    while True:
+        callback, args = _profile_queue.get()
+        try:
+            callback(*args)
+        except Exception:
+            logger.exception("Optional profile enrichment failed")
+        finally:
+            _profile_queue.task_done()
 
 
 def enqueue(document_id: int) -> None:
@@ -105,7 +150,7 @@ def _drain_queue() -> None:
     while True:
         document_id = _queue.get()
         try:
-            run_ingestion(document_id)
+            run_ingestion(document_id, defer_profile=True)
         except Exception:
             # The thread is the whole ingestion capability of the process. One bad
             # document must never be able to take it down.
@@ -114,7 +159,7 @@ def _drain_queue() -> None:
             _queue.task_done()
 
 
-def run_ingestion(document_id: int) -> None:
+def run_ingestion(document_id: int, *, defer_profile: bool = False) -> None:
     """Take one document from `pending` to a terminal state.
 
     Takes only an id and opens its own connection, so the worker thread never touches a
@@ -126,7 +171,7 @@ def run_ingestion(document_id: int) -> None:
     """
     conn = connect()
     try:
-        _ingest(conn, document_id)
+        _ingest(conn, document_id, defer_profile=defer_profile)
     except Exception as exc:
         # First, discard whatever the failed stage had half-written but not committed.
         # The connection is reused for the failure write below, and without the rollback
@@ -141,7 +186,7 @@ def run_ingestion(document_id: int) -> None:
         conn.close()
 
 
-def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
+def _ingest(conn: sqlite3.Connection, document_id: int, *, defer_profile: bool = False) -> None:
     """The state machine itself, committing at every transition."""
     document = conn.execute(
         "select id, class_id, filename, stored_path, mime, recognize, created_at "
@@ -178,7 +223,7 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     if not parsed.pages:
         # Nothing readable in the whole file. The file stays on disk either way, so the
         # student can ask for it to be read once whatever stopped it is fixed.
-        _settle_unreadable(conn, document_id, skipped)
+        _settle_unreadable(conn, document_id, skipped, document["mime"])
         return
 
     text = parsed.full_text
@@ -203,17 +248,16 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
         return
     _set_state(conn, document_id, EMBEDDING, doc_type)
     stored = _store_chunks(
-        conn, document_id, int(document["class_id"]), doc_type, chunks, started_at
+        conn,
+        document_id,
+        int(document["class_id"]),
+        doc_type,
+        chunks,
+        started_at,
+        [page.page_number for page in parsed.pages],
     )
     if not stored:
         return
-
-    if _vanished(conn, document_id, started_at):
-        return
-    _set_state(conn, document_id, EXTRACTING)
-    detail = _extract_profile_facts(conn, document_id, text, doc_type)
-    if detail is None:
-        _consolidate_profile(conn, int(document["class_id"]))
 
     if _vanished(conn, document_id, started_at):
         return
@@ -221,7 +265,56 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     # the document was readable. The reason lands in `error_message`, where the row's
     # "pages skipped" popover already looks for it, so a mixed document that quietly read
     # only its text pages says why the rest were not attempted.
-    _mark_ready(conn, document_id, parsed, detail, recognition.skip_message(skipped))
+    _mark_ready(conn, document_id, parsed, None, recognition.skip_message(skipped))
+    # The optional queue only needs the maximum slice that extraction can ever show a
+    # model. A large book must not leave its full transcript queued in memory.
+    profile_text = text[: EXTRACTION_MAX_TOKENS * CHARS_PER_TOKEN]
+    if defer_profile:
+        submitted = _profile_executor.submit(
+            _enrich_profile,
+            document_id,
+            int(document["class_id"]),
+            started_at,
+            profile_text,
+            doc_type,
+        )
+        if submitted is False:
+            conn.execute(
+                "update documents set stage_detail = ? where id = ? and state = ?",
+                ("Optional profile enrichment skipped while busy.", document_id, READY),
+            )
+            conn.commit()
+    else:
+        _enrich_profile(document_id, int(document["class_id"]), started_at, profile_text, doc_type)
+
+
+def _enrich_profile(
+    document_id: int, class_id: int, started_at: str, text: str, doc_type: str
+) -> None:
+    """Optional, serialized model work runs after the document becomes searchable."""
+    conn = connect()
+    try:
+        row = conn.execute(
+            "select class_id, created_at, state from documents where id = ?", (document_id,)
+        ).fetchone()
+        if row is None or (int(row["class_id"]), str(row["created_at"]), str(row["state"])) != (
+            class_id,
+            started_at,
+            READY,
+        ):
+            return
+        detail = _extract_profile_facts(conn, document_id, text, doc_type)
+        if detail is None:
+            _consolidate_profile(conn, class_id)
+        if not recognition.document_replaced(conn, document_id, started_at):
+            conn.execute(
+                "update documents set stage_detail = ? where id = ? and class_id = ? "
+                "and state = ? and refresh_state is null",
+                (detail, document_id, class_id, READY),
+            )
+            conn.commit()
+    finally:
+        conn.close()
 
 
 def _vanished(conn: sqlite3.Connection, document_id: int, started_at: str) -> bool:
@@ -311,22 +404,26 @@ def _store_chunks(
     doc_type: str,
     chunks: list[Chunk],
     started_at: str,
+    indexed_pages: list[int],
 ) -> bool:
-    """Embed and insert every chunk, replacing whatever this document had before.
+    """Build embeddings off-index, then replace the published index atomically.
 
-    Committed per batch so a restart loses at most one batch of embedding time; the
-    stages that follow only run once every batch is in. Which is why a mid-run failure
-    cannot be left as it lies: the committed early batches would serve as this document's
-    index while the row says `failed`. `_mark_failed` deletes them again for exactly that
-    reason, in the same transaction as the state write.
+    A failed helper or interrupted refresh leaves every old citation and vector in
+    place. The private connection's temporary staging table is never visible to
+    retrieval and disappears if the process stops before publication.
 
     Returns:
         False when the run was abandoned because the document was deleted or replaced
         while a batch was embedding - the long call of this stage - so nothing of this
         file's index can land on whatever the id points at now. True otherwise.
     """
-    # A reingest must replace, not accumulate, so the old rows go before the first insert.
-    delete_chunks(conn, document_id)
+    conn.execute("drop table if exists temp.ingest_replacement")
+    conn.execute(
+        "create temp table ingest_replacement (seq integer primary key, "
+        "content text, token_count integer, page_number integer, section_title text, "
+        "section_path text, section_number text, problem_number text, part_index integer, "
+        "embedding blob)"
+    )
 
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]
@@ -337,14 +434,11 @@ def _store_chunks(
                 "Embedding of document %s abandoned: deleted or replaced mid-run", document_id
             )
             return False
-        for chunk, vector in zip(batch, vectors, strict=True):
-            chunk_id = conn.execute(
-                _INSERT_CHUNK_SQL,
+        for offset, (chunk, vector) in enumerate(zip(batch, vectors, strict=True)):
+            conn.execute(
+                "insert into temp.ingest_replacement values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    document_id,
-                    # class_id is denormalized onto the chunk so retrieval can partition
-                    # by class without joining back through documents.
-                    class_id,
+                    start + offset,
                     chunk.content,
                     chunk.token_count,
                     chunk.page_number,
@@ -353,16 +447,45 @@ def _store_chunks(
                     chunk.section_number,
                     chunk.problem_number,
                     chunk.part_index,
-                    doc_type,
-                    EMBEDDING_MODEL,
-                    EMBEDDING_DIM,
+                    sqlite_vec.serialize_float32(vector),
                 ),
-            ).lastrowid
-            conn.execute(
-                "insert into chunk_embeddings (chunk_id, class_id, embedding) values (?, ?, ?)",
-                (chunk_id, class_id, sqlite_vec.serialize_float32(vector)),
             )
         conn.commit()
+    if recognition.document_replaced(conn, document_id, started_at):
+        return False
+    # The old rows remain live until every new vector exists. This one transaction is
+    # the only point at which retrieval can switch generations.
+    delete_chunks(conn, document_id)
+    for row in conn.execute("select * from temp.ingest_replacement order by seq"):
+        chunk_id = conn.execute(
+            _INSERT_CHUNK_SQL,
+            (
+                document_id,
+                # class_id is denormalized onto the chunk so retrieval can partition
+                # by class without joining back through documents.
+                class_id,
+                row["content"],
+                row["token_count"],
+                row["page_number"],
+                row["section_title"],
+                row["section_path"],
+                row["section_number"],
+                row["problem_number"],
+                row["part_index"],
+                doc_type,
+                EMBEDDING_MODEL,
+                EMBEDDING_DIM,
+            ),
+        ).lastrowid
+        conn.execute(
+            "insert into chunk_embeddings (chunk_id, class_id, embedding) values (?, ?, ?)",
+            (chunk_id, class_id, row["embedding"]),
+        )
+    conn.executemany(
+        "insert into document_index_pages (document_id, page_number) values (?, ?)",
+        [(document_id, page_number) for page_number in indexed_pages],
+    )
+    conn.execute("drop table temp.ingest_replacement")
     return True
 
 
@@ -378,6 +501,7 @@ def delete_chunks(conn: sqlite3.Connection, document_id: int) -> None:
         for row in conn.execute("select id from chunks where document_id = ?", (document_id,))
     ]
     conn.executemany("delete from chunk_embeddings where chunk_id = ?", chunk_ids)
+    conn.execute("delete from document_index_pages where document_id = ?", (document_id,))
     conn.execute("delete from chunks where document_id = ?", (document_id,))
 
 
@@ -414,12 +538,40 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
             mid_flight,
         )
     ]
+    queued_refreshes = [
+        int(row[0])
+        for row in conn.execute(
+            "select id from documents where state = ? and refresh_state = ?", (READY, PENDING)
+        )
+    ]
+    interrupted_refreshes = [
+        int(row[0])
+        for row in conn.execute(
+            "select id from documents where state = ? and refresh_state in (?, ?, ?, ?) ",
+            (READY, PARSING, CHUNKING, EMBEDDING, EXTRACTING),
+        )
+    ]
     # A document about to be marked failed must not keep serving whatever chunks its
     # interrupted run had already committed - `_store_chunks` lands them a batch at a
     # time. Deleted in the same transaction as the state write, so there is no moment at
     # which a failed document still answers searches.
+    recovered_extractions = 0
     for document_id in stalled:
-        delete_chunks(conn, document_id)
+        state = conn.execute("select state from documents where id = ?", (document_id,)).fetchone()[
+            0
+        ]
+        chunks = conn.execute(
+            "select count(*) from chunks where document_id = ?", (document_id,)
+        ).fetchone()[0]
+        if state == EXTRACTING and chunks:
+            conn.execute(
+                "update documents set state = ?, stage_detail = null, error_message = null "
+                "where id = ?",
+                (READY, document_id),
+            )
+            recovered_extractions += 1
+        else:
+            delete_chunks(conn, document_id)
     cursor = conn.execute(
         # The placeholders are generated from a module constant, and every value is
         # bound. `stage_detail` reads the pre-update row, so it keeps the lost stage.
@@ -427,13 +579,18 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
         f"error_message = ? where state in ({placeholders})",
         (INTERRUPTED_MESSAGE, *mid_flight),
     )
+    if interrupted_refreshes:
+        conn.executemany(
+            "update documents set refresh_state = ?, error_message = ? where id = ?",
+            [(FAILED, INTERRUPTED_MESSAGE, document_id) for document_id in interrupted_refreshes],
+        )
     conn.commit()
 
     # After the commit, so a queue that starts draining immediately cannot race the write
     # that failed its neighbours.
-    for document_id in queued:
+    for document_id in [*queued, *queued_refreshes]:
         enqueue(document_id)
-    return len(queued), cursor.rowcount
+    return len(queued) + len(queued_refreshes), cursor.rowcount + len(interrupted_refreshes)
 
 
 def _write_extracted_text(document_id: int, text: str, started_at: str) -> bool:
@@ -464,10 +621,19 @@ def _set_state(
     stage_detail: str | None = None,
 ) -> None:
     """Move to the next stage and commit, so a poller sees progress as it happens."""
-    conn.execute(
-        "update documents set state = ?, stage_detail = ? where id = ?",
-        (state, stage_detail, document_id),
-    )
+    refreshing = conn.execute(
+        "select refresh_state from documents where id = ?", (document_id,)
+    ).fetchone()
+    if refreshing is not None and refreshing[0] is not None:
+        conn.execute(
+            "update documents set refresh_state = ?, stage_detail = ? where id = ?",
+            (state, stage_detail, document_id),
+        )
+    else:
+        conn.execute(
+            "update documents set state = ?, stage_detail = ? where id = ?",
+            (state, stage_detail, document_id),
+        )
     conn.commit()
 
 
@@ -480,7 +646,9 @@ def _record_page_counts(conn: sqlite3.Connection, document_id: int, parsed: Pars
     conn.commit()
 
 
-def _settle_unreadable(conn: sqlite3.Connection, document_id: int, skipped: str | None) -> None:
+def _settle_unreadable(
+    conn: sqlite3.Connection, document_id: int, skipped: str | None, mime: str
+) -> None:
     """Land a document that yielded no text at all, saying which kind of nothing it was.
 
     Four different situations end up here and they are not the same fact. A document
@@ -498,6 +666,9 @@ def _settle_unreadable(conn: sqlite3.Connection, document_id: int, skipped: str 
     the previous run's stale "none of the pages could be read" instead of "add an
     endpoint" would hide the one thing the student can act on.
     """
+    if mime in ("text/plain", "text/markdown"):
+        _mark_unsupported(conn, document_id, "This text file is empty.")
+        return
     message = recognition.skip_message(skipped)
     if message is not None:
         _mark_unsupported(conn, document_id, message)
@@ -513,10 +684,20 @@ def _settle_unreadable(conn: sqlite3.Connection, document_id: int, skipped: str 
 
 def _mark_unsupported(conn: sqlite3.Connection, document_id: int, message: str) -> None:
     """Terminal, but not a failure: the file is kept so it can be read later."""
-    conn.execute(
-        "update documents set state = ?, stage_detail = null, error_message = ? where id = ?",
-        (UNSUPPORTED, message, document_id),
-    )
+    refreshing = conn.execute(
+        "select refresh_state from documents where id = ?", (document_id,)
+    ).fetchone()
+    if refreshing is not None and refreshing[0] is not None:
+        conn.execute(
+            "update documents set refresh_state = ?, stage_detail = null, error_message = ? "
+            "where id = ?",
+            (FAILED, message, document_id),
+        )
+    else:
+        conn.execute(
+            "update documents set state = ?, stage_detail = null, error_message = ? where id = ?",
+            (UNSUPPORTED, message, document_id),
+        )
     conn.commit()
 
 
@@ -534,7 +715,8 @@ def _mark_ready(
     Dropped, the student's explicit "read this document" would have silently done nothing.
     """
     conn.execute(
-        "update documents set state = ?, stage_detail = ?, error_message = ?, "
+        "update documents set state = ?, refresh_state = null, stage_detail = ?, "
+        "error_message = ?, "
         "pages_total = ?, pages_done = ?, pages_skipped = ? where id = ?",
         (
             READY,
@@ -557,18 +739,30 @@ def _mark_failed(conn: sqlite3.Connection, document_id: int, stage: str, message
     of its index already committed, and a `failed` row must not go on answering searches
     with half an index.
     """
-    delete_chunks(conn, document_id)
-    conn.execute(
-        "update documents set state = ?, stage_detail = ?, error_message = ? where id = ?",
-        (FAILED, stage, message, document_id),
-    )
+    refreshing = conn.execute(
+        "select refresh_state from documents where id = ?", (document_id,)
+    ).fetchone()
+    if refreshing is not None and refreshing[0] is not None:
+        conn.execute(
+            "update documents set refresh_state = ?, stage_detail = ?, error_message = ? "
+            "where id = ?",
+            (FAILED, stage, message, document_id),
+        )
+    else:
+        delete_chunks(conn, document_id)
+        conn.execute(
+            "update documents set state = ?, stage_detail = ?, error_message = ? where id = ?",
+            (FAILED, stage, message, document_id),
+        )
     conn.commit()
 
 
 def _current_state(conn: sqlite3.Connection, document_id: int) -> str | None:
     """The document's state right now, or None if it has been deleted."""
-    row = conn.execute("select state from documents where id = ?", (document_id,)).fetchone()
-    return None if row is None else str(row["state"])
+    row = conn.execute(
+        "select state, refresh_state from documents where id = ?", (document_id,)
+    ).fetchone()
+    return None if row is None else str(row["refresh_state"] or row["state"])
 
 
 def _failure_message(stage: str, exc: Exception) -> str:

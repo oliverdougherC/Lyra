@@ -13,7 +13,19 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { AgentAttempt, TutorAttempt, WriterActivity, WriterAttempt } from '@/types'
+import type {
+  AgentAttempt,
+  AgentChatActivity,
+  TutorAttempt,
+  WriterActivity,
+  WriterAttempt,
+} from '@/types'
+
+type ToolActivity = WriterActivity | AgentChatActivity
+
+function isAgentActivity(entry: ToolActivity): entry is AgentChatActivity {
+  return 'audit_id' in entry
+}
 
 export type ChatMessage = {
   id: number
@@ -23,8 +35,8 @@ export type ChatMessage = {
   thinking_ms: number
   retrieval_trimmed: boolean
   omitted_document_count: number
-  /** What a writer turn did on the way to this reply. Empty for tutor messages. */
-  tool_activity: WriterActivity[]
+  /** Tool calls made for this reply. Empty for tutor messages. */
+  tool_activity: ToolActivity[]
   created_at: string
   /** The latest agent-turn attempt on this message, when it was an agent turn (PLA-295). */
   agent_attempt?: AgentAttempt | null
@@ -46,7 +58,9 @@ type MessageRowProps = {
    * own in `tool_activity`. Passed separately because the streaming row is a
    * placeholder the pane fills in from frames as they arrive.
    */
-  activity?: WriterActivity[]
+  activity?: ToolActivity[]
+  /** Agent tools stay visible beside the answer after the turn settles. */
+  agent?: boolean
   /** The stage label to show before any text has arrived. */
   processingStage?: ProcessingStage | null
   /** When the turn started, so the wait can report how long it has run. */
@@ -75,6 +89,7 @@ export function MessageRow({
   startsTimeGap,
   streaming,
   activity,
+  agent = false,
   processingStage,
   turnStartedAt,
   turnEnded,
@@ -122,16 +137,17 @@ export function MessageRow({
   const thinkingNow = active && !hasAnswer && message.thinking.trim().length > 0
   const trail = activity ?? message.tool_activity
   const waiting = active && !hasAnswer && !thinkingNow
-  const label = activityLabel(trail, thinkingNow ? null : (processingStage ?? null))
+  const label = activityLabel(
+    trail.filter((entry): entry is WriterActivity => !isAgentActivity(entry)),
+    thinkingNow ? null : (processingStage ?? null),
+  )
 
   return (
     <div className={cn('group flex w-full gap-3', className)}>
       <LyraAvatar thinking={active && !hasAnswer} />
       <div className="min-w-0 flex-1">
-        {/* Live, the thought and the tool trail are visible while they move. Settled, the
-            turn keeps one quiet record of how the answer was made - a single collapsed
-            `Details` disclosure, because a `Thought for 6 seconds` line that outlives the
-            turn is the machine narrating itself, not the student's task. */}
+        {/* Keep agent tool use in the conversation. The detailed audit remains available
+            above it; ordinary writer reasoning still uses a disclosure. */}
         {streaming ? (
           <>
             {message.thinking.trim() ? (
@@ -143,6 +159,13 @@ export function MessageRow({
               />
             ) : null}
             {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
+          </>
+        ) : agent ? (
+          <>
+            {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
+            {message.thinking.trim() ? (
+              <TurnDetails thinking={message.thinking} trail={[]} />
+            ) : null}
           </>
         ) : message.thinking.trim() || trail.length > 0 ? (
           <TurnDetails thinking={message.thinking} trail={trail} />
@@ -186,24 +209,53 @@ export function MessageRow({
  * call stays in the trail - the model was told and moved on, and hiding it would make
  * the record a story.
  */
-function ActivityTrail({ entries }: { entries: WriterActivity[] }) {
+function ActivityTrail({ entries }: { entries: ToolActivity[] }) {
   return (
     <div
       className="border-accent-primary/40 mb-2 flex flex-col gap-1 border-l-2 py-0.5 pl-3"
       aria-label="What Lyra did for this reply"
+      aria-live="polite"
     >
       {entries.map((entry, index) => {
+        const agentEntry = isAgentActivity(entry)
+        const ok = agentEntry ? entry.state === 'succeeded' : entry.ok
+        const running = agentEntry && entry.state === 'started'
         return (
           <div
-            key={`${index}-${entry.tool}`}
-            className="text-text-tertiary flex items-center gap-1.5 text-xs"
+            key={agentEntry ? entry.audit_id : `${index}-${entry.tool}`}
+            className="text-text-tertiary flex items-start gap-1.5 text-xs"
           >
-            {entry.ok ? (
+            {running ? (
+              <span
+                className="bg-accent-primary/70 mt-1 size-2.5 shrink-0 animate-pulse rounded-full"
+                aria-label="Running"
+              />
+            ) : ok ? (
               <Check className="text-accent-primary/70 size-3 shrink-0" />
             ) : (
               <X className="text-destructive/70 size-3 shrink-0" />
             )}
-            <span className="min-w-0 truncate">{entry.label}</span>
+            <span className="min-w-0 break-all">
+              {agentEntry ? (
+                <>
+                  <span className="font-medium">{entry.tool.replaceAll('_', ' ')}</span>
+                  {entry.target_id ? <span className="font-mono"> · {entry.target_id}</span> : null}
+                </>
+              ) : (
+                entry.label
+              )}
+            </span>
+            {agentEntry ? (
+              <span className="shrink-0">
+                {running
+                  ? 'Running'
+                  : ok
+                    ? 'Done'
+                    : entry.state === 'refused'
+                      ? 'Refused'
+                      : 'Failed'}
+              </span>
+            ) : null}
           </div>
         )
       })}
@@ -224,7 +276,7 @@ function ActivityTrail({ entries }: { entries: WriterActivity[] }) {
  *
  * A model that neither thinks nor calls tools never renders this at all.
  */
-function TurnDetails({ thinking, trail }: { thinking: string; trail: WriterActivity[] }) {
+function TurnDetails({ thinking, trail }: { thinking: string; trail: ToolActivity[] }) {
   return (
     <Collapsible className="mb-3">
       <CollapsibleTrigger

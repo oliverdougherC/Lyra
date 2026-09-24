@@ -212,6 +212,22 @@ function SourceContextHarness({
 }
 
 describe('the material scope keeps its full behavior behind a compact pill', () => {
+  it('keeps a cold or missing selected file explicit instead of claiming all material', async () => {
+    const onSelect = vi.fn()
+    const view = render(<SourceContext documents={undefined} selectedId={9} onSelect={onSelect} />)
+    expect(
+      screen.getByRole('button', { name: /Lyra reads only Loading selected file/ }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('All material')).not.toBeInTheDocument()
+
+    view.rerender(<SourceContext documents={[]} selectedId={9} onSelect={onSelect} />)
+    await userEvent.click(
+      screen.getByRole('button', { name: /Lyra reads only Selected file unavailable/ }),
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('no longer in this class')
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
   it('opens the picker, scopes to one document, and clears back to all material', async () => {
     const user = userEvent.setup()
     const onPick = vi.fn()

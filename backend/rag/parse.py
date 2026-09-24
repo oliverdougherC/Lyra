@@ -83,7 +83,8 @@ UNUSABLE_TEXT_FLAGS = frozenset({CHARACTER_SOUP, REPETITION})
 # picture-wearing-a-scrap-of-text rule.
 SPARSE_TEXT = "sparse"
 PHOTOGRAPHED = "photographed"
-PAGE_SKIP_REASONS = frozenset({SPARSE_TEXT, PHOTOGRAPHED, *UNUSABLE_TEXT_FLAGS})
+BLANK = "blank"
+PAGE_SKIP_REASONS = frozenset({SPARSE_TEXT, PHOTOGRAPHED, BLANK, *UNUSABLE_TEXT_FLAGS})
 
 # The character-soup gate only judges a page that has enough alphabetic, word-shaped text to
 # be making a claim to be prose at all. Below these floors a page is either sparse (handled
@@ -191,6 +192,7 @@ class ParsedDocument:
     pages_total: int
     pages_skipped: int
     outline: list[OutlineEntry] = field(default_factory=list)
+    page_reasons: dict[int, str] = field(default_factory=dict)
 
     @property
     def full_text(self) -> str:
@@ -220,7 +222,7 @@ def parse_document(path: Path, mime: str) -> ParsedDocument:
     else:
         raise LyraError(UNSUPPORTED_MESSAGE)
 
-    return _drop_scanned_pages(pages, outline)
+    return _drop_scanned_pages(pages, outline, text_file=mime in TEXT_MIMES)
 
 
 def is_scanned_page(text: str) -> bool:
@@ -251,6 +253,10 @@ def _is_character_soup(text: str) -> bool:
     the word-shaped tokens, the fraction that read as plausible words separates prose (near
     1.0) from OCR soup (near 0.0); a page below the floor is soup.
     """
+    # The vowel test is an English-specific signal. Applying it to Chinese, Arabic or
+    # other scripts would turn valid notes into a purportedly scanned page.
+    if any(character.isalpha() and not character.isascii() for character in text):
+        return False
     total_alpha = 0
     word_tokens = 0
     plausible = 0
@@ -349,7 +355,9 @@ def _largest_image_share(page: "pymupdf.Page") -> float:
     return share
 
 
-def _read_pages(path: Path, mime: str) -> tuple[list[tuple[int, str, bool]], list[OutlineEntry]]:
+def _read_pages(
+    path: Path, mime: str
+) -> tuple[list[tuple[int, str, bool, bool]], list[OutlineEntry]]:
     """Every page as (1-based number, text, photographed), plus the document's outline.
 
     Serves images as well as PDFs, because PyMuPDF opens a PNG or a JPG as a one-page
@@ -361,10 +369,16 @@ def _read_pages(path: Path, mime: str) -> tuple[list[tuple[int, str, bool]], lis
     """
     try:
         with pymupdf.open(path) as document:
-            pages: list[tuple[int, str, bool]] = []
+            pages: list[tuple[int, str, bool, bool]] = []
             for number, page in enumerate(document, start=1):
                 text = page.get_text()
-                pages.append((number, text, _is_photographed_page(page, text)))
+                blank = (
+                    mime == PDF_MIME
+                    and not text.strip()
+                    and not page.get_image_info()
+                    and not page.get_drawings()
+                )
+                pages.append((number, text, _is_photographed_page(page, text), blank))
             return pages, _read_outline(document)
     except Exception as exc:
         # PyMuPDF raises several unrelated types here (FileDataError, FileNotFoundError,
@@ -421,15 +435,23 @@ def page_skip_reason(text: str, photographed: bool) -> str | None:
     never the page's text, so it is safe to log or surface for diagnostics. A dropped page
     joins the recognition flow exactly as a scanned page does.
     """
-    if is_scanned_page(text):
-        return SPARSE_TEXT
     if photographed:
         return PHOTOGRAPHED
+    if is_scanned_page(text):
+        # A short note, heading, or equation is real source material. A lone page
+        # number is not enough evidence that an image-based page was extracted.
+        sparse = "".join(text.split())
+        if sum(c.isalpha() for c in sparse) >= 2 or any(c in "=+−*/∫∑<>" for c in sparse):
+            return None
+        return SPARSE_TEXT
     return classify_text_layer(text)
 
 
 def _drop_scanned_pages(
-    pages: list[tuple[int, str, bool]], outline: list[OutlineEntry]
+    pages: list[tuple[int, str, bool] | tuple[int, str, bool, bool]],
+    outline: list[OutlineEntry],
+    *,
+    text_file: bool = False,
 ) -> ParsedDocument:
     """Keep the pages that carry usable text, and count the ones that do not.
 
@@ -443,8 +465,14 @@ def _drop_scanned_pages(
     """
     kept: list[ParsedPage] = []
     dropped: list[tuple[int, str]] = []
-    for number, text, photographed in pages:
-        reason = page_skip_reason(text, photographed)
+    for item in pages:
+        number, text, photographed = item[:3]
+        blank = bool(item[3]) if len(item) == 4 else False
+        reason = (
+            BLANK
+            if blank or (text_file and not text.strip())
+            else (None if text_file else page_skip_reason(text, photographed))
+        )
         if reason is None:
             kept.append(ParsedPage(page_number=number, text=text))
         else:
@@ -461,4 +489,5 @@ def _drop_scanned_pages(
         pages_total=len(pages),
         pages_skipped=len(dropped),
         outline=outline,
+        page_reasons=dict(dropped),
     )
