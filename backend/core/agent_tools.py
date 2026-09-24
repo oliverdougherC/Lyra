@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import uuid
@@ -42,6 +43,8 @@ from backend.llm import tool_profiles
 from backend.llm.tools import REGISTRY as COMPUTE_REGISTRY
 from backend.llm.tools import ToolDefinition, ToolStopGate
 from backend.tools.result import ToolResult, failure, success
+
+logger = logging.getLogger(__name__)
 
 type AgentProfile = Literal["research", "code", "command", "agent"]
 
@@ -135,6 +138,7 @@ class AgentRunActivity:
     """
 
     events: list[AgentActivity] = field(default_factory=list)
+    on_event: Callable[[AgentActivity], None] | None = field(default=None, repr=False)
     attempt_id: int | None = None
     fetched_sources: dict[str, FetchedSource] = field(default_factory=dict, repr=False)
     source_ids: list[int] = field(default_factory=list)
@@ -157,17 +161,27 @@ class AgentRunActivity:
         target_kind: str | None = None,
         target_id: str | None = None,
     ) -> None:
-        self.events.append(
-            AgentActivity(
-                audit_id=audit_id,
-                tool=tool,
-                capability=capability,
-                effect=effect,
-                state=state,
-                target_kind=target_kind,
-                target_id=target_id,
-            )
+        event = AgentActivity(
+            audit_id=audit_id,
+            tool=tool,
+            capability=capability,
+            effect=effect,
+            state=state,
+            target_kind=target_kind,
+            target_id=target_id,
         )
+        self.events.append(event)
+        self.publish(event)
+
+    def publish(self, event: AgentActivity) -> None:
+        """Show progress without adding an unfinished event to the durable reply."""
+        if self.on_event is not None:
+            try:
+                self.on_event(event)
+            except Exception:
+                # The browser may disconnect after dispatch. Its progress feed must not
+                # change the tool's audited outcome or interrupt an authorized action.
+                logger.exception("Could not publish agent tool progress")
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,6 +412,16 @@ def _audited_handler(
             )
         except Exception:
             return failure("Tool audit is unavailable; no action was taken.")
+
+        activity.publish(
+            AgentActivity(
+                audit_id=started.id,
+                tool=name,
+                capability=capability,
+                effect=effect,
+                state=tool_audit.STARTED,
+            )
+        )
 
         try:
             outcome = action(authorization, **arguments)

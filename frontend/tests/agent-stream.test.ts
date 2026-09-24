@@ -29,6 +29,37 @@ beforeEach(() => {
   window.__LYRA_BOOTSTRAP__ = { apiBase: 'http://127.0.0.1:8000' }
 })
 describe('agent response streaming', () => {
+  it('delivers validated tool progress before the answer', async () => {
+    const stream = start()
+    const events: AgentStreamEvent[] = []
+    const pending = api.sendAgentChat(
+      1,
+      7,
+      'Question',
+      undefined,
+      null,
+      'guide',
+      'operation',
+      undefined,
+      (event) => events.push(event),
+    )
+    const activity = {
+      audit_id: 'call-1',
+      tool: 'cas_evaluate',
+      capability: 'compute',
+      effect: 'pure',
+      state: 'started',
+      target_kind: null,
+      target_id: null,
+    }
+    stream.push(frame({ type: 'activity', activity }))
+    await vi.waitFor(() => expect(events).toHaveLength(1))
+    expect(events[0]).toEqual({ type: 'activity', activity })
+    stream.push(frame({ type: 'result', result }))
+    stream.close()
+    await pending
+  })
+
   it('delivers split reasoning and answer frames before the final result', async () => {
     const stream = start()
     const events: AgentStreamEvent[] = []

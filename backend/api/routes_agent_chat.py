@@ -110,6 +110,11 @@ _SYSTEM_PROMPTS: dict[agent_tools.AgentProfile, str] = {
         "with the matching scope and a short student-facing reason, say plainly what still "
         "needs approval, and continue with what you can. Ask for each scope at most once "
         "per turn. "
+        "Uploaded course material and an attached local workspace are different sources. "
+        "Do not mention unavailable workspace access for a question you can answer from the "
+        "conversation or retrieved course material. Never imply that workspace access is "
+        "needed to read uploaded course material. Mention a missing capability only when "
+        "the student's actual request needs it, and identify the specific action blocked. "
         "Answer concisely and in plain language, for a student studying, not for a "
         "technician reading a log."
     ),
@@ -149,8 +154,10 @@ _TOOLLESS_AGENT_NOTE = (
     " The current endpoint cannot run tool calls, so Lyra's agent work - public-web "
     "research, reading the attached workspace, preparing file changes, and proposing "
     "verification commands - is not available in this conversation. If the task needs "
-    "any of it, say that plainly, and answer from the conversation and the course "
-    "material instead."
+    "any of it, say that plainly and identify the specific blocked action. For an ordinary "
+    "study question, answer from the conversation and course material without an unrelated "
+    "capability disclaimer. Uploaded course material is available independently of "
+    "workspace reading."
 )
 # Remembered on the settings row when an unknown endpoint refuses a turn's first tools
 # request (PLA-313 capability contract): the next turn takes the tool-less path at once.
@@ -347,8 +354,8 @@ def _agent_layer_prompt(registry: dict[str, object]) -> str:
     for tool, label in _AGENT_AVAILABILITY:
         if tool not in registry:
             prompt += (
-                f" {label} is not available in this conversation right now. Say that "
-                "plainly if the task needs it."
+                f" {label} is not available in this conversation right now. Mention it "
+                "only if the student's request actually needs that capability."
             )
     return prompt
 
@@ -904,18 +911,19 @@ def _failure_status(stopped: str) -> int:
 
 def _activity_events_payload(activity: agent_tools.AgentRunActivity) -> list[dict[str, object]]:
     """The audit events one run produced, in the compact shape the API and UI project."""
-    return [
-        {
-            "audit_id": event.audit_id,
-            "tool": event.tool,
-            "capability": event.capability,
-            "effect": event.effect,
-            "state": event.state,
-            "target_kind": event.target_kind,
-            "target_id": event.target_id,
-        }
-        for event in activity.events
-    ]
+    return [_activity_event_payload(event) for event in activity.events]
+
+
+def _activity_event_payload(event: agent_tools.AgentActivity) -> dict[str, object]:
+    return {
+        "audit_id": event.audit_id,
+        "tool": event.tool,
+        "capability": event.capability,
+        "effect": event.effect,
+        "state": event.state,
+        "target_kind": event.target_kind,
+        "target_id": event.target_id,
+    }
 
 
 def _replay_completed_attempt(
@@ -1253,6 +1261,7 @@ async def _run_agent_turn(
     gate: ToolStopGate,
     on_delta: Callable[[llm_client.StreamDelta], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    on_activity: Callable[[agent_tools.AgentActivity], None] | None = None,
 ) -> AgentChatResult | JSONResponse:
     """Plan, persist, and run one agent turn (a fresh send, or a retry when payload is None).
 
@@ -1479,6 +1488,7 @@ async def _run_agent_turn(
     # the preflight having to know the attempt id before any mutation.
     activity = plan.activity
     activity.attempt_id = attempt_id
+    activity.on_event = on_activity
 
     if on_status is not None:
         on_status("composing_answer")
@@ -1864,10 +1874,16 @@ def _stream_agent_turn(
 
     async def events():
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
         def receive(delta: llm_client.StreamDelta) -> None:
             kind = "token" if delta.channel == "answer" else delta.channel
             queue.put_nowait({"type": kind, "text": delta.text})
+
+        def receive_activity(event: agent_tools.AgentActivity) -> None:
+            loop.call_soon_threadsafe(
+                queue.put_nowait, {"type": "activity", "activity": _activity_event_payload(event)}
+            )
 
         turn_task = asyncio.create_task(
             _run_agent_turn(
@@ -1881,6 +1897,7 @@ def _stream_agent_turn(
                 gate=gate,
                 on_delta=receive,
                 on_status=lambda stage: queue.put_nowait({"type": "status", "stage": stage}),
+                on_activity=receive_activity,
             )
         )
         _register_inflight(session_id, turn_token, turn_task, gate)

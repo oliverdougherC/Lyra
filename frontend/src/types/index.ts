@@ -152,8 +152,8 @@ export interface MessageRead {
   thinking_ms: number
   retrieval_trimmed: boolean
   omitted_document_count: number
-  /** What a writer turn did on the way to this reply. Empty for tutor messages. */
-  tool_activity: WriterActivity[]
+  /** Tool calls made for this reply. Empty for tutor messages. */
+  tool_activity: (WriterActivity | AgentChatActivity)[]
   created_at: string
   /** The latest agent-turn attempt on this message, when it was an agent turn. */
   agent_attempt?: AgentAttempt | null

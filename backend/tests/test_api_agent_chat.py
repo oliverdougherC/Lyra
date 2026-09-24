@@ -1685,6 +1685,8 @@ def test_the_agent_turn_builds_on_the_full_tutor_system_prompt(
     prompt = str(captured["messages"][0]["content"])
     assert "prefers visual proofs" in prompt
     assert "audits changes before merging" in prompt
+    assert "Do not mention unavailable workspace access" in prompt
+    assert "Never imply that workspace access is needed to read uploaded course material" in prompt
     # The unconfirmed, low-confidence proposal is not active material.
     assert "unconfirmed scheduling detail" not in prompt
 
