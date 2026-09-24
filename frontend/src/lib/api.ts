@@ -456,7 +456,9 @@ export const api = {
   },
 
   reconcileUpload: (classId: number, operationId: string) =>
-    requestJson<DocumentRead>(`/api/classes/${classId}/documents/uploads/${encodeURIComponent(operationId)}`),
+    requestJson<DocumentRead>(
+      `/api/classes/${classId}/documents/uploads/${encodeURIComponent(operationId)}`,
+    ),
 
   getDocument: (documentId: number, signal?: AbortSignal) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}`, { signal }),

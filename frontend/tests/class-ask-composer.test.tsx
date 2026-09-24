@@ -9,7 +9,12 @@ const ideas = ['Explain convolution', 'Walk me through Fourier series']
 let keySeq = 0
 function setup(onSend = vi.fn(), draftKey = `lyra:class:1:ask-question#${keySeq++}`) {
   const view = render(
-    <ClassAskComposer className="Signals" draftKey={draftKey} suggestions={ideas} onSend={onSend} />,
+    <ClassAskComposer
+      className="Signals"
+      draftKey={draftKey}
+      suggestions={ideas}
+      onSend={onSend}
+    />,
   )
   return {
     box: screen.getByRole('textbox', { name: 'Ask about Signals' }),
