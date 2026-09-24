@@ -258,9 +258,7 @@ export function DocumentDropzone({
           </button>
         )}
         {!expanded ? (
-          <p className="text-text-tertiary text-xs">
-            {ACCEPTED_LABEL}. Export Word or slides to PDF first.
-          </p>
+          <p className="text-text-tertiary text-xs">PDF, TXT, MD, PNG, JPG · Word/slides → PDF</p>
         ) : null}
 
         {scanning ? (
