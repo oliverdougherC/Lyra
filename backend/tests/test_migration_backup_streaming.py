@@ -145,24 +145,37 @@ def test_replaced_source_fails_verification_and_cleans_up(
     # be caught by comparing the saved copy against the pinned digest.
     original = settings.uploads_dir / "swapped.pdf"
     replacement = settings.uploads_dir / "swap-src.bin"
-    original.write_bytes(os.urandom(4096))
     replacement.write_bytes(os.urandom(4096))
+    original.write_bytes(os.urandom(4096))
+    # Force the decoy to be visited first. Filesystems do not promise a directory
+    # order; a global open count can hit this file's copy instead of the original's.
+    real_walk = os.walk
+
+    def decoy_first(top: Path, *args: object, **kwargs: object):
+        for parent, directories, names in real_walk(top, *args, **kwargs):
+            if Path(parent) == settings.uploads_dir:
+                names = sorted(names, key=lambda name: name == original.name)
+            yield parent, directories, names
+
+    monkeypatch.setattr(database.os, "walk", decoy_first)
     real_open = private.open_owned_bytes
     opens = {"count": 0}
 
     @contextlib.contextmanager
     def swapping(path: Path, *, root: Path, max_bytes: int):
-        opens["count"] += 1
-        if opens["count"] == 2 and path == original:
-            with real_open(replacement, root=root, max_bytes=max_bytes) as reader:
-                yield reader
-            return
+        if path == original:
+            opens["count"] += 1
+            if opens["count"] == 2:
+                with real_open(replacement, root=root, max_bytes=max_bytes) as reader:
+                    yield reader
+                return
         with real_open(path, root=root, max_bytes=max_bytes) as reader:
             yield reader
 
     monkeypatch.setattr(private, "open_owned_bytes", swapping)
     with pytest.raises(RuntimeError, match="Backup file verification failed"):
         database._backup_before_migration(db, database.latest_schema_version())
+    assert opens["count"] == 2
     _assert_backups_removed()
 
 
