@@ -1,8 +1,9 @@
 'use client'
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useSyncExternalStore } from 'react'
 
-import { api } from '@/lib/api'
+import { ApiError, api } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
 import { parseTimestamp } from '@/lib/format'
 import type { DocumentRead, DocumentState } from '@/types'
@@ -107,7 +108,12 @@ export function documentsPollInterval(
   documents: DocumentRead[] | undefined,
   override: number | false | undefined,
 ): number | false {
-  const inFlight = documents?.some((document) => !isTerminal(document.state)) ?? false
+  const inFlight =
+    documents?.some(
+      (document) =>
+        !isTerminal(document.state) ||
+        (document.refresh_state != null && document.refresh_state !== 'failed'),
+    ) ?? false
   if (!inFlight) return override ?? false
   return Math.min(override || Number.POSITIVE_INFINITY, IN_FLIGHT_POLL_MS)
 }
@@ -142,7 +148,12 @@ export function useDocumentStatus(documentId: number, enabled = true) {
     enabled: enabled && Number.isFinite(documentId),
     refetchInterval: (query) => {
       const state = query.state.data?.state
-      if (state && isTerminal(state)) return false
+      if (
+        state &&
+        isTerminal(state) &&
+        (!query.state.data?.refresh_state || query.state.data.refresh_state === 'failed')
+      )
+        return false
       const polls = query.state.dataUpdateCount
       return Math.min(500 + polls * 250, 2000)
     },
@@ -154,12 +165,197 @@ export function useDocumentStatus(documentId: number, enabled = true) {
 export function useUploadDocument(classId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (file: File) => api.uploadDocument(classId, file),
+    mutationFn: (input: File | { file: File; operationId: string }) =>
+      input instanceof File
+        ? api.uploadDocument(classId, input, crypto.randomUUID())
+        : api.uploadDocument(classId, input.file, input.operationId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: documentKeys.list(classId) })
       queryClient.invalidateQueries({ queryKey: classKeys.all })
     },
   })
+}
+
+export type UploadAttempt = {
+  id: string
+  file: File
+  label: string
+  state: 'queued' | 'uploading' | 'uploaded' | 'failed' | 'uncertain'
+  documentId: number | null
+  error: string | null
+  checkFirst: boolean
+}
+
+type UploadQueue = {
+  attempts: UploadAttempt[]
+  scanErrors: string[]
+  listeners: Set<() => void>
+  draining: boolean
+}
+
+const uploadQueues = new Map<number, UploadQueue>()
+
+/** Clears settled upload receipts, for a deliberate reset or isolated test setup. */
+export function clearUploadHistory(classId: number) {
+  const queue = uploadQueues.get(classId)
+  if (!queue || queue.draining) return
+  queue.attempts = []
+  queue.scanErrors = []
+  queue.listeners.forEach((listener) => listener())
+}
+
+export function clearUploadedReceipts(classId: number) {
+  const queue = uploadQueues.get(classId)
+  if (!queue) return
+  queue.attempts = queue.attempts.filter((attempt) => attempt.state !== 'uploaded')
+  queue.listeners.forEach((listener) => listener())
+}
+
+function uploadQueue(classId: number): UploadQueue {
+  let queue = uploadQueues.get(classId)
+  if (!queue) {
+    queue = { attempts: [], scanErrors: [], listeners: new Set(), draining: false }
+    uploadQueues.set(classId, queue)
+  }
+  return queue
+}
+
+function updateUpload(queue: UploadQueue, id: string, change: Partial<UploadAttempt>) {
+  queue.attempts = queue.attempts.map((attempt) =>
+    attempt.id === id ? { ...attempt, ...change } : attempt,
+  )
+  queue.listeners.forEach((listener) => listener())
+}
+
+async function drainUploads(classId: number, queryClient: QueryClient) {
+  const queue = uploadQueue(classId)
+  if (queue.draining) return
+  queue.draining = true
+  try {
+    for (;;) {
+      const next = queue.attempts.find((attempt) => attempt.state === 'queued')
+      if (!next) break
+      updateUpload(queue, next.id, { state: 'uploading', error: null })
+      let created: DocumentRead | undefined
+      let failure: unknown
+      let uncertain = false
+      const lookup = async () => {
+        try {
+          return await api.reconcileUpload(classId, next.id)
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) return null
+          throw error
+        }
+      }
+      if (next.checkFirst) {
+        try {
+          created = (await lookup()) ?? undefined
+        } catch (error) {
+          failure = error
+          uncertain = true
+        }
+      }
+      if (!created && !uncertain) {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            created = await api.uploadDocument(classId, next.file, next.id)
+            break
+          } catch (error) {
+            failure = error
+            if (!(error instanceof ApiError && error.status === 0)) break
+            try {
+              // Read-only reconciliation prevents retransmitting a committed file body.
+              created = (await lookup()) ?? undefined
+              if (created) break
+            } catch (lookupError) {
+              failure = lookupError
+              uncertain = true
+              break
+            }
+          }
+        }
+      }
+      if (created) {
+        updateUpload(queue, next.id, { state: 'uploaded', documentId: created.id })
+        void queryClient.invalidateQueries({ queryKey: documentKeys.list(classId) })
+        void queryClient.invalidateQueries({ queryKey: classKeys.all })
+      } else {
+        updateUpload(queue, next.id, {
+          state: uncertain ? 'uncertain' : 'failed',
+          error: failure instanceof Error ? failure.message : 'Could not upload this file.',
+        })
+      }
+    }
+  } finally {
+    queue.draining = false
+  }
+}
+
+/** Uploads live beyond a pane mount; a class switch cannot discard their result or retry key. */
+export function useUploadQueue(classId: number) {
+  const queryClient = useQueryClient()
+  const queue = uploadQueue(classId)
+  const attempts = useSyncExternalStore(
+    (listener) => {
+      queue.listeners.add(listener)
+      return () => queue.listeners.delete(listener)
+    },
+    () => queue.attempts,
+  )
+  const scanErrors = useSyncExternalStore(
+    (listener) => {
+      queue.listeners.add(listener)
+      return () => queue.listeners.delete(listener)
+    },
+    () => queue.scanErrors,
+  )
+  return {
+    attempts,
+    scanErrors,
+    reportScanErrors(errors: string[]) {
+      if (errors.length === 0) return
+      queue.scanErrors = [...queue.scanErrors, ...errors]
+      queue.listeners.forEach((listener) => listener())
+    },
+    clearScanErrors() {
+      queue.scanErrors = []
+      queue.listeners.forEach((listener) => listener())
+    },
+    enqueue(files: File[]) {
+      const existing = new Map<string, number>()
+      for (const attempt of queue.attempts) {
+        existing.set(attempt.file.name, (existing.get(attempt.file.name) ?? 0) + 1)
+      }
+      queue.attempts = [
+        ...queue.attempts.filter((attempt) => attempt.state !== 'uploaded'),
+        ...files.map((file) => {
+          const ordinal = (existing.get(file.name) ?? 0) + 1
+          existing.set(file.name, ordinal)
+          return {
+            id: crypto.randomUUID(),
+            file,
+            label: ordinal === 1 ? file.name : `${file.name} (${ordinal})`,
+            state: 'queued' as const,
+            documentId: null,
+            error: null,
+            checkFirst: false,
+          }
+        }),
+      ]
+      queue.listeners.forEach((listener) => listener())
+      void drainUploads(classId, queryClient)
+    },
+    retry(id: string) {
+      const wasUncertain =
+        queue.attempts.find((attempt) => attempt.id === id)?.state === 'uncertain'
+      updateUpload(queue, id, { state: 'queued', error: null, checkFirst: wasUncertain })
+      void drainUploads(classId, queryClient)
+    },
+    dismiss(id: string) {
+      queue.attempts = queue.attempts.filter((attempt) => attempt.id !== id)
+      queue.listeners.forEach((listener) => listener())
+    },
+  }
 }
 
 export function useReingestDocument(classId: number) {

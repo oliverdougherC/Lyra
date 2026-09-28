@@ -105,6 +105,12 @@ Changing from an old ad-hoc build or switching certificates may require a new ap
 also request permission to use the signing certificate private key; the helper does not modify
 application credential access controls.
 
+The first class-chat send waits asynchronously for a pending Keychain read, for up to five
+seconds, before planning or saving the turn. Ordinary read latency does not require another
+click on Send, and Stop remains responsive during the wait. If Keychain still has not answered
+at the deadline, the pending message remains retryable; a later retry reuses the existing read.
+Denied access remains an error and does not send an unauthenticated request.
+
 ## Contributor checkout
 
 Install the prerequisites in [CONTRIBUTING](../CONTRIBUTING.md), then start the hot-reloading

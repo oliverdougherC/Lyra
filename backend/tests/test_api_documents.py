@@ -6,6 +6,7 @@ with it.
 """
 
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -310,6 +311,123 @@ def test_an_image_upload_is_accepted(
     assert no_worker == [response.json()["id"]]
 
 
+def test_committed_upload_replay_returns_same_document_without_queuing_again(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list[int]
+) -> None:
+    key = str(uuid.uuid4())
+    url = f"/api/classes/{class_id}/documents"
+    headers = {"X-Idempotency-Key": key}
+    first = client.post(
+        url, headers=headers, files={"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")}
+    )
+    second = client.post(
+        url, headers=headers, files={"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")}
+    )
+    assert first.status_code == second.status_code == 202
+    assert second.json()["id"] == first.json()["id"]
+    recovered = client.get(f"{url}/uploads/{key}")
+    assert recovered.status_code == 200
+    assert recovered.json()["id"] == first.json()["id"]
+    assert db.execute("select count(*) from documents").fetchone()[0] == 1
+    assert no_worker == [first.json()["id"]]
+    mismatch = client.post(
+        url, headers=headers, files={"file": ("sheet.pdf", b"different", "application/pdf")}
+    )
+    assert mismatch.status_code == 409
+    distinct = client.post(
+        url,
+        headers={"X-Idempotency-Key": str(uuid.uuid4())},
+        files={"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")},
+    )
+    assert distinct.status_code == 202
+    assert distinct.json()["id"] != first.json()["id"]
+
+
+def test_deleted_upload_identity_cannot_resurrect_old_file(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    key = str(uuid.uuid4())
+    url = f"/api/classes/{class_id}/documents"
+    files = {"file": ("sheet.pdf", b"%PDF-1.4", "application/pdf")}
+    response = client.post(url, headers={"X-Idempotency-Key": key}, files=files)
+    assert response.status_code == 202
+    assert client.delete(f"/api/documents/{response.json()['id']}").status_code == 204
+    assert client.get(f"{url}/uploads/{key}").status_code == 404
+    retry = client.post(url, headers={"X-Idempotency-Key": key}, files=files)
+    assert retry.status_code == 409
+    assert db.execute("select count(*) from documents").fetchone()[0] == 0
+
+
+def test_page_coverage_distinguishes_missing_failed_and_blank(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    db.executemany(
+        "insert into document_pages (document_id, page_number, state, skip_reason, error_message) "
+        "values (?, ?, ?, ?, ?)",
+        [
+            (document_id, 1, "text", None, None),
+            (document_id, 2, "scanned", "photographed", None),
+            (document_id, 3, "failed", "sparse", "This page could not be read."),
+            (document_id, 4, "scanned", "blank", None),
+        ],
+    )
+    db.execute("update documents set pages_total = 4 where id = ?", (document_id,))
+    db.commit()
+    body = client.get(f"/api/documents/{document_id}/status").json()
+    assert body["coverage_complete"] is False
+    assert [(page["page_number"], page["state"]) for page in body["page_coverage"]] == [
+        (1, "readable"),
+        (2, "not_attempted"),
+        (3, "recognition_failed"),
+        (4, "blank"),
+    ]
+    assert body["page_coverage"][1]["reason"] == "photographed"
+
+
+def test_transcribed_but_unindexed_page_does_not_claim_complete_coverage(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    db.executemany(
+        "insert into document_pages (document_id, page_number, state, text) values (?, ?, ?, ?)",
+        [(document_id, 1, "text", None), (document_id, 2, "recognized", "Problem 2: x = 7")],
+    )
+    db.execute(
+        "insert into document_index_pages (document_id, page_number) values (?, 1)",
+        (document_id,),
+    )
+    db.commit()
+    body = client.get(f"/api/documents/{document_id}/status").json()
+    assert body["coverage_complete"] is False
+    assert [(page["state"], page["indexed"]) for page in body["page_coverage"]] == [
+        ("readable", True),
+        ("readable", False),
+    ]
+
+
+def test_historical_model_empty_page_is_not_called_blank_or_complete(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    db.execute(
+        "insert into document_pages (document_id, page_number, state, text) "
+        "values (?, 1, 'recognized', '')",
+        (document_id,),
+    )
+    db.commit()
+    body = client.get(f"/api/documents/{document_id}/status").json()
+    assert body["page_coverage"] == [
+        {
+            "page_number": 1,
+            "state": "recognition_failed",
+            "indexed": False,
+            "reason": "no_text_found",
+        }
+    ]
+    assert body["coverage_complete"] is False
+
+
 def test_a_folder_upload_is_named_after_the_file_rather_than_the_folder(
     client: TestClient, class_id: int, no_worker: list[int]
 ) -> None:
@@ -341,6 +459,83 @@ def test_a_webp_upload_is_refused_naming_the_types_that_work(
     assert response.status_code == 400
     assert response.json()["detail"] == parse.UNSUPPORTED_MESSAGE
     assert "PNG" in response.json()["detail"]
+
+
+class _LockedInserts:
+    """A connection whose first `refused` INSERTs into `documents` raise the same
+    `database is locked` the student hit when ingestion held the write lock past the
+    busy timeout. Everything else passes straight through."""
+
+    def __init__(self, conn: sqlite3.Connection, refused: int) -> None:
+        self._conn = conn
+        self._remaining = refused
+
+    def execute(self, sql: str, *args, **kwargs):
+        if "insert into documents" in sql and self._remaining > 0:
+            self._remaining -= 1
+            raise sqlite3.OperationalError("database is locked")
+        return self._conn.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _client_refusing_inserts(refused: int) -> TestClient:
+    def flaky_db() -> Iterator[sqlite3.Connection]:
+        conn = _LockedInserts(connect(), refused)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    app = FastAPI()
+
+    @app.exception_handler(LyraError)
+    async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+    app.include_router(routes_documents.router)
+    app.dependency_overrides[get_db] = flaky_db
+    return TestClient(app)
+
+
+def test_upload_rides_out_a_transient_write_lock_on_the_row_insert(
+    db: sqlite3.Connection, class_id: int, no_worker: list[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The connection-reset storm started with one INSERT losing the write-lock race.
+    A lock that frees within the retry window must land the upload, not escape the route."""
+    monkeypatch.setattr(routes_documents, "INSERT_DOCUMENT_RETRY_SECONDS", 0)
+    with _client_refusing_inserts(2) as flaky_client:
+        response = flaky_client.post(
+            f"/api/classes/{class_id}/documents",
+            files={"file": ("hw3.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+
+    assert response.status_code == 202
+    document_id = response.json()["id"]
+    assert (
+        db.execute("select state from documents where id = ?", (document_id,)).fetchone()[0]
+        == "pending"
+    )
+    assert no_worker == [document_id]
+
+
+def test_upload_answers_retry_later_when_the_write_lock_never_frees(
+    db: sqlite3.Connection, class_id: int, no_worker: list[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every alternative to a clean JSON error was worse: the ASGI exception that used
+    to escape here dropped the connection and made the shell recycle the backend."""
+    monkeypatch.setattr(routes_documents, "INSERT_DOCUMENT_RETRY_SECONDS", 0)
+    with _client_refusing_inserts(99) as flaky_client:
+        response = flaky_client.post(
+            f"/api/classes/{class_id}/documents",
+            files={"file": ("hw3.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == routes_documents.BUSY_UPLOAD_MESSAGE
+    assert db.execute("select count(*) from documents").fetchone()[0] == 0
+    assert no_worker == []
 
 
 def _sectioned_chunk(

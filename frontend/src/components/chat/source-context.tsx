@@ -60,6 +60,14 @@ export function SourceContext({
   const [query, setQuery] = useState('')
 
   const selected = documents?.find((document) => document.id === selectedId) ?? null
+  const unresolvedSelection = selectedId !== null && !selected
+  const selectedLabel = selected
+    ? selected.filename
+    : unresolvedSelection
+      ? documents === undefined && !documentsError
+        ? 'Loading selected file'
+        : 'Selected file unavailable'
+      : 'All material'
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -90,8 +98,8 @@ export function SourceContext({
           <button
             type="button"
             aria-label={
-              selected
-                ? `Lyra reads only ${selected.filename}. Choose what Lyra reads for this answer.`
+              selectedId !== null
+                ? `Lyra reads only ${selectedLabel}. Choose what Lyra reads for this answer.`
                 : 'Lyra reads all of this class\u2019s material. Choose what Lyra reads for this answer.'
             }
             className={cn(
@@ -99,17 +107,19 @@ export function SourceContext({
               'transition-colors hover:text-text-primary',
               'focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
               'sm:max-w-[9rem]',
-              selected ? 'bg-muted text-text-secondary' : 'text-text-tertiary hover:bg-muted',
+              selectedId !== null
+                ? 'bg-muted text-text-secondary'
+                : 'text-text-tertiary hover:bg-muted',
             )}
           >
             <FileSearch aria-hidden className="size-3.5 shrink-0" />
-            <span className="truncate">{selected ? selected.filename : 'All material'}</span>
+            <span className="truncate">{selectedLabel}</span>
           </button>
         </PopoverTrigger>
-        {selected ? (
+        {selectedId !== null ? (
           <button
             type="button"
-            aria-label={`Stop reading only ${selected.filename}; read all of this class's material`}
+            aria-label={`Stop reading only ${selectedLabel}; read all of this class's material`}
             onClick={() => onSelect(null)}
             className="text-text-tertiary hover:text-text-primary flex size-5 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
@@ -120,6 +130,17 @@ export function SourceContext({
 
       <PopoverContent align="start" sideOffset={8} className="w-72 max-w-[calc(100vw-1.5rem)] p-0">
         <p className="text-foreground border-b px-3 py-2 text-sm font-medium">What Lyra reads</p>
+
+        {unresolvedSelection && documents !== undefined ? (
+          <p className="text-danger-text px-3 py-2 text-xs" role="alert">
+            This selected file is no longer in this class. Choose another file or clear selection.
+          </p>
+        ) : null}
+        {selected && selected.state !== 'ready' ? (
+          <p className="text-info-text px-3 py-2 text-xs">
+            {STATE_NOTES[selected.state] ?? 'This file is not ready to read.'}
+          </p>
+        ) : null}
 
         {documentsError ? (
           <div className="flex flex-col gap-2 px-3 py-3 text-sm">

@@ -41,7 +41,7 @@ from backend.core.app_settings import (
     resolve_tutor_access,
 )
 from backend.rag import render, transcribe
-from backend.rag.parse import ParsedDocument, ParsedPage
+from backend.rag.parse import BLANK, ParsedDocument, ParsedPage
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ PENDING_STATES = (SCANNED,)
 RECOGNIZING_DETAIL = "recognizing"
 
 PAGE_FAILED_MESSAGE = "This page could not be read."
+NO_TEXT_FOUND_MESSAGE = "No readable text was found on this page. Try reading it again."
 ALL_PAGES_FAILED_MESSAGE = "None of the pages in this document could be read."
 NO_ENDPOINT_MESSAGE = (
     "Reading pages needs a model that can see images. Add an endpoint in Settings."
@@ -109,11 +110,12 @@ ENDPOINT_FAILED = "endpoint_failed"
 # up once the endpoint is back.
 MAX_CONSECUTIVE_FAILURES = 3
 
-_PAGE_COLUMNS = "page_number, state, text, error_message"
+_PAGE_COLUMNS = "page_number, state, text, error_message, skip_reason"
 
 _INSERT_PAGE_SQL = (
-    "insert into document_pages (document_id, page_number, state, text, error_message) "
-    "values (?, ?, ?, ?, ?)"
+    "insert into document_pages "
+    "(document_id, page_number, state, text, error_message, skip_reason) "
+    "values (?, ?, ?, ?, ?, ?)"
 )
 
 
@@ -143,7 +145,7 @@ def sync_pages(conn: sqlite3.Connection, document_id: int, parsed: ParsedDocumen
     rows = []
     for number in range(1, parsed.pages_total + 1):
         if number in with_text:
-            rows.append((document_id, number, TEXT, None, None))
+            rows.append((document_id, number, TEXT, None, None, None))
             continue
         previous = prior.get(number)
         if previous is not None and previous["state"] in (RECOGNIZED, FAILED):
@@ -154,10 +156,11 @@ def sync_pages(conn: sqlite3.Connection, document_id: int, parsed: ParsedDocumen
                     previous["state"],
                     previous["text"],
                     previous["error_message"],
+                    parsed.page_reasons.get(number),
                 )
             )
             continue
-        rows.append((document_id, number, SCANNED, None, None))
+        rows.append((document_id, number, SCANNED, None, None, parsed.page_reasons.get(number)))
 
     conn.execute("delete from document_pages where document_id = ?", (document_id,))
     conn.executemany(_INSERT_PAGE_SQL, rows)
@@ -198,6 +201,7 @@ def merge_recognized(
         pages_total=parsed.pages_total,
         pages_skipped=parsed.pages_total - len(pages),
         outline=parsed.outline,
+        page_reasons=parsed.page_reasons,
     )
 
 
@@ -226,8 +230,9 @@ def recognize_pages(
             # `PENDING_STATES` is one value and the placeholder is written out to match,
             # so this stays ordinary bound SQL rather than SQL assembled from a constant.
             "select page_number from document_pages "
-            "where document_id = ? and state = ? order by page_number",
-            (document_id, *PENDING_STATES),
+            "where document_id = ? and state = ? and coalesce(skip_reason, '') != ? "
+            "order by page_number",
+            (document_id, *PENDING_STATES, BLANK),
         )
     ]
     if not pending:
@@ -269,7 +274,12 @@ def recognize_pages(
                 "Could not read page %s of document %s", page_number, document_id, exc_info=True
             )
         else:
-            state, error = RECOGNIZED, None
+            # An empty model reply cannot prove the source page is genuinely blank.
+            # Keep it retryable instead of silently counting it as covered.
+            if text.strip():
+                state, error = RECOGNIZED, None
+            else:
+                state, error, text = FAILED, NO_TEXT_FOUND_MESSAGE, None
         # After the model call and before anything is written, because the call is the long
         # part of a run that can take hours and deleting the document is its de facto
         # cancel. A delete followed by a fresh upload can put a different file behind this

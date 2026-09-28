@@ -67,6 +67,7 @@ class TutorConfig:
     context_window: int
     tools_supported: bool | None = None
     credential_id: str | None = None
+    vision_supported: bool | None = None
 
 
 def get_settings_row(conn: sqlite3.Connection) -> sqlite3.Row:
@@ -179,6 +180,11 @@ def _tutor_config_from_row(row: sqlite3.Row) -> TutorConfig | None:
         model=row["model"],
         context_window=int(row["context_window"]),
         tools_supported=_tool_support_from_row(row),
+        vision_supported=(
+            None
+            if "vision_supported" not in row.keys() or row["vision_supported"] is None  # noqa: SIM118
+            else bool(row["vision_supported"])
+        ),
     )
 
 

@@ -57,6 +57,16 @@ def test_a_usable_page_is_never_flagged(name: str) -> None:
     assert classify_text_layer(_USABLE[name]) is None
 
 
+def test_non_latin_prose_is_not_graded_by_english_vowels() -> None:
+    prose = "数学中的函数关系需要仔细分析定义域和值域。" * 12
+    assert classify_text_layer(prose) is None
+
+
+def test_short_equation_is_kept_but_a_lone_page_number_is_not() -> None:
+    assert page_skip_reason("x=2", photographed=False) is None
+    assert page_skip_reason("4", photographed=False) == parse.SPARSE_TEXT
+
+
 # --- Pages the detector must catch (recall on the catchable pathologies) ---------------
 
 

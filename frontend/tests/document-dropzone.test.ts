@@ -176,4 +176,57 @@ describe('filesFromDrop', () => {
     expect(files.map((file) => file.name)).toEqual(['a.pdf'])
     expect(folders).toBe(false)
   })
+
+  it('reports an unreadable file and a directory failure after readable entries', async () => {
+    let reads = 0
+    const readable = {
+      isFile: true,
+      isDirectory: false,
+      name: 'good.pdf',
+      file: (resolve: (file: File) => void) => resolve(new File(['ok'], 'good.pdf')),
+    }
+    const unreadable = {
+      isFile: true,
+      isDirectory: false,
+      name: 'bad.pdf',
+      file: (_resolve: unknown, reject: (error: Error) => void) => reject(new Error('denied')),
+    }
+    const folder = {
+      isFile: false,
+      isDirectory: true,
+      name: 'Week1',
+      createReader: () => ({
+        readEntries: (resolve: (entries: unknown[]) => void, reject: (error: Error) => void) => {
+          if (reads++ === 0) resolve([readable, unreadable])
+          else reject(new Error('directory denied'))
+        },
+      }),
+    }
+    const transfer = {
+      items: [{ webkitGetAsEntry: () => folder }],
+      files: [],
+    } as unknown as DataTransfer
+    const result = await filesFromDrop(transfer)
+    expect(result.files.map((file) => file.name)).toEqual(['good.pdf'])
+    expect(result.errors).toEqual(['bad.pdf could not be read', 'Week1 could not be fully scanned'])
+  })
+
+  it('accounts for an entry API item that exposes neither an entry nor a file', async () => {
+    const readable = {
+      isFile: true,
+      isDirectory: false,
+      name: 'good.pdf',
+      file: (resolve: (file: File) => void) => resolve(new File(['ok'], 'good.pdf')),
+    }
+    const transfer = {
+      items: [
+        { webkitGetAsEntry: () => readable, getAsFile: () => null },
+        { webkitGetAsEntry: () => null, getAsFile: () => null },
+      ],
+      files: [],
+    } as unknown as DataTransfer
+    const result = await filesFromDrop(transfer)
+    expect(result.files.map((file) => file.name)).toEqual(['good.pdf'])
+    expect(result.errors).toEqual(['A dropped item could not be read'])
+  })
 })

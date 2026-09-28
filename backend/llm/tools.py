@@ -282,7 +282,7 @@ def message_tokens(message: Mapping[str, object]) -> int:
     `ContextBudget.tool_tokens`); it is not part of any message, so nothing here
     double-counts it.
     """
-    return estimate_tokens(json.dumps(message, separators=(",", ":"), default=str))
+    return _wire_estimate(message)
 
 
 def conversation_tokens(conversation: list[dict[str, object]]) -> int:
@@ -299,7 +299,32 @@ def conversation_tokens(conversation: list[dict[str, object]]) -> int:
     helper is the one that must include.) The tool schema sent alongside `messages` is
     charged once, separately, by the caller.
     """
-    return estimate_tokens(json.dumps(conversation, separators=(",", ":"), default=str))
+    return _wire_estimate(conversation)
+
+
+def _wire_estimate(value: object) -> int:
+    """Charge image parts as image inputs without treating base64 as text tokens."""
+    images = 0
+
+    def normalize(item: object) -> object:
+        nonlocal images
+        if isinstance(item, dict):
+            if item.get("type") == "image_url":
+                image = item.get("image_url")
+                if isinstance(image, dict) and str(image.get("url", "")).startswith("data:image/"):
+                    images += 1
+                    return {"type": "image_url", "image_url": {"url": "[image]"}}
+            return {key: normalize(part) for key, part in item.items()}
+        if isinstance(item, list):
+            return [normalize(part) for part in item]
+        return item
+
+    # Image token costs vary by provider and resolution. Reserve a conservative fixed
+    # amount for each bounded rendered page, while preserving the exact text/framing cost.
+    return (
+        estimate_tokens(json.dumps(normalize(value), separators=(",", ":"), default=str))
+        + images * 2048
+    )
 
 
 @dataclass(frozen=True)

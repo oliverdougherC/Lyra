@@ -98,6 +98,23 @@ describe('request construction', () => {
     expect((init.body as FormData).get('file')).toBe(file)
   })
 
+  it('sends a logical upload identity without setting a multipart content type', async () => {
+    const spy = mockFetch(jsonResponse({ id: 1 }))
+    await api.uploadDocument(1, new File(['x'], 'notes.pdf'), 'upload-123')
+    const [, init] = spy.mock.calls[0]
+    expect(init.headers).toEqual({ 'X-Idempotency-Key': 'upload-123' })
+    expect(init.body).toBeInstanceOf(FormData)
+  })
+
+  it('checks a committed upload without sending the file body again', async () => {
+    const spy = mockFetch(jsonResponse({ id: 7 }))
+    await api.reconcileUpload(1, 'upload-123')
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toContain('/api/classes/1/documents/uploads/upload-123')
+    expect(init.method).toBe('GET')
+    expect(init.body).toBeUndefined()
+  })
+
   it('sends no body or content type on a plain GET', async () => {
     const spy = mockFetch(jsonResponse([]))
     await api.listClasses()

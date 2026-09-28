@@ -132,7 +132,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 the bottom nav rather than page inset. */}
             <div
               aria-hidden
-              className={cn('shrink-0 print:hidden', bleed ? 'h-0' : 'h-4 md:h-6')}
+              className={cn(
+                'pointer-events-none shrink-0 print:hidden',
+                bleed ? 'h-0' : 'h-4 md:h-6',
+              )}
             />
           </div>
         </main>

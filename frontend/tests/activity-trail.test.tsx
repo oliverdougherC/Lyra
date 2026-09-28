@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { MessageRow, type ChatMessage } from '@/components/chat/message-bubble'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { WriterActivity } from '@/types'
+import type { AgentChatActivity, WriterActivity } from '@/types'
 
 function renderRow(node: ReactNode) {
   // MessageActions carries tooltips, and tooltips need their provider.
@@ -37,6 +37,35 @@ const TRAIL: WriterActivity[] = [
 ]
 
 describe('the activity trail on a message', () => {
+  it('shows agent tool names, targets, and failures directly in the conversation', () => {
+    const activity: AgentChatActivity[] = [
+      {
+        audit_id: 'one',
+        tool: 'read_workspace_file',
+        capability: 'workspace_read',
+        effect: 'pure',
+        state: 'succeeded',
+        target_kind: 'file',
+        target_id: 'notes/chapter.md',
+      },
+      {
+        audit_id: 'two',
+        tool: 'search_web',
+        capability: 'web',
+        effect: 'network',
+        state: 'refused',
+        target_kind: null,
+        target_id: null,
+      },
+    ]
+    renderRow(<MessageRow message={message({ tool_activity: activity })} agent />)
+    const trail = screen.getByLabelText('What Lyra did for this reply')
+    expect(trail).toBeVisible()
+    expect(trail).toHaveTextContent('read workspace file · notes/chapter.md')
+    expect(trail).toHaveTextContent('search web')
+    expect(trail).toHaveTextContent('Refused')
+  })
+
   it('keeps a settled trail collapsed by default, behind one Details disclosure', async () => {
     renderRow(<MessageRow message={message({ tool_activity: TRAIL })} />)
 
