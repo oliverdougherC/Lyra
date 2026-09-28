@@ -16,7 +16,7 @@ import pymupdf
 import pytest
 
 from backend.config import settings
-from backend.core import ingestion, profiles
+from backend.core import document_access, ingestion, profiles
 from backend.core.errors import UpstreamError
 from backend.core.ingestion import (
     INTERRUPTED_MESSAGE,
@@ -156,6 +156,92 @@ def test_a_valid_short_markdown_note_is_searchable(db: sqlite3.Connection, class
     assert _chunk_count(db, document_id) == 1
 
 
+def test_two_page_problem_has_physical_page_text_and_grouped_problem_parts(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    stored = _write_pdf(
+        settings.uploads_dir / "two-page-homework.pdf",
+        [
+            "Problem 7: FIRST_PAGE_SENTINEL. Explain the conservation law. " + _prose(30),
+            "SECOND_PAGE_SENTINEL. Continue the same problem with a boundary case. "
+            + _prose(30, 12),
+        ],
+    )
+    document_id = _seed_document(db, class_id, stored, filename="homework.pdf")
+    run_ingestion(document_id)
+    first = document_access.read_page(db, class_id, document_id, document_id, 1)
+    second = document_access.read_page(db, class_id, document_id, document_id, 2)
+    problem = document_access.read_problem(db, class_id, document_id, document_id, "7")
+    assert "FIRST_PAGE_SENTINEL" in str(first["sources"])
+    assert "SECOND_PAGE_SENTINEL" not in str(first["sources"])
+    assert "SECOND_PAGE_SENTINEL" in str(second["sources"])
+    assert "FIRST_PAGE_SENTINEL" not in str(second["sources"])
+    assert [(part["page_number"], part["problem_number"]) for part in problem["sources"]] == [
+        (1, "7"),
+        (2, "7"),
+    ]
+    assert not second["needs_image"]
+
+    # Simulate an index created before page-native storage and with incorrect
+    # starting-page chunks. Reading backfills from the retained source file.
+    db.execute("delete from document_read_pages where document_id = ?", (document_id,))
+    db.execute(
+        "update chunks set page_number = 1, content = 'BAD_CHUNK_SENTINEL' where document_id = ?",
+        (document_id,),
+    )
+    db.commit()
+    old_page = document_access.read_page(db, class_id, document_id, document_id, 2)
+    old_problem = document_access.read_problem(db, class_id, document_id, document_id, "7")
+    assert old_page["page_attribution"] == "physical"
+    assert "SECOND_PAGE_SENTINEL" in str(old_page["sources"])
+    assert "SECOND_PAGE_SENTINEL" in str(old_problem["sources"])
+    assert "BAD_CHUNK_SENTINEL" not in str(old_problem["sources"])
+
+
+def test_failed_initial_embedding_keeps_direct_text_and_retry_publishes_index(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = _write_markdown(
+        settings.uploads_dir / "homework.md",
+        "Problem 3: ALPHA_SENTINEL identifies the relevant term. " + _prose(30),
+    )
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    monkeypatch.setattr(
+        ingestion,
+        "embed_documents",
+        lambda _: (_ for _ in ()).throw(RuntimeError("helper stopped")),
+    )
+    run_ingestion(document_id)
+    assert _document(db, document_id)["state"] == "failed"
+    assert _chunk_count(db, document_id) == 0
+    page = document_access.read_page(db, class_id, document_id, document_id, 1)
+    assert page["semantic_ready"] is False
+    assert page["page_attribution"] == "physical"
+    assert "ALPHA_SENTINEL" in str(page["sources"])
+    restarted = connect()
+    try:
+        after_restart = document_access.read_page(restarted, class_id, document_id, document_id, 1)
+        assert "ALPHA_SENTINEL" in str(after_restart["sources"])
+    finally:
+        restarted.close()
+    search = document_access.search(db, class_id, document_id, "ALPHA_SENTINEL")
+    assert "ALPHA_SENTINEL" in str(search["sources"])
+    problem = document_access.read_problem(db, class_id, document_id, document_id, "3")
+    assert "ALPHA_SENTINEL" in str(problem["sources"])
+    assert problem["page_attribution"] == "physical"
+    summary = document_access.inventory(db, class_id, document_id)["documents"][0]
+    assert summary["text_readable"] is True
+    assert summary["searchable"] is True
+    assert summary["semantic_ready"] is False
+    db.execute("update documents set state = 'pending' where id = ?", (document_id,))
+    db.commit()
+    monkeypatch.setattr(ingestion, "embed_documents", _vectors)
+    run_ingestion(document_id)
+    assert _document(db, document_id)["state"] == "ready"
+    assert _chunk_count(db, document_id) > 0
+    assert document_access.search(db, class_id, document_id, "ALPHA_SENTINEL")["sources"]
+
+
 def test_empty_text_file_does_not_offer_image_recognition(
     db: sqlite3.Connection, class_id: int
 ) -> None:
@@ -185,6 +271,9 @@ def test_failed_refresh_preserves_published_chunks_and_searchability(
             "select id, content from chunks where document_id = ? order by id", (document_id,)
         )
     ]
+    old_page_generation = db.execute(
+        "select generation from document_read_pages where document_id = ? limit 1", (document_id,)
+    ).fetchone()[0]
     db.execute("update documents set refresh_state = 'pending' where id = ?", (document_id,))
     db.commit()
 
@@ -218,6 +307,13 @@ def test_failed_refresh_preserves_published_chunks_and_searchability(
             "select id, content from chunks where document_id = ? order by id", (document_id,)
         )
     ] == old
+    assert (
+        db.execute(
+            "select generation from document_read_pages where document_id = ? limit 1",
+            (document_id,),
+        ).fetchone()[0]
+        == old_page_generation
+    )
 
 
 def test_refresh_publishes_new_index_and_readiness_in_one_commit(
@@ -582,6 +678,12 @@ def test_a_failure_mid_embed_leaves_no_chunks_behind(
     assert calls["count"] > 1
     assert _chunk_count(db, document_id) == 0
     assert db.execute("select count(*) from chunk_embeddings").fetchone()[0] == 0
+    direct = document_access.search(db, class_id, document_id, "w01")
+    assert direct["sources"]
+    assert (
+        document_access.read_page(db, class_id, document_id, document_id, 1)["semantic_ready"]
+        is False
+    )
 
 
 def test_reconcile_takes_the_chunks_of_the_documents_it_fails(

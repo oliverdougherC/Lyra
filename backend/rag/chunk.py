@@ -477,33 +477,32 @@ def _chunk_problems(flat: _Flat) -> list[_Draft]:
 
 
 def _split_problem(flat: _Flat, start: int, body: str, number: str) -> list[_Draft]:
-    """One problem as chunks: whole if it fits, then sub-parts, then paragraphs."""
-    if estimate_tokens(body) <= MAX_CHUNK_TOKENS:
-        return [
+    """Keep problem grouping while making every emitted piece page-native."""
+    drafts: list[_Draft] = []
+    for page_offset, page_body in _split_at_pages(flat, start, body):
+        if not page_body.strip():
+            continue
+        if estimate_tokens(page_body) <= MAX_CHUNK_TOKENS:
+            parts = [(page_offset, page_body)]
+        else:
+            parts = _split_subparts(page_body, page_offset)
+            if not parts or any(estimate_tokens(text) > MAX_CHUNK_TOKENS for _, text in parts):
+                parts = _pack_with_overlap(
+                    _paragraphs(page_body, page_offset),
+                    MAX_CHUNK_TOKENS,
+                    HOMEWORK_PART_OVERLAP_TOKENS,
+                    flat,
+                )
+        drafts.extend(
             _Draft(
-                content=body,
-                page_number=flat.page_at(start),
+                content=text,
+                page_number=flat.page_at(offset),
                 problem_number=number,
                 problem_key=start,
             )
-        ]
-
-    parts = _split_subparts(body, start)
-    if not parts or any(estimate_tokens(text) > MAX_CHUNK_TOKENS for _, text in parts):
-        parts = _pack_with_overlap(
-            _paragraphs(body, start), MAX_CHUNK_TOKENS, HOMEWORK_PART_OVERLAP_TOKENS, flat
+            for offset, text in parts
         )
-
-    return [
-        _Draft(
-            content=text,
-            page_number=flat.page_at(offset),
-            problem_number=number,
-            part_index=index,
-            problem_key=start,
-        )
-        for index, (offset, text) in enumerate(parts)
-    ]
+    return drafts
 
 
 def _split_subparts(body: str, offset: int) -> list[tuple[int, str]]:
