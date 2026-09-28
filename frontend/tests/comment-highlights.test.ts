@@ -337,6 +337,38 @@ describe('comment plugin state, driven through a real EditorState', () => {
     expect(harness.doc.textBetween(moved.from, moved.to)).toBe('converges in probability')
   })
 
+  it('keeps an end-boundary insertion outside the anchor through flash expiry and later edits', () => {
+    const harness = new CommentHarness(doc(['paragraph', 'Read the quote today.']))
+    harness.set([{ id: 7, quote: 'the quote', severity: 'critical' }])
+    const original = harness.ps.ranges[0]
+    harness.flash(7)
+
+    // An inline decoration has a non-inclusive end. Its cached range must make the
+    // same choice, including while a flash changes only the decoration attributes.
+    harness.edit((tr) => tr.insertText(' new', original.to))
+    const mapped = harness.inlines()[0]
+    expect(harness.doc.textBetween(mapped.from, mapped.to)).toBe('the quote')
+    expect(harness.ps.ranges[0]).toEqual(original)
+
+    harness.unflash(7) // the timer expiry dispatches this same metadata
+    const expired = harness.inlines()[0]
+    expect([expired.from, expired.to]).toEqual([mapped.from, mapped.to])
+    expect(harness.doc.textBetween(expired.from, expired.to)).toBe('the quote')
+    expect(String(attrsOf(expired).class)).not.toContain('--flash')
+
+    harness.edit((tr) => tr.insertText('Please ', 1))
+    expect(harness.doc.textBetween(harness.inlines()[0].from, harness.inlines()[0].to)).toBe(
+      'the quote',
+    )
+    harness.edit((tr) => tr.delete(harness.ps.ranges[0].from, harness.ps.ranges[0].to))
+    expect(harness.ps.ranges).toEqual([])
+    harness.edit((tr) => tr.insertText('the quote ', 1))
+    harness.set([{ id: 7, quote: 'the quote', severity: 'critical' }])
+    expect(harness.doc.textBetween(harness.inlines()[0].from, harness.inlines()[0].to)).toBe(
+      'the quote',
+    )
+  })
+
   it('re-resolves everything exactly once when an edit swallows an anchor', () => {
     const harness = new CommentHarness(document)
     harness.set(threads)

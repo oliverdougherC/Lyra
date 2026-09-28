@@ -56,6 +56,12 @@ that window.
   write was carrying is treated as a lost successful response: the engine adopts
   `current_version` as confirmed rather than raising a conflict dialog over identical text.
   Provably safe - the bytes match, so nothing is lost.
+- **Editor remount hydration.** The engine records explicitly whether it has a confirmed
+  baseline; an empty saved body is not an uninitialized session. On remount, pending,
+  in-flight, or conflicted local text keeps ownership of the editor. When the session is
+  clean, a server read with a newer `body_version` becomes the baseline and the visible
+  editor body. An older or same-version inconsistent cached read cannot replace a retained
+  confirmed body. The next autosave uses the chosen baseline's version.
 
 ## Failure scheduling and view lifetime
 

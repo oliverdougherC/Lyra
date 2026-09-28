@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DraftWorkspacePage from '@/app/classes/[id]/drafts/[artifactId]/page'
 import { RouterProvider } from '@/router/hooks'
 import { retryDelay } from '@/lib/drafts/save-engine'
-import { saveSessionEngine } from '@/lib/drafts/save-session'
+import { saveSessionEngine, saveSessionFor } from '@/lib/drafts/save-session'
 import { assertUpdateSafe } from '@/lib/update-safety'
 import type { LiveDraftSuggestion } from '@/types'
 
@@ -55,23 +55,32 @@ vi.mock('@/router/hooks', async (original) => ({
   ...(await original<object>()),
   useParams: () => ({ id: '1', artifactId: controls.artifactId }),
 }))
-vi.mock('@/router/dynamic', () => ({
-  default: () =>
-    function EditorMock(props: {
+vi.mock('@/router/dynamic', async () => {
+  const { forwardRef, useImperativeHandle, useState } = await import('react')
+  const EditorMock = forwardRef<
+    { reset: (markdown: string) => void; setComments: () => void },
+    {
       initialMarkdown: string
       onChange: (value: string) => void
       onEditorReady: (view: unknown) => void
-    }) {
-      return (
-        <textarea
-          aria-label="Editor"
-          defaultValue={props.initialMarkdown}
-          onFocus={(e) => props.onEditorReady({ dom: e.currentTarget })}
-          onChange={(e) => props.onChange(e.target.value)}
-        />
-      )
-    },
-}))
+    }
+  >(function EditorMock(props, ref) {
+    const [value, setValue] = useState(props.initialMarkdown)
+    useImperativeHandle(ref, () => ({ reset: setValue, setComments: () => undefined }))
+    return (
+      <textarea
+        aria-label="Editor"
+        value={value}
+        onFocus={(e) => props.onEditorReady({ dom: e.currentTarget })}
+        onChange={(e) => {
+          setValue(e.target.value)
+          props.onChange(e.target.value)
+        }}
+      />
+    )
+  })
+  return { default: () => EditorMock }
+})
 vi.mock('@/components/layout/page-chrome', () => ({
   useFullBleed: vi.fn(),
   useImmersiveChrome: vi.fn(),
@@ -205,6 +214,8 @@ beforeEach(() => {
   controls.draftError = false
   controls.retryDraft.mockReset()
   controls.draft.stage_detail = null
+  controls.draft.body = 'Original body'
+  controls.draft.body_version = 1
   controls.state = 'ready'
   controls.live = null
   controls.wide = false
@@ -467,6 +478,9 @@ describe('remount after a failed final flush (PLA-513)', () => {
     // is seeded with the pending bytes, and typing the newest text coalesces into the
     // same pipeline - a second unmount does NOT start a competing write.
     const second = await renderWithEditor()
+    expect(screen.getByRole('textbox', { name: 'Draft document' })).toHaveValue(
+      'older pending edit',
+    )
     typeInto('newest pending edit')
     second.unmount()
     await act(async () => {
@@ -591,6 +605,71 @@ describe('remount after a failed final flush (PLA-513)', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
     })
+  })
+})
+
+describe('editor hydration from a retained save session (PLA-513)', () => {
+  function keepSessionAttached() {
+    const lease = saveSessionFor(controls.artifactId, () => {
+      throw new Error('The draft already owns its save session')
+    })
+    lease.attach(() => undefined)
+    return lease
+  }
+
+  it('keeps an acknowledged empty body over a stale nonempty query and saves from its version', async () => {
+    const first = await renderWithEditor()
+    typeInto('')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+    const engine = saveSessionEngine(controls.artifactId)!
+    expect(engine.lastSaved()).toBe('')
+    expect(engine.version()).toBe(2)
+    const keeper = keepSessionAttached()
+    first.unmount()
+
+    // The query still carries Original body@v1 after the server acknowledged empty@v2.
+    const second = await renderWithEditor()
+    expect(screen.getByRole('textbox', { name: 'Draft document' })).toHaveValue('')
+    expect(engine.lastSaved()).toBe('')
+    expect(engine.version()).toBe(2)
+    typeInto('New paragraph')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+    expect(controls.save).toHaveBeenLastCalledWith({
+      content: 'New paragraph',
+      expected_version: 2,
+    })
+    second.unmount()
+    keeper.detach()
+  })
+
+  it('adopts a newer server revision over an older clean retained baseline', async () => {
+    const first = await renderWithEditor()
+    const engine = saveSessionEngine(controls.artifactId)!
+    const keeper = keepSessionAttached()
+    first.unmount()
+    controls.draft.body = 'Newer server paragraph'
+    controls.draft.body_version = 2
+
+    const second = await renderWithEditor()
+    expect(screen.getByRole('textbox', { name: 'Draft document' })).toHaveValue(
+      'Newer server paragraph',
+    )
+    expect(engine.lastSaved()).toBe('Newer server paragraph')
+    expect(engine.version()).toBe(2)
+    typeInto('Newer server paragraph revised')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+    expect(controls.save).toHaveBeenLastCalledWith({
+      content: 'Newer server paragraph revised',
+      expected_version: 2,
+    })
+    second.unmount()
+    keeper.detach()
   })
 })
 

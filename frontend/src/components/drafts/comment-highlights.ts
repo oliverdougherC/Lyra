@@ -88,8 +88,11 @@ export function createCommentPlugin(): Plugin<PluginState> {
           const mapping = tr.mapping
           const mappedRanges: ResolvedAnchor[] = []
           for (const range of state.ranges) {
-            const from = mapping.map(range.from)
-            const to = mapping.map(range.to)
+            // Inline decorations are non-inclusive at both boundaries. Match their
+            // mapping associations so a later flash rebuild cannot add text inserted
+            // exactly at the quote's end (or start) to the cached anchor.
+            const from = mapping.map(range.from, 1)
+            const to = mapping.map(range.to, -1)
             if (to > from) mappedRanges.push({ ...range, from, to })
           }
           const mapped = state.decorations.map(mapping, tr.doc)

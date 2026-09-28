@@ -813,36 +813,29 @@ export default function DraftWorkspacePage() {
               // The engine's own state is the truth. If bytes are still owed, restore the
               // editor to it (visibly unsaved), leave the pipeline alone, and let the
               // engine's own timers do its work.
-              if (pending !== null) {
-                editorRef.current?.reset(pending)
-                latestMarkdownRef.current = pending
-                setLatestMarkdown(pending)
-              }
+              const retained = pending ?? engine.lastSaved()
+              editorRef.current?.reset(retained)
+              latestMarkdownRef.current = retained
+              setLatestMarkdown(retained)
               return
             }
-            // The engine is clean (nothing owed). Follow the server's read, except when the
-            // engine's own confirmed baseline is newer than the query.
-            if (
-              engine.lastSaved() !== artifact.body ||
-              engine.version() !== artifact.body_version
-            ) {
-              if (engine.lastSaved() !== '') {
-                // The engine confirmed a baseline the query does not know about yet (a
-                // retained engine that saved after the query went stale): trust the engine
-                // over the (stale) query and reset the editor to the confirmed baseline.
-                editorRef.current?.reset(engine.lastSaved())
-                latestMarkdownRef.current = engine.lastSaved()
-                setLatestMarkdown(engine.lastSaved())
-                return
-              }
-              // Fresh engine: the read is the baseline.
+            // A confirmed empty body is still an initialized baseline. The revision
+            // decides which clean source wins: a newer server read supersedes a retained
+            // session, while an older or inconsistent cached read cannot roll it back.
+            if (!engine.hasBaseline() || artifact.body_version > engine.version()) {
               engine.noteSaved(artifact.body, artifact.body_version)
+              editorRef.current?.reset(seedBody)
+              latestMarkdownRef.current = seedBody
+              setLatestMarkdown(seedBody)
+              // A body whose math delimiters needed converting is now one edit ahead of
+              // the server. Schedule that edit rather than leaving the two to diverge.
+              if (seedBody !== artifact.body) engine.schedule(seedBody)
+              return
             }
-            latestMarkdownRef.current = seedBody
-            setLatestMarkdown(seedBody)
-            // A body whose math delimiters needed converting is now one edit ahead of the
-            // server. Schedule that edit rather than leaving the two to diverge.
-            if (seedBody !== artifact.body) engine.schedule(seedBody)
+            const retained = engine.lastSaved()
+            editorRef.current?.reset(retained)
+            latestMarkdownRef.current = retained
+            setLatestMarkdown(retained)
           }}
         />
       </div>

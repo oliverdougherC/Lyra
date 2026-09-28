@@ -140,6 +140,8 @@ export interface SaveEngine {
   saving(): boolean
   /** Mark `content` at `version` as what the server holds (seeding and authoritative ops). */
   noteSaved(content: string, version: number): void
+  /** Whether a server baseline has been confirmed, even when its body is empty. */
+  hasBaseline(): boolean
   /**
    * Raise a stale-version conflict from outside a write: an authoritative server operation
    * (an AI pass, an accepted suggestion, a restore) moved the body to `serverVersion` while
@@ -222,6 +224,7 @@ export function createSaveEngine(opts: {
   let timer: TimerHandle | undefined
   let lastSaved = ''
   let version = 0
+  let baselineInitialized = false
   // The newest body the editor wants persisted. Tracked independently of `lastSaved` and of
   // the in-flight write's body: the pipeline's job is to make the server hold exactly this,
   // and nothing is owed only when `desired === lastSaved`. Reverting the editor to the
@@ -389,6 +392,7 @@ export function createSaveEngine(opts: {
       if (!threw) {
         lastSaved = writing
         version = (outcome as WriteOutcome).version
+        baselineInitialized = true
         errorDetail = undefined
         // The failure streak ended: the next failure starts the backoff from the base.
         retryAttempts = 0
@@ -409,6 +413,7 @@ export function createSaveEngine(opts: {
         // conflict dialog over text that already matches (PLA-289).
         lastSaved = writing
         version = detected.serverVersion
+        baselineInitialized = true
         errorDetail = undefined
         retryAttempts = 0
         failureKind = null
@@ -559,6 +564,7 @@ export function createSaveEngine(opts: {
       if (mode === 'disposed') return
       lastSaved = content
       version = nextVersion
+      baselineInitialized = true
       desired = content
       pendingBody = null
       conflict = null
@@ -609,6 +615,7 @@ export function createSaveEngine(opts: {
       report('conflict')
     },
     lastSaved: () => lastSaved,
+    hasBaseline: () => baselineInitialized,
     version: () => version,
     snapshot(): { state: SaveStateName; detail: string | null } {
       // Mirror `settle()` without calling `report()`: same decision, no side effects,
@@ -642,6 +649,7 @@ export function createSaveEngine(opts: {
       const serverVersion = conflict.serverVersion
       lastSaved = serverBody
       version = serverVersion
+      baselineInitialized = true
       conflict = null
       errorDetail = undefined
       desired = content
@@ -669,6 +677,7 @@ export function createSaveEngine(opts: {
       const resolved = conflict
       lastSaved = resolved.serverBody
       version = resolved.serverVersion
+      baselineInitialized = true
       desired = resolved.serverBody
       pendingBody = null
       conflict = null
