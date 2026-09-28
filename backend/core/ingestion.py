@@ -21,6 +21,7 @@ import logging
 import queue
 import sqlite3
 import threading
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -247,6 +248,11 @@ def _ingest(conn: sqlite3.Connection, document_id: int, *, defer_profile: bool =
     if _vanished(conn, document_id, started_at):
         return
     _set_state(conn, document_id, EMBEDDING, doc_type)
+    # A first upload's parsed text is useful even when the local vector helper fails.
+    # A refresh keeps its old page evidence until the replacement index commits.
+    read_pages = [(page.page_number, page.text) for page in parsed.pages]
+    if not _is_refresh(conn, document_id):
+        _publish_read_pages(conn, document_id, read_pages, started_at)
     stored = _store_chunks(
         conn,
         document_id,
@@ -255,6 +261,7 @@ def _ingest(conn: sqlite3.Connection, document_id: int, *, defer_profile: bool =
         chunks,
         started_at,
         [page.page_number for page in parsed.pages],
+        read_pages,
     )
     if not stored:
         return
@@ -405,6 +412,7 @@ def _store_chunks(
     chunks: list[Chunk],
     started_at: str,
     indexed_pages: list[int],
+    read_pages: list[tuple[int, str]],
 ) -> bool:
     """Build embeddings off-index, then replace the published index atomically.
 
@@ -485,8 +493,44 @@ def _store_chunks(
         "insert into document_index_pages (document_id, page_number) values (?, ?)",
         [(document_id, page_number) for page_number in indexed_pages],
     )
+    _replace_read_pages(conn, document_id, read_pages)
     conn.execute("drop table temp.ingest_replacement")
     return True
+
+
+def _is_refresh(conn: sqlite3.Connection, document_id: int) -> bool:
+    row = conn.execute(
+        "select refresh_state from documents where id = ?", (document_id,)
+    ).fetchone()
+    return row is not None and row[0] is not None
+
+
+def _replace_read_pages(
+    conn: sqlite3.Connection, document_id: int, pages: list[tuple[int, str]]
+) -> None:
+    generation = uuid.uuid4().hex
+    conn.execute("delete from document_read_pages where document_id = ?", (document_id,))
+    conn.executemany(
+        "insert into document_read_pages (document_id, page_number, generation, content) "
+        "values (?, ?, ?, ?)",
+        [(document_id, number, generation, content) for number, content in pages],
+    )
+
+
+def _publish_read_pages(
+    conn: sqlite3.Connection,
+    document_id: int,
+    pages: list[tuple[int, str]],
+    started_at: str,
+) -> None:
+    # A concurrent delete/replace cannot publish stale text after this identity check:
+    # the write transaction serializes the check and the replacement.
+    conn.execute("begin immediate")
+    if recognition.document_replaced(conn, document_id, started_at):
+        conn.rollback()
+        return
+    _replace_read_pages(conn, document_id, pages)
+    conn.commit()
 
 
 def delete_chunks(conn: sqlite3.Connection, document_id: int) -> None:

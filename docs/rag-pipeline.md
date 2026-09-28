@@ -32,6 +32,15 @@ can be ready while its unreadable pages need recognition; a wholly unreadable on
 original upload in the unsupported state. Recognition is an explicit document action, not an
 automatic upload of every scanned page.
 
+After parsing and chunking, a first upload publishes page-native readable text independently
+of embedding. If the local embedding helper fails, the document remains `failed` for semantic
+search, but its valid text pages remain available to bounded direct page reads and lexical
+search. A retry builds vectors without duplicating the published text. Refresh keeps the old
+page evidence and old index until the replacement vector index and page text commit together.
+Physical page numbers come from the parser; printed page labels in the content are not used as
+citations. Older indexed documents recover exact page text from their retained source file on
+first page read, without discarding the usable old index.
+
 `backend/core/recognition.py` records per-page progress and sends requested page images through
 `backend/rag/transcribe.py` to the configured vision-capable tutor. It resolves endpoint access and
 remote consent before rendering/sending pages. An acknowledged remote tutor receives those images.
@@ -72,11 +81,18 @@ valid result, not an invented source or an infrastructure error.
 The class agent can list, search, and read bounded pages and numbered problems from uploaded
 documents independently of its optional local code workspace. Every read checks the live class,
 conversation, selected-document scope, and document-text consent; citations retain document and
-page provenance. Incomplete short worksheets are refused before inference when the requested
-problem page is unreadable and the configured tutor has no confirmed vision capability. With
+page provenance. Bounded responses provide a revision-scoped continuation cursor, exact source
+character ranges, and a `has_more` flag. A continuation repeats the live scope and consent
+checks; replacing, moving, or deleting a source invalidates its cursor. Problem chunks split
+at physical page boundaries while retaining their shared problem number. Incomplete short
+worksheets are refused before inference when the requested problem page is unreadable and the
+configured tutor has no confirmed vision capability. With
 confirmed vision and consent, Lyra may attach at most three relevant rendered pages from a
 selected document, including a pure scan that has no text index yet; it never sends all pages
 of a long book merely because they are scanned.
+An explicit page-image read validates the class, selected file and physical page before rendering,
+then rechecks the source identity while reading at most 3 MiB of image bytes. Endpoint consent
+still gates sending those bytes to the tutor.
 
 Chat, solutions, study, drafting, and agent workflows build their own bounded prompts from the
 selected scope. They use the configured OpenAI-compatible tutor. Source references remain tied to
