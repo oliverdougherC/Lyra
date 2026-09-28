@@ -37,17 +37,17 @@ def _revision(conn: sqlite3.Connection, class_id: int, selected_id: int | None) 
     digest = hashlib.sha256()
     sql = (
         "select d.id, d.class_id, d.created_at, d.state, d.refresh_state, "
-        "count(c.id), coalesce(max(c.id), 0), "
-        "coalesce(max(p.generation), '') from documents d "
-        "left join chunks c on c.document_id = d.id "
-        "left join document_read_pages p on p.document_id = d.id "
+        "(select count(*) from chunks c where c.document_id = d.id), "
+        "coalesce((select max(c.id) from chunks c where c.document_id = d.id), 0), "
+        "coalesce((select max(p.generation) from document_read_pages p "
+        "where p.document_id = d.id), '') from documents d "
         "where d.class_id = ?"
     )
     args: list[object] = [class_id]
     if selected_id is not None:
         sql += " and d.id = ?"
         args.append(selected_id)
-    sql += " group by d.id order by d.id"
+    sql += " order by d.id"
     for row in conn.execute(sql, args):
         digest.update(repr(tuple(row)).encode("utf-8"))
     return digest.hexdigest()[:24]
