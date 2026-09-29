@@ -889,6 +889,8 @@ def _add_document_tools(
             _require_not_stopped(stop)
             doc_id = _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1)
             page = _integer(page_number, "page_number", minimum=1, maximum=100000)
+            if selected_document_id is not None and doc_id != selected_document_id:
+                raise _RefusalError("This conversation is limited to the selected document.")
             if activity.image_count >= document_access.MAX_VISUAL_PAGES:
                 raise _RefusalError(
                     "This turn has reached its page-image limit. Start a follow-up for more pages."

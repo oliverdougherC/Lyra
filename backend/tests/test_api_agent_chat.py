@@ -372,6 +372,38 @@ def test_changed_endpoint_blocks_late_page_image_before_next_provider_request(
     assert requests == 1
 
 
+def test_page_image_tool_bounds_count_and_selected_source(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute("update settings set vision_supported = 1 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    monkeypatch.setattr(document_access, "image_page", lambda *_args: b"synthetic-png")
+    registry, activity = agent_tools.build_agent_registry(
+        db,
+        class_id,
+        session_id,
+        "agent",
+        selected_document_id=7,
+        document_endpoint="http://127.0.0.1:8080/v1",
+        image_capable=True,
+    )
+    read_image = registry["read_document_image"].handler
+    refused_scope = read_image(document_id=3, page_number=1)
+    assert not refused_scope.ok
+    assert "selected document" in str(refused_scope.as_payload())
+    for page in (1, 2, 3):
+        assert read_image(document_id=7, page_number=page).ok
+    assert activity.image_count == 3
+    assert len(activity.pending_images) == 3
+    fourth = read_image(document_id=7, page_number=4)
+    assert not fourth.ok
+    assert "page-image limit" in str(fourth.as_payload())
+
+
 def test_required_matrix_figure_without_vision_refuses_before_provider(
     client: TestClient,
     db: sqlite3.Connection,
