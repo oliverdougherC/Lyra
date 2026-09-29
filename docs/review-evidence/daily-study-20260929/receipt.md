@@ -1,5 +1,47 @@
 # Daily-study correction review receipt — September 29, 2026
 
+## Current review pass: R8 and final-code native diagnostic
+
+This section supersedes the historical head and native status below. The owning
+R8 commit is `ae6c063` on #96, merged through #97 into #98. The combined code
+used for the isolated diagnostic is `7d9e447fdb49a58a1675e056d7980cd3365ed5b6`;
+the later receipt-only commit does not change its frontend or frozen backend bytes.
+All three PRs remain unmerged for independent review.
+
+| Check | Reviewed behavior | Corrected behavior |
+| --- | --- | --- |
+| Fresh-session accepted sends | After 128 accepted questions in a single scope, 128 nonempty records and 128 markers remained; the next write returned `durable:false`, and a new session lost that prompt. | A repository test first failed on the reviewed source. After correction, 240 restore → accept unchanged → new-question cycles leave one unsent record and no obsolete markers. The last question restores in another fresh session. |
+| Existing full store | Acknowledged nonempty copies consumed all 128 unsent slots. | A seeded store with 64 acknowledged copies in different scopes and 64 genuine unsent records reclaims only the acknowledged copies. The new draft is durable and survives a fresh session; 65 records and zero obsolete markers remain. A full store of 128 genuine unsent records still refuses another durable write. |
+| Refusal and concurrent writer | Removal/write/property refusal or an active writer changing a revision could lose data if cleanup were unconditional. | Durable suppression precedes matching-copy removal. Denied deletion keeps the marker and refuses a new durable prompt at capacity until storage recovers; denied marker write reports failure and leaves the old copy. A changed foreign revision remains intact. Storage-property denial retains the in-memory fallback. |
+
+The source-page route also needed one narrow correction found while exercising the
+required native paging workload: Files consumes its one-shot navigation anchor
+after focusing the document, which previously closed the page preview. A
+failing-before route test now keeps a separate preview document ID until the
+dialog closes. The signed isolated app visibly opened pages 5 and 8 of a
+12-page synthetic PDF. This fix is on #98 and does not alter #96/#97 ownership.
+
+Combined local verification after R8: 1,419 frontend unit tests and 81 Chromium
+browser checks passed (three WebKit-specific skips); affected router/store,
+frontend typecheck/lint/format, docs checks, and frozen-backend smoke passed.
+The source-page follow-up passed its focused tests and native diagnostic; final
+combined-head CI is tracked on #98. The retained production-identity review
+bundle is signed and smoke checked separately from native diagnostic acceptance.
+
+[Final-code native method, timings, process samples, and limits](native-final-r8.md)
+cover actual chat and source journeys. The same WKWebView's minimal control
+returned 181 callbacks in each three-second run, with 17 ms median and 18 ms
+p95 callback intervals in all three runs. The configured internal display is
+120 Hz, yet this callback path did not reach an 8.33 ms cadence. The long-chat
+stream showed 17/30 ms median/p95 active callback intervals and 9/20 ms
+keydown-to-next-callback timing. These are **JavaScript callbacks**, not
+presented frames, physical input-to-paint, or proof of a universal WebKit cap.
+No production identity was launched or replaced; `/Applications/Lyra.app`
+still embeds #94 source `a8a9c819e43a3305270578021b5eafd5491486f6`.
+PLA-570 remains open.
+
+## Historical R5–R7 review receipt
+
 ## Third-review correction (R5–R7)
 
 The #96 owning fix is `4577858abdd94a19484be8eda4081df8b013ab03`.
