@@ -275,9 +275,11 @@ function ActivityTrail({ entries }: { entries: ToolActivity[] }) {
                   ? 'Running'
                   : ok
                     ? 'Done'
-                    : entry.state === 'refused'
-                      ? 'Refused'
-                      : 'Failed'}
+                    : entry.state === 'refused' && entry.detail === 'This turn was stopped.'
+                      ? 'Stopped'
+                      : entry.state === 'refused'
+                        ? 'Refused'
+                        : 'Failed'}
               </span>
             ) : null}
           </div>

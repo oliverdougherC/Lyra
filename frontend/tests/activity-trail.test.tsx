@@ -58,6 +58,16 @@ describe('the activity trail on a message', () => {
         target_id: null,
       },
       {
+        audit_id: 'stopped',
+        tool: 'read_document_image',
+        capability: 'document_read',
+        effect: 'database_read',
+        state: 'refused',
+        target_kind: null,
+        target_id: null,
+        detail: 'This turn was stopped.',
+      },
+      {
         audit_id: 'three',
         tool: 'read_document_page',
         capability: 'document_read',
@@ -88,6 +98,8 @@ describe('the activity trail on a message', () => {
     expect(trail).toHaveTextContent('read workspace file · notes/chapter.md')
     expect(trail).toHaveTextContent('search web')
     expect(trail).toHaveTextContent('Refused')
+    expect(trail).toHaveTextContent('read document image')
+    expect(trail).toHaveTextContent('Stopped')
     expect(trail).toHaveTextContent('signals.pdf p. 5 chars 1–2600')
     expect(trail).toHaveTextContent('More source text available')
     expect(screen.getByRole('link', { name: 'signals.pdf p. 5' })).toHaveAttribute(
