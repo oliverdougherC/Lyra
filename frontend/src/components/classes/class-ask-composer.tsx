@@ -1,10 +1,19 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { ArrowUp } from 'lucide-react'
 
 import { Asterism } from '@/components/ui/asterism'
-import { clearChatDraftIfRevision, readChatDraft, writeChatDraft } from '@/lib/chat-draft-store'
+import {
+  clearChatDraftIfRevision,
+  beginChatDraftSend,
+  finishChatDraftSend,
+  hasChatDraftAccepted,
+  isChatDraftSendPending,
+  readChatDraft,
+  subscribeChatDraftSends,
+  writeChatDraft,
+} from '@/lib/chat-draft-store'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 
 const GENERAL_PROMPTS = [
@@ -30,12 +39,15 @@ export function ClassAskComposer({
 }) {
   const scope = `class-ask:${draftKey}`
   const revision = useRef<string | null>(null)
+  const acceptedOnRestore = useRef(false)
   const [question, setQuestion] = useState(() => {
     const saved = readChatDraft(scope)
+    acceptedOnRestore.current = hasChatDraftAccepted(scope)
     if (saved) {
       revision.current = saved.revision
       return saved.value
     }
+    if (acceptedOnRestore.current) return ''
     try {
       return sessionStorage.getItem(draftKey) ?? ''
     } catch {
@@ -45,8 +57,14 @@ export function ClassAskComposer({
   const [index, setIndex] = useState(0)
   const [focused, setFocused] = useState(false)
   const [sending, setSending] = useState(false)
+  const pendingInWindow = useSyncExternalStore(
+    subscribeChatDraftSends,
+    () => isChatDraftSendPending(scope),
+    () => false,
+  )
   const [error, setError] = useState(false)
   const [storageWarning, setStorageWarning] = useState(false)
+  const [settlementWarning, setSettlementWarning] = useState(acceptedOnRestore.current)
   const submitting = useRef(false)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -61,6 +79,15 @@ export function ClassAskComposer({
     revision.current = saved.record.revision
     setStorageWarning(!saved.durable)
   }, [question, scope])
+
+  useEffect(() => {
+    if (pendingInWindow || !revision.current) return
+    const current = readChatDraft(scope)
+    if (current?.revision === revision.current) return
+    revision.current = null
+    setQuestion('')
+    setSettlementWarning(hasChatDraftAccepted(scope))
+  }, [pendingInWindow, scope])
 
   function changeQuestion(value: string) {
     setQuestion(value)
@@ -85,23 +112,34 @@ export function ClassAskComposer({
   }, [empty, focused, reduceMotion, sending, prompts.length])
 
   async function send() {
-    if (!question.trim() || submitting.current) return
+    if (!question.trim() || submitting.current || pendingInWindow) return
+    const sendToken = beginChatDraftSend(scope)
+    if (sendToken === null) return
     submitting.current = true
     const submittedRevision = revision.current
     setSending(true)
     setError(false)
     try {
       await onSend(question.trim())
-      if (submittedRevision) clearChatDraftIfRevision(scope, submittedRevision)
-      try {
-        sessionStorage.removeItem(draftKey)
-      } catch {
-        // The durable record has already been settled.
+      const settled = !submittedRevision || clearChatDraftIfRevision(scope, submittedRevision)
+      setSettlementWarning(!settled)
+      if (settled) setStorageWarning(false)
+      if (settled) {
+        try {
+          sessionStorage.removeItem(draftKey)
+        } catch {
+          // The durable record has already been settled.
+        }
+      }
+      if (revision.current === submittedRevision) {
+        revision.current = null
+        setQuestion('')
       }
     } catch {
       setError(true)
       textarea.current?.focus()
     } finally {
+      finishChatDraftSend(sendToken)
       submitting.current = false
       setSending(false)
     }
@@ -153,7 +191,7 @@ export function ClassAskComposer({
         <div className="class-ask-footer">
           <button
             type="submit"
-            disabled={!question.trim() || sending}
+            disabled={!question.trim() || sending || pendingInWindow}
             className="class-ask-send"
             aria-label="Ask"
             title={sending ? 'Opening conversation' : 'Send message'}
@@ -169,6 +207,12 @@ export function ClassAskComposer({
         {storageWarning ? (
           <p role="status" className="mt-3 text-sm text-danger-text">
             This question is only in this window. Make a copy before closing Lyra.
+          </p>
+        ) : null}
+        {settlementWarning ? (
+          <p role="alert" className="mt-3 text-sm text-danger-text">
+            Your question was sent, but its saved copy could not be removed. It may reappear after
+            restart; do not send it again.
           </p>
         ) : null}
       </form>
