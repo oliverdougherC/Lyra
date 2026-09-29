@@ -130,6 +130,32 @@ describe('DocumentRow', () => {
 })
 
 describe('DocumentRow, contextual actions', () => {
+  it('allows chat from readable text when initial semantic indexing failed', async () => {
+    const { wrapper } = createWrapper()
+    render(
+      <DocumentRow
+        document={{ ...documentAt('failed'), text_readable: true, semantic_ready: false }}
+        mode="manage"
+        selected={false}
+        onSelect={noop}
+        onRetry={noop}
+        onRecognize={noop}
+        onDelete={noop}
+        onStatus={noop}
+      />,
+      { wrapper },
+    )
+    expect(screen.getByText('text readable')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Text is readable for chat; semantic indexing failed/),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for lecture-2.pdf' }))
+    expect(await screen.findByRole('menuitem', { name: 'Ask about this' })).toHaveAttribute(
+      'href',
+      '/#/classes/1/chat?session=new&document=7',
+    )
+  })
+
   it('offers Ask about this on the manage surface, where it changes routes', async () => {
     vi.spyOn(api, 'getDocumentStatus').mockResolvedValue(statusAt('ready'))
     const { wrapper } = createWrapper()

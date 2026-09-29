@@ -161,6 +161,8 @@ class DocumentRead(BaseModel):
     # which counts pages that had no text to find, and both can be true at once: the
     # document is still `ready` and `PageFailureNotice` reports this quietly beside it.
     pages_failed: int
+    text_readable: bool = False
+    semantic_ready: bool = False
     page_coverage: list[PageCoverage] = Field(default_factory=list)
     coverage_complete: bool = False
     refresh_state: str | None = None
@@ -241,6 +243,8 @@ class StatusRead(BaseModel):
     pages_done: int
     pages_skipped: int
     pages_failed: int
+    text_readable: bool = False
+    semantic_ready: bool = False
     page_coverage: list[PageCoverage] = Field(default_factory=list)
     coverage_complete: bool = False
     refresh_state: str | None = None
@@ -1042,6 +1046,14 @@ def _with_coverage(conn: sqlite3.Connection, document: dict[str, object]) -> dic
             }
         )
     document["page_coverage"] = pages
+    page_text = conn.execute(
+        "select 1 from document_read_pages where document_id = ? limit 1", (document["id"],)
+    ).fetchone()
+    indexed_text = conn.execute(
+        "select 1 from chunks where document_id = ? limit 1", (document["id"],)
+    ).fetchone()
+    document["semantic_ready"] = document["state"] == "ready" and indexed_text is not None
+    document["text_readable"] = page_text is not None or document["semantic_ready"]
     document["coverage_complete"] = (
         bool(pages)
         and all(

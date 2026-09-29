@@ -10,6 +10,7 @@ import {
   LEGACY_HUB_WORK_FILTERS,
   readHubTab,
 } from '@/components/classes/class-hub'
+import { DocumentPagePreview } from '@/components/documents/document-page-preview'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useClass } from '@/lib/hooks/use-classes'
@@ -38,6 +39,17 @@ export default function ClassHubPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const tab = searchParams.get('tab')
+  const sourceId = /^document-(\d+)$/.exec(searchParams.get('lyra-anchor') ?? '')?.[1]
+  const sourcePage = searchParams.get('source-page')
+  const previewDocumentId = sourceId ? Number(sourceId) : null
+  const previewPage = sourcePage ? Number(sourcePage) : null
+  const showSourcePage =
+    previewDocumentId !== null &&
+    Number.isSafeInteger(previewDocumentId) &&
+    previewDocumentId > 0 &&
+    previewPage !== null &&
+    Number.isSafeInteger(previewPage) &&
+    previewPage > 0
   const classQuery = useClass(classId ?? Number.NaN)
   // A bookmark or history entry from the seven-tab era names a subsystem, not a task.
   // Read it as the task that owns the same view now (readHubTab), then rewrite it once to
@@ -111,6 +123,18 @@ export default function ClassHubPage() {
         </Alert>
       ) : null}
       <ClassHub key={classId} classId={classId} tab={readHubTab(tab)} />
+      {showSourcePage && previewDocumentId !== null && previewPage !== null ? (
+        <DocumentPagePreview
+          classId={classId}
+          documentId={previewDocumentId}
+          page={previewPage}
+          onClose={() => {
+            const query = new URLSearchParams(searchParams)
+            query.delete('source-page')
+            router.replace(`/classes/${classId}?${query.toString()}`, { scroll: false })
+          }}
+        />
+      ) : null}
     </>
   )
 }

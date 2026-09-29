@@ -155,6 +155,7 @@ export function DocumentRow({
   const requested = live?.recognize ?? document.recognize
   const errorMessage = live?.error_message ?? document.error_message
   const refreshState = live?.refresh_state ?? document.refresh_state
+  const textReadable = live?.text_readable ?? document.text_readable ?? state === 'ready'
 
   // Announce the transition once, not on every poll that still reports `ready`.
   const announced = useRef(isTerminal(document.state))
@@ -176,7 +177,7 @@ export function DocumentRow({
 
   const busy = !isTerminal(state)
   const managing = mode === 'manage'
-  const selectable = managing || state === 'ready'
+  const selectable = managing || state === 'ready' || textReadable
   const selectLabel = managing
     ? `${selected ? 'Deselect' : 'Select'} ${document.filename}`
     : selectable
@@ -238,7 +239,7 @@ export function DocumentRow({
               {partialCoverage ? (
                 <span className="text-info-text text-xs">Partly readable</span>
               ) : (
-                <StateIndicator state={state} />
+                <StateIndicator state={state} textReadable={textReadable} />
               )}
             </span>
           </span>
@@ -265,7 +266,7 @@ export function DocumentRow({
                 conversation, and a handoff link back into the same mounted chat route
                 would change the URL without remounting the page, so its params would be
                 stripped without ever being applied. */}
-            {state === 'ready' ? (
+            {state === 'ready' || textReadable ? (
               <>
                 {managing ? (
                   <DropdownMenuItem asChild>
@@ -275,7 +276,7 @@ export function DocumentRow({
                     </Link>
                   </DropdownMenuItem>
                 ) : null}
-                {onPractice ? (
+                {onPractice && state === 'ready' ? (
                   <DropdownMenuItem onSelect={() => onPractice(document)}>
                     <ListChecks />
                     Make practice questions
@@ -411,6 +412,7 @@ export function DocumentRow({
       {state === 'failed' ? (
         <div className="mt-2 flex items-center gap-2 pl-6">
           <p className="text-danger-text text-xs">
+            {textReadable ? 'Text is readable for chat; semantic indexing failed. ' : null}
             {errorMessage ?? 'Lyra could not finish reading this document. Retry it.'}
           </p>
           <Button variant="outline" onClick={() => onRetry(document.id)}>
@@ -422,7 +424,7 @@ export function DocumentRow({
   )
 }
 
-function StateIndicator({ state }: { state: DocumentState }) {
+function StateIndicator({ state, textReadable }: { state: DocumentState; textReadable: boolean }) {
   // Status is a word, never a bare icon (design system section 10). Ready is the nominal
   // state, so it prints quietly rather than in a color; only the exceptions take one.
   if (state === 'ready') {
@@ -442,7 +444,7 @@ function StateIndicator({ state }: { state: DocumentState }) {
   if (state === 'failed') {
     return (
       <StatusWord tone="warn" icon={<AlertCircle />}>
-        failed
+        {textReadable ? 'text readable' : 'failed'}
       </StatusWord>
     )
   }

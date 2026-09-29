@@ -37,7 +37,7 @@ const TRAIL: WriterActivity[] = [
 ]
 
 describe('the activity trail on a message', () => {
-  it('shows agent tool names, targets, and failures directly in the conversation', () => {
+  it('keeps the source-specific agent trail in expandable reply details', async () => {
     const activity: AgentChatActivity[] = [
       {
         audit_id: 'one',
@@ -57,13 +57,43 @@ describe('the activity trail on a message', () => {
         target_kind: null,
         target_id: null,
       },
+      {
+        audit_id: 'three',
+        tool: 'read_document_page',
+        capability: 'document_read',
+        effect: 'database_read',
+        state: 'succeeded',
+        target_kind: 'document',
+        target_id: '7',
+        class_id: 1,
+        sources: [
+          {
+            document_id: 7,
+            filename: 'signals.pdf',
+            page_number: 5,
+            text_start: 0,
+            text_end: 2600,
+            text_length: 7500,
+          },
+        ],
+        detail: 'More source text available',
+        has_more: true,
+      },
     ]
     renderRow(<MessageRow message={message({ tool_activity: activity })} agent />)
+    expect(screen.queryByLabelText('What Lyra did for this reply')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Details' }))
     const trail = screen.getByLabelText('What Lyra did for this reply')
     expect(trail).toBeVisible()
     expect(trail).toHaveTextContent('read workspace file · notes/chapter.md')
     expect(trail).toHaveTextContent('search web')
     expect(trail).toHaveTextContent('Refused')
+    expect(trail).toHaveTextContent('signals.pdf p. 5 chars 1–2600')
+    expect(trail).toHaveTextContent('More source text available')
+    expect(screen.getByRole('link', { name: 'signals.pdf p. 5' })).toHaveAttribute(
+      'href',
+      '/#/classes/1?tab=files&lyra-anchor=document-7&source-page=5',
+    )
   })
 
   it('keeps a settled trail collapsed by default, behind one Details disclosure', async () => {

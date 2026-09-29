@@ -218,6 +218,26 @@ function defaultErrorFactory(status: number, payload: unknown | undefined): ApiE
 function isAgentChatActivity(payload: unknown): payload is AgentChatActivity {
   if (!payload || typeof payload !== 'object') return false
   const value = payload as Record<string, unknown>
+  const sourceValid = (source: unknown) => {
+    if (!source || typeof source !== 'object') return false
+    const item = source as Record<string, unknown>
+    return (
+      Number.isSafeInteger(item.document_id) &&
+      Number(item.document_id) > 0 &&
+      typeof item.filename === 'string' &&
+      item.filename.length <= 255 &&
+      (item.page_number === undefined ||
+        item.page_number === null ||
+        (Number.isSafeInteger(item.page_number) && Number(item.page_number) > 0)) &&
+      (item.text_start === undefined ||
+        (Number.isSafeInteger(item.text_start) && Number(item.text_start) >= 0)) &&
+      (item.text_end === undefined ||
+        (Number.isSafeInteger(item.text_end) && Number(item.text_end) >= 0)) &&
+      (item.text_length === undefined ||
+        (Number.isSafeInteger(item.text_length) && Number(item.text_length) >= 0)) &&
+      (item.evidence === undefined || typeof item.evidence === 'string')
+    )
+  }
   return (
     typeof value.audit_id === 'string' &&
     typeof value.tool === 'string' &&
@@ -225,7 +245,18 @@ function isAgentChatActivity(payload: unknown): payload is AgentChatActivity {
     typeof value.effect === 'string' &&
     typeof value.state === 'string' &&
     (typeof value.target_kind === 'string' || value.target_kind === null) &&
-    (typeof value.target_id === 'string' || value.target_id === null)
+    (typeof value.target_id === 'string' || value.target_id === null) &&
+    (value.class_id === undefined ||
+      value.class_id === null ||
+      (Number.isSafeInteger(value.class_id) && Number(value.class_id) > 0)) &&
+    (value.sources === undefined ||
+      (Array.isArray(value.sources) &&
+        value.sources.length <= 3 &&
+        value.sources.every(sourceValid))) &&
+    (value.detail === undefined ||
+      value.detail === null ||
+      (typeof value.detail === 'string' && value.detail.length <= 500)) &&
+    (value.has_more === undefined || typeof value.has_more === 'boolean')
   )
 }
 

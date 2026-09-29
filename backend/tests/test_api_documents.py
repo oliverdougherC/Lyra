@@ -95,6 +95,26 @@ def _embedded_chunk(db: sqlite3.Connection, document_id: int, class_id: int) -> 
     return chunk_id
 
 
+def test_failed_index_reports_readable_text_separately_from_semantic_readiness(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id, state="failed")
+    db.execute(
+        "insert into document_read_pages (document_id, page_number, generation, content) "
+        "values (?, 1, 'synthetic', 'Problem 3 is readable')",
+        (document_id,),
+    )
+    db.commit()
+
+    listed = client.get(f"/api/classes/{class_id}/documents")
+    status = client.get(f"/api/documents/{document_id}/status")
+    assert listed.status_code == status.status_code == 200
+    assert listed.json()[0]["text_readable"] is True
+    assert listed.json()[0]["semantic_ready"] is False
+    assert status.json()["text_readable"] is True
+    assert status.json()["semantic_ready"] is False
+
+
 def test_move_refiles_the_document_and_queues_a_reindex(
     client: TestClient, db: sqlite3.Connection, class_id: int, other_class_id: int, no_worker: list
 ) -> None:

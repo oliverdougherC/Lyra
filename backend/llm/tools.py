@@ -212,6 +212,10 @@ class ToolStopGate:
             return False
 
 
+class ToolContinuationError(Exception):
+    """A safe refusal to send the next provider request after a tool result."""
+
+
 @dataclass(frozen=True)
 class ContextBudget:
     """The window a growing tool loop must keep its next request inside.
@@ -656,6 +660,8 @@ async def run_tool_loop(
     registry: dict[str, ToolDefinition] | None = None,
     on_call: Callable[[RecordedCall], None] | None = None,
     on_delta: Callable[[StreamDelta], None] | None = None,
+    after_call: Callable[[RecordedCall], list[dict[str, object]]] | None = None,
+    before_request: Callable[[], None] | None = None,
     context_budget: ContextBudget | None = None,
     stop_gate: ToolStopGate | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -727,6 +733,8 @@ async def run_tool_loop(
                 REGISTRY if registry is None else registry,
                 on_call,
                 on_delta,
+                after_call,
+                before_request,
                 context_budget,
                 stop_gate,
                 transport,
@@ -749,6 +757,8 @@ async def _drive(
     registry: dict[str, ToolDefinition],
     on_call: Callable[[RecordedCall], None] | None,
     on_delta: Callable[[StreamDelta], None] | None,
+    after_call: Callable[[RecordedCall], list[dict[str, object]]] | None,
+    before_request: Callable[[], None] | None,
     context_budget: ContextBudget | None,
     stop_gate: ToolStopGate | None,
     transport: httpx.AsyncBaseTransport | None,
@@ -803,6 +813,16 @@ async def _drive(
                 stopped=CONTEXT_OVERFLOW,
                 detail=_OVERFLOW_DETAIL,
             )
+        if before_request is not None:
+            try:
+                before_request()
+            except ToolContinuationError as exc:
+                return ToolLoopResult(
+                    content="",
+                    calls=tuple(calls),
+                    stopped=UPSTREAM_FAILED,
+                    detail=str(exc),
+                )
         try:
             if round_index and on_delta is not None:
                 on_delta(StreamDelta("reset", ""))
@@ -942,6 +962,16 @@ async def _drive(
                     # Narration is an observer, never a participant: a broken callback
                     # is logged and the pass continues as if it were absent.
                     logger.exception("on_call callback raised; the loop continues")
+            if after_call is not None:
+                try:
+                    conversation.extend(after_call(recorded))
+                except ToolContinuationError as exc:
+                    return ToolLoopResult(
+                        content="",
+                        calls=tuple(calls),
+                        stopped=UPSTREAM_FAILED,
+                        detail=str(exc),
+                    )
             # This result may be the one that fills the window. Stop the moment it does,
             # before dispatching the next call in this same assistant response: those calls
             # would run only to have their results discarded with a transcript that can no

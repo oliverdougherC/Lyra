@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from '@/router/link'
 import { AlertTriangle, Check, ChevronRight, Copy, RefreshCw, X } from 'lucide-react'
 
 import { activityLabel } from '@/components/chat/activity-label'
@@ -161,12 +162,9 @@ export function MessageRow({
             {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
           </>
         ) : agent ? (
-          <>
-            {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
-            {message.thinking.trim() ? (
-              <TurnDetails thinking={message.thinking} trail={[]} />
-            ) : null}
-          </>
+          message.thinking.trim() || trail.length > 0 ? (
+            <TurnDetails thinking={message.thinking} trail={trail} />
+          ) : null
         ) : message.thinking.trim() || trail.length > 0 ? (
           <TurnDetails thinking={message.thinking} trail={trail} />
         ) : null}
@@ -239,7 +237,33 @@ function ActivityTrail({ entries }: { entries: ToolActivity[] }) {
               {agentEntry ? (
                 <>
                   <span className="font-medium">{entry.tool.replaceAll('_', ' ')}</span>
-                  {entry.target_id ? <span className="font-mono"> · {entry.target_id}</span> : null}
+                  {entry.sources?.slice(0, 3).map((source, sourceIndex) => (
+                    <span key={`${source.document_id}-${source.page_number ?? 0}-${sourceIndex}`}>
+                      {' · '}
+                      {entry.class_id ? (
+                        <Link
+                          href={`/classes/${entry.class_id}?tab=files&lyra-anchor=document-${source.document_id}${source.page_number ? `&source-page=${source.page_number}` : ''}`}
+                          className="text-text-secondary underline decoration-dotted underline-offset-2 hover:text-foreground"
+                        >
+                          {source.filename}
+                          {source.page_number ? ` p. ${source.page_number}` : ''}
+                        </Link>
+                      ) : (
+                        <span>
+                          {source.filename}
+                          {source.page_number ? ` p. ${source.page_number}` : ''}
+                        </span>
+                      )}
+                      {source.text_start !== undefined && source.text_end !== undefined
+                        ? ` chars ${source.text_start + 1}–${source.text_end}`
+                        : null}
+                      {source.evidence === 'image' ? ' image' : null}
+                    </span>
+                  ))}
+                  {!entry.sources?.length && entry.target_id ? (
+                    <span className="font-mono"> · {entry.target_id}</span>
+                  ) : null}
+                  {entry.detail ? <span> · {entry.detail}</span> : null}
                 </>
               ) : (
                 entry.label

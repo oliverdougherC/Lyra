@@ -76,12 +76,14 @@ export function SourceContext({
       .sort((a, b) => a.filename.localeCompare(b.filename))
     // Ready material is what the question can be about; the rest stay visible so a file
     // that just landed does not look lost, but they are not selectable until they can be.
-    const ready = list.filter((document) => document.state === 'ready')
-    const rest = list.filter((document) => document.state !== 'ready')
+    const ready = list.filter((document) => document.state === 'ready' || document.text_readable)
+    const rest = list.filter((document) => document.state !== 'ready' && !document.text_readable)
     return [...ready, ...rest]
   }, [documents, query])
 
-  const readyCount = documents?.filter((document) => document.state === 'ready').length ?? 0
+  const readableCount =
+    documents?.filter((document) => document.state === 'ready' || document.text_readable).length ??
+    0
 
   const value = selectedId === null ? ALL : String(selectedId)
 
@@ -138,7 +140,9 @@ export function SourceContext({
         ) : null}
         {selected && selected.state !== 'ready' ? (
           <p className="text-info-text px-3 py-2 text-xs">
-            {STATE_NOTES[selected.state] ?? 'This file is not ready to read.'}
+            {selected.text_readable
+              ? 'Text is readable; semantic indexing is unavailable.'
+              : (STATE_NOTES[selected.state] ?? 'This file is not ready to read.')}
           </p>
         ) : null}
 
@@ -206,8 +210,8 @@ export function SourceContext({
                     id={`${ALL}-${ALL}`}
                     label="All material"
                     checked={selectedId === null}
-                    note={readyCount > 0 ? `${readyCount} ready` : null}
-                    disabled={readyCount === 0}
+                    note={readableCount > 0 ? `${readableCount} readable` : null}
+                    disabled={readableCount === 0}
                   />
                   {visible.map((document) => (
                     <SourceRow
@@ -215,14 +219,18 @@ export function SourceContext({
                       id={`${ALL}-${document.id}`}
                       label={document.filename}
                       checked={document.id === selectedId}
-                      note={STATE_NOTES[document.state] ?? null}
-                      disabled={document.state !== 'ready'}
+                      note={
+                        document.text_readable && document.state !== 'ready'
+                          ? 'Text readable; index unavailable'
+                          : (STATE_NOTES[document.state] ?? null)
+                      }
+                      disabled={document.state !== 'ready' && !document.text_readable}
                     />
                   ))}
                 </RadioGroup>
               )}
             </div>
-            {readyCount === 0 && documents.length > 0 && !documentsError ? (
+            {readableCount === 0 && documents.length > 0 && !documentsError ? (
               <p className="text-text-tertiary border-t px-3 py-2 text-xs">
                 Nothing is ready to read yet. Files Lyra has finished reading can be chosen here.
               </p>

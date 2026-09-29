@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sqlite3
 import threading
@@ -18,11 +19,13 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_agent_chat
 from backend.api.routes_agent_chat import AgentTurnCost
+from backend.config import settings
 from backend.core import (
     agent_attempts,
     agent_store,
     agent_tools,
     app_settings,
+    ingestion,
     sessions,
     web_research,
 )
@@ -141,6 +144,167 @@ def test_native_matrix_layout_is_sent_as_page_image_when_text_is_insufficient(
     assert isinstance(user_parts, list)
     assert any(part.get("type") == "image_url" for part in user_parts)
     assert any("page 1" in str(part.get("text")) for part in user_parts)
+
+
+def test_classwide_late_page_image_reaches_the_next_provider_round(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool-discovered visual page is delivered as image bytes, not a file path or claim."""
+    pdf = tmp_path / "late-diagram.pdf"
+    source = pymupdf.open()
+    for number in range(1, 6):
+        page = source.new_page()
+        if number != 5:
+            page.insert_text((72, 72), f"Worksheet page {number}")
+        if number == 5:
+            page.draw_rect(pymupdf.Rect(80, 100, 360, 340), color=(0, 0, 0))
+    source.save(pdf)
+    source.close()
+    db.execute(
+        "update documents set stored_path = ?, pages_total = 5 where id = 7",
+        (str(pdf),),
+    )
+    db.execute(
+        "insert into document_pages (document_id, page_number, state) values (7, 5, 'scanned')"
+    )
+    db.execute("update settings set vision_supported = 1, context_window = 16384 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    requests: list[list[dict[str, object]]] = []
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        messages: list[dict[str, object]],
+        schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        requests.append(messages)
+        names = {str(item["function"]["name"]) for item in schemas}
+        assert "read_document_image" in names
+        if len(requests) == 1:
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "page", "read_document_page", '{"document_id":7,"page_number":5}'
+                    ),
+                ),
+            )
+        if len(requests) == 2:
+            page_result = json.loads(str(messages[-1]["content"]))
+            assert page_result["needs_image"] is True
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "image", "read_document_image", '{"document_id":7,"page_number":5}'
+                    ),
+                ),
+            )
+        visual = [
+            item
+            for item in messages
+            if item["role"] == "user" and isinstance(item["content"], list)
+        ]
+        assert len(visual) == 1
+        parts = visual[0]["content"]
+        assert any("document 7, physical page 5" in str(part.get("text")) for part in parts)
+        image = next(part["image_url"]["url"] for part in parts if part.get("type") == "image_url")
+        assert base64.b64decode(str(image).split(",", 1)[1]).startswith(b"\x89PNG\r\n\x1a\n")
+        return routes_agent_chat.llm_client.AssistantMessage("Page five contains a diagram.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tools.run_tool_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "What about part b?"},
+    )
+    assert response.status_code == 200, response.text
+    assert len(requests) == 3
+    image_activity = [
+        event for event in response.json()["activity"] if event["tool"] == "read_document_image"
+    ]
+    assert len(image_activity) == 1
+    assert image_activity[0]["sources"] == [
+        {"document_id": 7, "filename": "signals.pdf", "page_number": 5, "evidence": "image"}
+    ]
+    page_activity = next(
+        event for event in response.json()["activity"] if event["tool"] == "read_document_page"
+    )
+    assert page_activity["detail"] == "Page image needed"
+    assert page_activity["sources"][0]["page_number"] == 5
+    persisted = sessions.list_messages(db, session_id)
+    assert persisted[-1]["tool_activity"] == response.json()["activity"]
+
+
+def test_failed_first_index_still_sends_actual_worksheet_text_to_provider(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worksheet = settings.uploads_dir / "embedding-offline.md"
+    worksheet.write_text(
+        "Problem 3: ALPHA_SENTINEL is the quantity to compare. " + "signal " * 80,
+        encoding="utf-8",
+    )
+    db.execute(
+        "update documents set stored_path = ?, filename = ?, mime = ?, "
+        "byte_size = ?, state = 'pending' "
+        "where id = 7",
+        (str(worksheet), worksheet.name, "text/markdown", worksheet.stat().st_size),
+    )
+    db.execute("update settings set context_window = 16384 where id = 1")
+    db.commit()
+    monkeypatch.setattr(
+        ingestion,
+        "embed_documents",
+        lambda _texts: (_ for _ in ()).throw(RuntimeError("embedding helper stopped")),
+    )
+    ingestion.run_ingestion(7)
+    assert db.execute("select state from documents where id = 7").fetchone()[0] == "failed"
+    assert db.execute("select count(*) from chunks where document_id = 7").fetchone()[0] == 0
+
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    requests: list[list[dict[str, object]]] = []
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        messages: list[dict[str, object]],
+        _schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        requests.append(messages)
+        if len(requests) == 1:
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "find", "search_documents", '{"query":"ALPHA_SENTINEL"}'
+                    ),
+                ),
+            )
+        result = json.loads(str(messages[-1]["content"]))
+        assert "ALPHA_SENTINEL" in str(result["sources"])
+        assert result["sources"][0]["page_number"] == 1
+        return routes_agent_chat.llm_client.AssistantMessage("The worksheet names ALPHA_SENTINEL.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tools.run_tool_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Find the quantity in problem 3", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert len(requests) == 2
 
 
 def test_required_matrix_figure_without_vision_refuses_before_provider(

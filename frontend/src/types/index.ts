@@ -74,6 +74,8 @@ export interface DocumentRead {
    * which counts pages that had no text to find, and both can be true at once.
    */
   pages_failed: number
+  text_readable?: boolean
+  semantic_ready?: boolean
   page_coverage?: DocumentPageCoverage[]
   coverage_complete?: boolean
   refresh_state?: string | null
@@ -90,6 +92,8 @@ export interface DocumentStatus {
   pages_done: number
   pages_skipped: number
   pages_failed: number
+  text_readable?: boolean
+  semantic_ready?: boolean
   page_coverage?: DocumentPageCoverage[]
   coverage_complete?: boolean
   refresh_state?: string | null
@@ -435,6 +439,20 @@ export interface AgentChatActivity {
   state: string
   target_kind: string | null
   target_id: string | null
+  class_id?: number | null
+  sources?: {
+    document_id: number
+    filename: string
+    page_number?: number | null
+    text_start?: number
+    text_end?: number
+    text_length?: number
+    state?: string
+    semantic_ready?: boolean
+    evidence?: string
+  }[]
+  detail?: string | null
+  has_more?: boolean
 }
 
 export interface AgentChatResult {
