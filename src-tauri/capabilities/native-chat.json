@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "native-chat-capability",
+  "description": "The transcript child view can size its content and report bounded actions.",
+  "webviews": ["native-chat-*"],
+  "permissions": ["allow-native-chat-set-content-height", "allow-native-chat-action"]
+}

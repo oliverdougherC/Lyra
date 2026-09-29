@@ -249,6 +249,15 @@ use a memoized full-document renderer with adaptive publication scheduling. Edit
 rescan affected textblocks; comment resolution shares normalized document indexes. See
 [optimization evidence](optimization-evidence-20260908.md) for measurements and limits.
 
+On macOS, the class agent chat can hand its transcript to an AppKit `NSScrollView`.
+Short child WebKit views still render the existing React message rows, Markdown, math,
+links, and selection; AppKit owns the shared scroll position. The main view retains
+conversation state, navigation, and the composer. The child views receive only a
+bounded transcript snapshot and have capability access to content sizing and chat
+actions. Large individual sections or exceptionally long histories return to the
+ordinary chat view. Native acceptance uses a separate synthetic app identity and
+profile so the normal installed app and its WebKit store stay untouched.
+
 Pre-migration backups retain consistent SQLite snapshots and private-file validation while
 copying and hashing in bounded chunks. Their 512 MiB source-file ceiling is independent of
 the upload route's limit. A failed verification or copy still prevents migration.

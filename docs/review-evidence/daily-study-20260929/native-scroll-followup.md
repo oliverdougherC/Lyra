@@ -48,3 +48,26 @@ identified diagnostic bundle was signed with the established development identit
 and passed strict bundle verification. A physical trackpad sample and
 candidate-equivalent production-identity acceptance remain outstanding. PLA-570
 must stay open until actual chat presentation and input latency meet its target.
+
+## Segmented AppKit review candidate
+
+The subsequent macOS-only review candidate keeps React's existing message
+renderer but places short transcript sections in one AppKit scroll view. A
+single full-height child WebKit view stopped painting near the bottom of a
+35,768-point synthetic transcript. Four shorter child views inside section
+containers painted the final answer and the boundaries between sections.
+The isolated test used 128 synthetic message rows, a separate bundle ID and
+backend profile, and null Keyring; the normal installation remained running
+and untouched. Light and dark themes, leaving and reopening the chat, and
+native scrollbar movement were checked in the isolated app.
+
+With the internal display at 120 Hz on AC power, a three-second native
+scroll driver advanced at 360 ticks. Window-only ScreenCaptureKit sampling
+of the actual rich chat captured 330 changed transcript frames in 2.995
+seconds (about 110 per second), with an 8.69 ms median and 12.02 ms 95th
+percentile between visible changes; one interval exceeded 16 ms. The capture
+itself completed 946 frames over about 8.4 seconds, below 120 per second,
+so this evidence demonstrates substantial improvement over half-rate
+presentation but does not certify that every 120 Hz display refresh painted
+a distinct frame. Physical trackpad feel and exact production-identity
+acceptance remain open gates for PLA-570.
