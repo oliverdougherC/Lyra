@@ -23,7 +23,6 @@ import { startsTimeGapBetween, type SettledHandoff } from '@/components/chat/set
 import { isProcessingStage, type ProcessingStage } from '@/components/chat/thinking-indicator'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -2012,7 +2011,7 @@ export function ChatPane({
   const contentRef = useRef<HTMLDivElement>(null)
   const [following, setFollowing] = useState(true)
   const followingRef = useRef(true)
-  const userScrollAtRef = useRef(0)
+  const userScrollAtRef = useRef(Number.NEGATIVE_INFINITY)
 
   useEffect(() => {
     viewportRef.current = inline ? (scrollViewportRef?.current ?? null) : ownViewportRef.current
@@ -2055,18 +2054,26 @@ export function ChatPane({
   useEffect(() => {
     const node = viewportRef.current
     if (!node) return
+    let scrollFrame: number | null = null
 
     const noteUserScroll = () => {
       userScrollAtRef.current = performance.now()
     }
-    const onScroll = () => {
+    const updateFollowing = () => {
+      scrollFrame = null
       const atBottom = distanceBelowFold() <= STICK_THRESHOLD_PX
       // Arriving at the bottom always resumes following, however it happened. Leaving it
       // only counts when the reader drove it.
       const byUser = performance.now() - userScrollAtRef.current < USER_SCROLL_WINDOW_MS
       if (!atBottom && !byUser) return
+      if (followingRef.current === atBottom) return
       followingRef.current = atBottom
       setFollowing(atBottom)
+    }
+    // Native scrolling can deliver several events between WebKit's JS callbacks. The
+    // distance read may require layout, so do it once after those events have settled.
+    const onScroll = () => {
+      if (scrollFrame === null) scrollFrame = requestAnimationFrame(updateFollowing)
     }
 
     node.addEventListener('scroll', onScroll, { passive: true })
@@ -2074,6 +2081,7 @@ export function ChatPane({
     node.addEventListener('touchmove', noteUserScroll, { passive: true })
     node.addEventListener('keydown', noteUserScroll)
     return () => {
+      if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
       node.removeEventListener('scroll', onScroll)
       node.removeEventListener('wheel', noteUserScroll)
       node.removeEventListener('touchmove', noteUserScroll)
@@ -2355,9 +2363,18 @@ export function ChatPane({
       )}
 
       <div className="relative min-h-0 flex-1">
-        <ScrollArea viewportRef={ownViewportRef} className="h-full">
+        {/* Keep transcript scrolling in the platform scroll view. The custom scrollbar
+            keeps its thumb in sync through JS; this leaves a long conversation's scroll
+            path with WebKit and the system scrollbar. */}
+        <div
+          ref={ownViewportRef}
+          className="h-full overflow-y-auto"
+          role="region"
+          aria-label="Conversation"
+          tabIndex={0}
+        >
           {conversation}
-        </ScrollArea>
+        </div>
 
         {!following && rowCount > 0 ? (
           <Button
