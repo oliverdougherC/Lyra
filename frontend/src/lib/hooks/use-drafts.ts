@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
+import { OBSERVATION_ERROR_POLL_MS } from '@/lib/hooks/polling-policy'
 import { solutionKeys } from '@/lib/hooks/use-solutions'
 import { isGenerating } from '@/lib/hooks/use-study'
 import type {
@@ -51,8 +52,12 @@ export function useDrafts(classId: number, enabled = true) {
     queryKey: draftKeys.list(classId),
     queryFn: ({ signal }) => api.listDrafts(classId, signal),
     enabled: enabled && Number.isFinite(classId),
-    refetchInterval: (query) => draftListPollInterval(query.state.data),
-    refetchIntervalInBackground: true,
+    refetchInterval: (query) =>
+      query.state.error ? OBSERVATION_ERROR_POLL_MS : draftListPollInterval(query.state.data),
+    // Hidden pauses the UI's observation (the server keeps running the pass; a paused
+    // refetch never cancels it); one read on visibility return reconciles. Visible-but-
+    // unfocused keeps observing - the focus manager reads visibility, not window focus.
+    refetchOnWindowFocus: 'always',
   })
 }
 
@@ -87,11 +92,12 @@ export function useDraftStatus(draftId: number, enabled = true) {
     queryKey: draftKeys.status(draftId),
     queryFn: ({ signal }) => api.getDraftStatus(draftId, signal),
     enabled: enabled && Number.isFinite(draftId),
-    refetchInterval: draftPollInterval,
-    // A pass keeps landing sections while the student is off in another window, and
-    // the editor follows this poll: without background refetches they would come back
-    // to a strip and a document frozen at whatever the last focused moment saw.
-    refetchIntervalInBackground: true,
+    refetchInterval: (query) =>
+      query.state.error ? OBSERVATION_ERROR_POLL_MS : draftPollInterval(query),
+    // The pass keeps landing sections on the server while the window is hidden (a paused
+    // refetch never cancels it); one read on visibility return reconciles the editor.
+    // Visible-but-unfocused keeps observing - the focus manager reads visibility.
+    refetchOnWindowFocus: 'always',
   })
 }
 
@@ -135,8 +141,13 @@ export function useLiveDraftSuggestion(draftId: number, enabled = true, passRunn
     queryKey: draftKeys.liveSuggestion(draftId),
     queryFn: ({ signal }) => api.getLiveDraftSuggestion(draftId, signal),
     enabled: enabled && Number.isFinite(draftId),
-    refetchInterval: (query) => liveSuggestionPollInterval(query, passRunning),
-    refetchIntervalInBackground: true,
+    refetchInterval: (query) =>
+      query.state.error
+        ? OBSERVATION_ERROR_POLL_MS
+        : liveSuggestionPollInterval(query, passRunning),
+    // The staged pass runs on the server while hidden; hidden pauses the UI's observation
+    // and one read on visibility return reconciles. Visible-but-unfocused keeps observing.
+    refetchOnWindowFocus: 'always',
   })
 }
 
@@ -288,8 +299,12 @@ export function useComments(draftId: number, enabled = true, polling = false) {
     queryKey: draftKeys.comments(draftId),
     queryFn: ({ signal }) => api.listComments(draftId, signal),
     enabled: enabled && Number.isFinite(draftId),
-    refetchInterval: polling ? 2_000 : false,
-    refetchIntervalInBackground: true,
+    refetchInterval: (query) =>
+      query.state.error ? OBSERVATION_ERROR_POLL_MS : polling ? 2_000 : false,
+    // The review commits findings on the server while hidden; hidden pauses the tab's
+    // observation and one read on visibility return reconciles the threads. Visible-but-
+    // unfocused keeps observing.
+    refetchOnWindowFocus: 'always',
   })
 }
 

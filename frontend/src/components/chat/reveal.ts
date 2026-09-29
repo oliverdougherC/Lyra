@@ -48,6 +48,8 @@
 
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 
+import { chatWork } from '@/components/chat/work-counters'
+
 /** Marks one unit of the cascade. Its value is the key the schedule is remembered under. */
 export const REVEAL_ATTRIBUTE = 'data-stream-word'
 
@@ -426,6 +428,7 @@ export function useRevealCascade({
     const nodes = Array.from(
       rootRef.current?.querySelectorAll<HTMLElement>(`[${REVEAL_ATTRIBUTE}]`) ?? [],
     )
+    chatWork.revealNodeVisits += nodes.length
     // List items are marker units: their content units reveal, and the marker rides the
     // first one. Everything else is content, in document reading order.
     const items = nodes.filter((node) => node.tagName === 'LI')

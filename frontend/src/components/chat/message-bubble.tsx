@@ -1,10 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import Link from '@/router/link'
 import { AlertTriangle, Check, ChevronRight, Copy, RefreshCw, X } from 'lucide-react'
 
 import { activityLabel } from '@/components/chat/activity-label'
+import { chatWork } from '@/components/chat/work-counters'
 import { LyraAvatar } from '@/components/chat/lyra-mark'
 import { ReasoningTrace } from '@/components/chat/reasoning-trace'
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
@@ -82,9 +83,19 @@ type MessageRowProps = {
   selectionRestore?: { anchor: number; focus: number } | null
   canRetry?: boolean
   onRetry?: () => void
+  /**
+   * The live reasoning disclosure's open state, reported up at the boundary (PLA-509):
+   * the pane flushes the held thought the moment the reader opens it, and a closed
+   * disclosure no longer receives full-text publications. Only the live row passes this;
+   * settled rows keep their full text in the message itself.
+   */
+  onReasoningOpenChange?: (open: boolean) => void
 }
 
-export function MessageRow({
+// Memoized at the row boundary (PLA-510): a settled row's props are stable across
+// composer keystrokes and live-turn publications, so the whole settled transcript stops
+// re-rendering with every keystroke and reasoning delta — only the live row commits.
+export const MessageRow = memo(function MessageRow({
   message,
   className,
   startsTimeGap,
@@ -99,7 +110,10 @@ export function MessageRow({
   selectionRestore,
   canRetry,
   onRetry,
+  onReasoningOpenChange,
 }: MessageRowProps) {
+  chatWork.rowRenders += 1
+  if (streaming) chatWork.liveRowRenders += 1
   if (message.role === 'user') {
     const agentAttempt = message.agent_attempt
     const writerAttempt = message.writer_attempt
@@ -157,6 +171,7 @@ export function MessageRow({
                 streaming={thinkingNow}
                 startedAt={turnStartedAt}
                 activityLabel={label}
+                onOpenChange={onReasoningOpenChange}
               />
             ) : null}
             {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
@@ -198,7 +213,7 @@ export function MessageRow({
       </div>
     </div>
   )
-}
+})
 
 /**
  * What a writer turn did on its way to the answer, one quiet line per tool call, in the

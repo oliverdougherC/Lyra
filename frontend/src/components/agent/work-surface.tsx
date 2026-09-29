@@ -1,5 +1,6 @@
 'use client'
 
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -15,6 +16,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
+  agentKeys,
   useAgentAccessDismissals,
   useAgentActivity,
   useAgentChanges,
@@ -23,12 +25,17 @@ import {
   useRefreshAgentSession,
   useRegenerateAgentChat,
   useRetryAgentChat,
+  useAgentTurnsLive,
 } from '@/lib/hooks/use-agent'
 import { useMessages } from '@/lib/hooks/use-chat'
 import { ApiError, api } from '@/lib/api'
 import { parseTimestamp } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { AgentAuditEventRead, AgentWorkspaceChangeRead } from '@/types'
+import type {
+  AgentAuditEventRead,
+  AgentCommandRequestRead,
+  AgentWorkspaceChangeRead,
+} from '@/types'
 import { hunksAreStale } from './types'
 import type { AgentToolActivity } from './types'
 
@@ -115,15 +122,49 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     cardPathEntryVisible,
     setCardPathEntryVisible,
   } = useWorkspaceAttach()
-  const activity = useAgentActivity(classId, sessionId)
-  const changes = useAgentChanges(classId, sessionId, Boolean(workspaceData))
-  const commands = useAgentCommands(classId, sessionId, Boolean(workspaceData))
-  const dismissals = useAgentAccessDismissals(classId, sessionId)
+  const queryClient = useQueryClient()
   const dismiss = useDismissAgentAccess(classId, sessionId)
   const refresh = useRefreshAgentSession(classId, sessionId)
   const retryAgentChat = useRetryAgentChat(classId, sessionId)
   const regenerateAgentChat = useRegenerateAgentChat(classId, sessionId)
   const messages = useMessages(sessionId)
+
+  // ── Observation demand (PLA-509) ────────────────────────────────────────────────────
+  // The work queries ask again only while something agent-side is genuinely in motion,
+  // meaning something that changes on its own between asks:
+  //
+  // - a turn that is live: one this surface itself started (retry, the access-
+  //   continuation regenerate - the mutations are pending) or one the chat pane started
+  //   and announced through the owner-scoped turn signal (`useAgentTurnsLive`). A
+  //   composer-initiated turn writes no row until it settles, so only the signal can
+  //   discover it from an empty cache;
+  // - a command actually running: its process will produce an exit code without anyone
+  //   acting.
+  //
+  // What does NOT open the cadence: a pending approval card, a `started` audit event
+  // whose turn has ended, a proposal sitting `pending` or `partially_applied`. Those are
+  // settled user decisions - they move only when the student acts (the approving
+  // mutation invalidates the caches) or a turn runs (the turn signal is live), so a
+  // conversation with open cards or open proposals goes quiet instead of polling
+  // them forever. The dismissal list keeps its one bounded expiry check, and the
+  // window-focus reconciliation is what brings a settled conversation back from a
+  // hidden window. Read from the query cache rather than the hook results below, so
+  // the flag is assembled before the observation hooks consume it.
+  const turnsLive = useAgentTurnsLive(classId, sessionId)
+  const inFlight =
+    retryAgentChat.isPending ||
+    regenerateAgentChat.isPending ||
+    turnsLive ||
+    (
+      queryClient.getQueryData<AgentCommandRequestRead[]>(
+        agentKeys.commands(classId, sessionId ?? -1),
+      ) ?? []
+    ).some((command) => command.state === 'running')
+
+  const activity = useAgentActivity(classId, sessionId, inFlight)
+  const changes = useAgentChanges(classId, sessionId, Boolean(workspaceData), inFlight)
+  const commands = useAgentCommands(classId, sessionId, Boolean(workspaceData), inFlight)
+  const dismissals = useAgentAccessDismissals(classId, sessionId)
 
   const readsReady =
     messages.isSuccess && activity.isSuccess && dismissals.isSuccess && workspaceReady

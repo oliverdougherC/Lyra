@@ -40,6 +40,12 @@ type ReasoningTraceProps = {
   startedAt?: number | null
   /** A concise summary of observable activity; never inferred from the thought. */
   activityLabel?: string
+  /**
+   * The disclosure's open state, reported at the boundary (PLA-509). The pane flushes the
+   * held thought the moment the reader opens the trace, and stops republishing a closed
+   * one — opening must show the current complete reasoning immediately.
+   */
+  onOpenChange?: (open: boolean) => void
 }
 
 export function ReasoningTrace({
@@ -47,9 +53,16 @@ export function ReasoningTrace({
   streaming = false,
   startedAt = null,
   activityLabel = 'Thinking',
+  onOpenChange,
 }: ReasoningTraceProps) {
   const [open, setOpen] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
+  // Report the disclosure state up at the boundary (PLA-509): the pane flushes the held
+  // thought when it opens and stops republishing a closed one. Always starts closed.
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+  }
   // The reader may scroll back through a long thought while it is still being written;
   // following the tail stops the moment they do, and resumes when they return to it.
   const followingRef = useRef(true)
@@ -63,7 +76,7 @@ export function ReasoningTrace({
   if (!text.trim()) return null
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mb-3">
+    <Collapsible open={open} onOpenChange={handleOpenChange} className="mb-3">
       {/* One trigger for both live states. A live thought has to be reachable, or the
           reader is told the model is thinking and given no way to look. The settled
           record lives with the stored message, not here. */}
