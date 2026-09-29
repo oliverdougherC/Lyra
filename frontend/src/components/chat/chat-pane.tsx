@@ -40,11 +40,14 @@ import {
   beginChatDraftSend,
   clearChatDraftIfRevision,
   finishChatDraftSend,
-  hasChatDraftAccepted,
+  getChatDraftSettlementOutcome,
+  getChatDraftSettlementVersion,
+  hasChatDraftRetirementRisk,
   isChatDraftSendPending,
   moveChatDraftSend,
   readChatDraft,
   subscribeChatDraftSends,
+  subscribeChatDraftSettlements,
   writeChatDraft,
 } from '@/lib/chat-draft-store'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
@@ -257,6 +260,7 @@ export function ChatPane({
       const saved = writeChatDraft(scope, value)
       storedDraftRevisionRef.current = saved.record.revision
       setDraftStorageWarning(!saved.durable)
+      setDraftSettlementWarning(hasChatDraftRetirementRisk(scope))
     }
   }, [])
   const sendingRef = useRef<symbol | null>(null)
@@ -350,6 +354,11 @@ export function ChatPane({
     subscribeChatDraftSends,
     () => isChatDraftSendPending(currentDraftScope),
     () => false,
+  )
+  const draftSettlementVersion = useSyncExternalStore(
+    subscribeChatDraftSettlements,
+    () => getChatDraftSettlementVersion(currentDraftScope),
+    () => 0,
   )
   const newestMode = newestSession?.mode
   const activeMode =
@@ -768,7 +777,7 @@ export function ChatPane({
       handoff.scopeVersion === draftScopeVersionRef.current
     if (!previous.initialized) {
       const saved = readChatDraft(nextScope)
-      setDraftSettlementWarning(hasChatDraftAccepted(nextScope))
+      setDraftSettlementWarning(hasChatDraftRetirementRisk(nextScope))
       if (initialAsk !== null && initialAsk !== undefined) {
         changeDraft(initialAsk)
       } else if (saved) {
@@ -792,7 +801,7 @@ export function ChatPane({
         if (submitted?.scope === oldScope && old?.revision === submitted.revision) {
           const saved = writeChatDraft(nextScope, old.value)
           if (saved.durable) {
-            if (!clearChatDraftIfRevision(oldScope, old.revision)) {
+            if (clearChatDraftIfRevision(oldScope, old.revision) === 'failed') {
               submitted.origin = { scope: oldScope, revision: old.revision }
             }
             submitted.scope = nextScope
@@ -810,7 +819,7 @@ export function ChatPane({
     setSending(false)
     const saved = readChatDraft(nextScope)
     storedDraftRevisionRef.current = saved?.revision ?? null
-    setDraftSettlementWarning(hasChatDraftAccepted(nextScope))
+    setDraftSettlementWarning(hasChatDraftRetirementRisk(nextScope))
     draftRevisionRef.current += 1
     const pending = [...pendingSubmittedDraftsRef.current].find(
       (entry) => entry.scope === nextScope && entry.revision === saved?.revision,
@@ -838,6 +847,23 @@ export function ChatPane({
     initialAsk,
     invalidatePublication,
   ])
+
+  // A prior route instance may finish a send while this one stays mounted. Reconcile
+  // the saved revision; a follow-up typed here has a newer revision and survives.
+  useLayoutEffect(() => {
+    if (!draftScopeRef.current.initialized || draftStorageScopeRef.current !== currentDraftScope)
+      return
+    const saved = readChatDraft(currentDraftScope)
+    if (storedDraftRevisionRef.current !== (saved?.revision ?? null)) {
+      storedDraftRevisionRef.current = saved?.revision ?? null
+      draftRevisionRef.current += 1
+      setDraft(saved?.value ?? '')
+    }
+    setDraftSettlementWarning(
+      getChatDraftSettlementOutcome(currentDraftScope) === 'failed' ||
+        hasChatDraftRetirementRisk(currentDraftScope),
+    )
+  }, [currentDraftScope, draftSettlementVersion])
 
   const shownSessionRef = useRef(activeSessionId)
   useLayoutEffect(() => {
@@ -1563,8 +1589,15 @@ export function ChatPane({
                 submittedRecord.origin.scope,
                 submittedRecord.origin.revision,
               )
-            : true
-          setDraftSettlementWarning(!cleared || !originCleared)
+            : 'retired'
+          setDraftSettlementWarning(
+            cleared === 'failed' ||
+              originCleared === 'failed' ||
+              hasChatDraftRetirementRisk(submittedRecord.scope) ||
+              (submittedRecord.origin
+                ? hasChatDraftRetirementRisk(submittedRecord.origin.scope)
+                : false),
+          )
           pendingSubmittedDraftsRef.current.delete(submittedRecord)
         }
       }
