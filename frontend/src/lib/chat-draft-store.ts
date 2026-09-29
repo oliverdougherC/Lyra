@@ -94,11 +94,57 @@ function retireRevision(scope: string, revision: string): boolean {
     const present = new Set(storedRecords(scope).map(({ record }) => record.revision))
     const retained = [...revisions].filter((item) => present.has(item))
     if (retained.length > MAX_RECORDS) return false
-    localStorage.setItem(retiredKey(scope), JSON.stringify(retained))
+    if (retained.length === 0) localStorage.removeItem(retiredKey(scope))
+    else localStorage.setItem(retiredKey(scope), JSON.stringify(retained))
+    reclaimRetiredScope(scope)
     return true
   } catch {
     return false
   }
+}
+
+/** The marker must reach storage before an acknowledged copy is removed. */
+function reclaimRetiredScope(scope: string): number {
+  const retired = durablyRetired(scope)
+  if (retired.size === 0) return 0
+  let removed = 0
+  try {
+    for (const { key, record } of storedRecords(scope)) {
+      if (!retired.has(record.revision)) continue
+      // A different window may have replaced the record since the first scan.
+      if (parse(localStorage.getItem(key))?.revision !== record.revision) continue
+      localStorage.removeItem(key)
+      if (localStorage.getItem(key) === null) removed += 1
+    }
+    const present = new Set(storedRecords(scope).map(({ record }) => record.revision))
+    const needed = [...retired].filter((revision) => present.has(revision))
+    if (needed.length === 0) localStorage.removeItem(retiredKey(scope))
+    else if (needed.length !== retired.size) {
+      localStorage.setItem(retiredKey(scope), JSON.stringify(needed))
+    }
+    if (needed.length === 0) acceptedUncleared.delete(scope)
+    else acceptedUncleared.set(scope, new Set(needed))
+  } catch {
+    // Keep the durable marker for copies that storage would not let us remove.
+  }
+  return removed
+}
+
+/** Run the full sweep only when a new record would meet the unsent cap. */
+function reclaimRetiredRecords(): number {
+  const scopes = new Set<string>()
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index)
+    if (!key?.startsWith(RETIRED_PREFIX)) continue
+    try {
+      scopes.add(decodeURIComponent(key.slice(RETIRED_PREFIX.length)))
+    } catch {
+      // Malformed keys are not evidence that a draft was acknowledged.
+    }
+  }
+  let removed = 0
+  for (const scope of scopes) removed += reclaimRetiredScope(scope)
+  return removed
 }
 
 function acceptedKey(scope: string): string {
@@ -299,7 +345,17 @@ function migrateLegacySelections(): number {
 
 export function readChatDraft(scope: string): RecordValue | null {
   const own = memory.get(scope)
-  if (own && !isChatDraftAccepted(scope, own.revision)) return own
+  if (own && !isChatDraftAccepted(scope, own.revision)) {
+    const source = draftSources.get(scope)
+    if (!source || source.revision !== own.revision) return own
+    try {
+      if (parse(localStorage.getItem(source.key))?.revision === own.revision) return own
+      memory.delete(scope)
+      draftSources.delete(scope)
+    } catch {
+      return own
+    }
+  }
   try {
     const accepted = readAccepted(scope)
     let latest: { key: string; record: RecordValue } | null = null
@@ -342,7 +398,8 @@ export function writeChatDraft(
       if (
         count >= MAX_RECORDS &&
         !source &&
-        count - pruneEmptyScopes() - migrateLegacySelections() >= MAX_RECORDS
+        count - reclaimRetiredRecords() - pruneEmptyScopes() - migrateLegacySelections() >=
+          MAX_RECORDS
       )
         return { record, durable: false }
     }
