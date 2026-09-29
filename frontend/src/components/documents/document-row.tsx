@@ -115,7 +115,9 @@ export function DocumentRow({
   onPractice,
   highlighted = false,
 }: DocumentRowProps) {
-  const polling = !isTerminal(document.state)
+  const polling =
+    !isTerminal(document.state) ||
+    (document.refresh_state != null && document.refresh_state !== 'failed')
   const { data: status } = useDocumentStatus(document.id, polling)
 
   // The row's own poll is finer grained than the list, but only while it is running. It is
@@ -128,19 +130,41 @@ export function DocumentRow({
   const state: DocumentState = live?.state ?? document.state
   const pagesTotal = live?.pages_total ?? document.pages_total
   const pagesDone = live?.pages_done ?? document.pages_done
-  const pagesSkipped = live?.pages_skipped ?? document.pages_skipped
-  const pagesFailed = live?.pages_failed ?? document.pages_failed
+  const pageCoverage = live?.page_coverage ?? document.page_coverage
+  const pagesSkipped = pageCoverage?.length
+    ? pageCoverage.filter((page) => page.state === 'not_attempted').length
+    : (live?.pages_skipped ?? document.pages_skipped)
+  const pagesFailed = pageCoverage?.length
+    ? pageCoverage.filter((page) => page.state === 'recognition_failed').length
+    : (live?.pages_failed ?? document.pages_failed)
+  const coverageComplete = live?.coverage_complete ?? document.coverage_complete
+  const partialCoverage =
+    state === 'ready' &&
+    (coverageComplete === false ||
+      (coverageComplete === undefined && (pagesSkipped > 0 || pagesFailed > 0)))
+  const affectedPages = pageCoverage
+    ?.filter((page) => page.state === 'not_attempted' || page.state === 'recognition_failed')
+    .map((page) => page.page_number)
+  const unindexedPages = pageCoverage
+    ?.filter((page) => page.state === 'readable' && page.indexed === false)
+    .map((page) => page.page_number)
+  const blankPages = pageCoverage
+    ?.filter((page) => page.state === 'blank')
+    .map((page) => page.page_number)
   const stageDetail = live?.stage_detail ?? document.stage_detail
   const requested = live?.recognize ?? document.recognize
   const errorMessage = live?.error_message ?? document.error_message
+  const refreshState = live?.refresh_state ?? document.refresh_state
+  const textReadable = live?.text_readable ?? document.text_readable ?? state === 'ready'
 
   // Announce the transition once, not on every poll that still reports `ready`.
   const announced = useRef(isTerminal(document.state))
   useEffect(() => {
     if (announced.current || !isTerminal(state)) return
     announced.current = true
-    if (state === 'ready') toast.success(`${document.filename} is ready.`)
-  }, [state, document.filename])
+    if (state === 'ready')
+      toast.success(`${document.filename} is ${partialCoverage ? 'partly readable' : 'ready'}.`)
+  }, [state, document.filename, partialCoverage])
 
   // Every poll, not only the last one. The row reads its own stage straight off this query,
   // but everything else on screen - the batch readout's stage verb, the class hub's counts,
@@ -153,7 +177,7 @@ export function DocumentRow({
 
   const busy = !isTerminal(state)
   const managing = mode === 'manage'
-  const selectable = managing || state === 'ready'
+  const selectable = managing || state === 'ready' || textReadable
   const selectLabel = managing
     ? `${selected ? 'Deselect' : 'Select'} ${document.filename}`
     : selectable
@@ -212,7 +236,11 @@ export function DocumentRow({
                   {formatFileSize(document.byte_size)}
                 </span>
               ) : null}
-              <StateIndicator state={state} />
+              {partialCoverage ? (
+                <span className="text-info-text text-xs">Partly readable</span>
+              ) : (
+                <StateIndicator state={state} textReadable={textReadable} />
+              )}
             </span>
           </span>
         </button>
@@ -238,7 +266,7 @@ export function DocumentRow({
                 conversation, and a handoff link back into the same mounted chat route
                 would change the URL without remounting the page, so its params would be
                 stripped without ever being applied. */}
-            {state === 'ready' ? (
+            {state === 'ready' || textReadable ? (
               <>
                 {managing ? (
                   <DropdownMenuItem asChild>
@@ -248,7 +276,7 @@ export function DocumentRow({
                     </Link>
                   </DropdownMenuItem>
                 ) : null}
-                {onPractice ? (
+                {onPractice && state === 'ready' ? (
                   <DropdownMenuItem onSelect={() => onPractice(document)}>
                     <ListChecks />
                     Make practice questions
@@ -331,6 +359,50 @@ export function DocumentRow({
         </div>
       ) : null}
 
+      {partialCoverage && affectedPages && affectedPages.length > 0 ? (
+        <p className="text-text-secondary mt-1 pl-6 text-xs">
+          Pages needing a read: {affectedPages.join(', ')}.
+        </p>
+      ) : null}
+      {partialCoverage &&
+      (!affectedPages || affectedPages.length === 0) &&
+      (!unindexedPages || unindexedPages.length === 0) ? (
+        <p className="text-info-text mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs">
+          <span>Page coverage is incomplete.</span>
+          <button
+            type="button"
+            className="underline underline-offset-2"
+            onClick={() => onRetry(document.id)}
+          >
+            Retry indexing
+          </button>
+        </p>
+      ) : null}
+      {state === 'ready' && unindexedPages && unindexedPages.length > 0 ? (
+        <p className="text-info-text mt-1 flex flex-wrap items-center gap-2 pl-6 text-xs">
+          <span>Readable pages not indexed: {unindexedPages.join(', ')}.</span>
+          <button
+            type="button"
+            className="underline underline-offset-2"
+            onClick={() => onRetry(document.id)}
+          >
+            Retry indexing
+          </button>
+        </p>
+      ) : null}
+      {state === 'ready' && blankPages && blankPages.length > 0 ? (
+        <p className="text-text-tertiary mt-1 pl-6 text-xs">
+          Blank {blankPages.length === 1 ? 'page' : 'pages'}: {blankPages.join(', ')}.
+        </p>
+      ) : null}
+      {state === 'ready' && refreshState ? (
+        <p className="text-text-tertiary mt-1 pl-6 text-xs">
+          {refreshState === 'failed'
+            ? 'Refresh failed. Existing readable pages remain available.'
+            : 'Refreshing pages. Existing readable pages remain available.'}
+        </p>
+      ) : null}
+
       {state === 'ready' ? (
         <div className="mt-2 pl-6">
           <DocumentOutline documentId={document.id} />
@@ -340,6 +412,7 @@ export function DocumentRow({
       {state === 'failed' ? (
         <div className="mt-2 flex items-center gap-2 pl-6">
           <p className="text-danger-text text-xs">
+            {textReadable ? 'Text is readable for chat; semantic indexing failed. ' : null}
             {errorMessage ?? 'Lyra could not finish reading this document. Retry it.'}
           </p>
           <Button variant="outline" onClick={() => onRetry(document.id)}>
@@ -351,7 +424,7 @@ export function DocumentRow({
   )
 }
 
-function StateIndicator({ state }: { state: DocumentState }) {
+function StateIndicator({ state, textReadable }: { state: DocumentState; textReadable: boolean }) {
   // Status is a word, never a bare icon (design system section 10). Ready is the nominal
   // state, so it prints quietly rather than in a color; only the exceptions take one.
   if (state === 'ready') {
@@ -371,7 +444,7 @@ function StateIndicator({ state }: { state: DocumentState }) {
   if (state === 'failed') {
     return (
       <StatusWord tone="warn" icon={<AlertCircle />}>
-        failed
+        {textReadable ? 'text readable' : 'failed'}
       </StatusWord>
     )
   }

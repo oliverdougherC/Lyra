@@ -964,6 +964,26 @@ def test_non_pristine_destination_reports_conflicts(client: TestClient, db) -> N
     assert body["conflicts"]
 
 
+def test_freshly_migrated_destination_is_ready_until_user_data_is_written(
+    client: TestClient,
+) -> None:
+    empty = client.get("/api/desktop-import/status")
+    assert empty.status_code == 200
+    assert empty.json()["destination_ready"] is True
+    assert empty.json()["conflicts"] == []
+
+    conn = connect()
+    try:
+        conn.execute("insert into classes (name, code) values ('Existing', 'EXIST 1')")
+        conn.commit()
+    finally:
+        conn.close()
+    populated = client.get("/api/desktop-import/status")
+    assert populated.status_code == 200
+    assert populated.json()["destination_ready"] is False
+    assert "Database already contains classes records." in populated.json()["conflicts"]
+
+
 def test_reset_discards_stage_idempotently(client: TestClient, tmp_path: Path) -> None:
     checkout = _seed_source_checkout(tmp_path)
     token = _register_selection("reset-source", checkout)

@@ -869,6 +869,17 @@ test('follow-up typing survives activity and response completion without an over
   await composer.press('Enter')
   await expect(page.getByRole('button', { name: 'Stop generating' })).toBeVisible()
   await composer.fill('  Follow-up draft\nwith exact spacing.  ')
+  await composer.evaluate((node) =>
+    node.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  )
+  await expect(composer).toHaveValue('  Follow-up draft\nwith exact spacing.  ')
   await composer.press('Enter')
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { chatCalls: number }).chatCalls))
@@ -896,6 +907,17 @@ test('follow-up typing survives activity and response completion without an over
     fixture.finishChat()
   })
   await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled()
+  await expect(composer).toHaveValue('  Follow-up draft\nwith exact spacing.  ')
+  await composer.evaluate((node) =>
+    node.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  )
   await expect(composer).toHaveValue('  Follow-up draft\nwith exact spacing.  ')
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { chatCalls: number }).chatCalls))

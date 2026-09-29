@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import { MessageRow, type ChatMessage } from '@/components/chat/message-bubble'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { WriterActivity } from '@/types'
+import type { AgentChatActivity, WriterActivity } from '@/types'
 
 function renderRow(node: ReactNode) {
   // MessageActions carries tooltips, and tooltips need their provider.
@@ -37,6 +37,77 @@ const TRAIL: WriterActivity[] = [
 ]
 
 describe('the activity trail on a message', () => {
+  it('keeps the source-specific agent trail in expandable reply details', async () => {
+    const activity: AgentChatActivity[] = [
+      {
+        audit_id: 'one',
+        tool: 'read_workspace_file',
+        capability: 'workspace_read',
+        effect: 'pure',
+        state: 'succeeded',
+        target_kind: 'file',
+        target_id: 'notes/chapter.md',
+      },
+      {
+        audit_id: 'two',
+        tool: 'search_web',
+        capability: 'web',
+        effect: 'network',
+        state: 'refused',
+        target_kind: null,
+        target_id: null,
+      },
+      {
+        audit_id: 'stopped',
+        tool: 'read_document_image',
+        capability: 'document_read',
+        effect: 'database_read',
+        state: 'refused',
+        target_kind: null,
+        target_id: null,
+        detail: 'This turn was stopped.',
+      },
+      {
+        audit_id: 'three',
+        tool: 'read_document_page',
+        capability: 'document_read',
+        effect: 'database_read',
+        state: 'succeeded',
+        target_kind: 'document',
+        target_id: '7',
+        class_id: 1,
+        sources: [
+          {
+            document_id: 7,
+            filename: 'signals.pdf',
+            page_number: 5,
+            text_start: 0,
+            text_end: 2600,
+            text_length: 7500,
+          },
+        ],
+        detail: 'More source text available',
+        has_more: true,
+      },
+    ]
+    renderRow(<MessageRow message={message({ tool_activity: activity })} agent />)
+    expect(screen.queryByLabelText('What Lyra did for this reply')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Details' }))
+    const trail = screen.getByLabelText('What Lyra did for this reply')
+    expect(trail).toBeVisible()
+    expect(trail).toHaveTextContent('read workspace file · notes/chapter.md')
+    expect(trail).toHaveTextContent('search web')
+    expect(trail).toHaveTextContent('Refused')
+    expect(trail).toHaveTextContent('read document image')
+    expect(trail).toHaveTextContent('Stopped')
+    expect(trail).toHaveTextContent('signals.pdf p. 5 chars 1–2600')
+    expect(trail).toHaveTextContent('More source text available')
+    expect(screen.getByRole('link', { name: 'signals.pdf p. 5' })).toHaveAttribute(
+      'href',
+      '/#/classes/1?tab=files&lyra-anchor=document-7&source-document=7&source-page=5',
+    )
+  })
+
   it('keeps a settled trail collapsed by default, behind one Details disclosure', async () => {
     renderRow(<MessageRow message={message({ tool_activity: TRAIL })} />)
 

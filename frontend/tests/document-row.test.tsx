@@ -130,6 +130,32 @@ describe('DocumentRow', () => {
 })
 
 describe('DocumentRow, contextual actions', () => {
+  it('allows chat from readable text when initial semantic indexing failed', async () => {
+    const { wrapper } = createWrapper()
+    render(
+      <DocumentRow
+        document={{ ...documentAt('failed'), text_readable: true, semantic_ready: false }}
+        mode="manage"
+        selected={false}
+        onSelect={noop}
+        onRetry={noop}
+        onRecognize={noop}
+        onDelete={noop}
+        onStatus={noop}
+      />,
+      { wrapper },
+    )
+    expect(screen.getByText('text readable')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Text is readable for chat; semantic indexing failed/),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for lecture-2.pdf' }))
+    expect(await screen.findByRole('menuitem', { name: 'Ask about this' })).toHaveAttribute(
+      'href',
+      '/#/classes/1/chat?session=new&document=7',
+    )
+  })
+
   it('offers Ask about this on the manage surface, where it changes routes', async () => {
     vi.spyOn(api, 'getDocumentStatus').mockResolvedValue(statusAt('ready'))
     const { wrapper } = createWrapper()
@@ -305,6 +331,98 @@ describe('DocumentRow, text recognition', () => {
     expect(screen.queryByText('failed')).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Try those pages' }))
     expect(onRecognize).toHaveBeenCalledWith(7)
+  })
+
+  it('labels a searchable mixed worksheet as partly readable with affected pages', () => {
+    renderRow(
+      {
+        ...documentAt('ready'),
+        pages_total: 3,
+        pages_skipped: 1,
+        coverage_complete: false,
+        page_coverage: [
+          { page_number: 1, state: 'readable', reason: null },
+          { page_number: 2, state: 'not_attempted', reason: 'image_only' },
+          { page_number: 3, state: 'readable', reason: null },
+        ],
+      },
+      vi.fn(),
+      true,
+    )
+    expect(screen.getByText('Partly readable')).toBeInTheDocument()
+    expect(screen.getByText('Pages needing a read: 2.')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /page skipped, no readable text/ }),
+    ).toBeInTheDocument()
+  })
+
+  it('distinguishes a genuinely blank page from an unreadable scan', () => {
+    renderRow(
+      {
+        ...documentAt('ready'),
+        pages_total: 2,
+        pages_skipped: 1,
+        coverage_complete: true,
+        page_coverage: [
+          { page_number: 1, state: 'readable', reason: null },
+          { page_number: 2, state: 'blank', reason: null },
+        ],
+      },
+      vi.fn(),
+      true,
+    )
+    expect(screen.getByText('Blank page: 2.')).toBeInTheDocument()
+    expect(screen.queryByText('Partly readable')).not.toBeInTheDocument()
+    expect(screen.queryByText(/page skipped, no readable text/)).not.toBeInTheDocument()
+  })
+
+  it('offers an indexing retry for readable pages omitted by a failed refresh', async () => {
+    const retry = vi.fn()
+    const document = {
+      ...documentAt('ready'),
+      coverage_complete: false,
+      refresh_state: 'failed',
+      page_coverage: [
+        { page_number: 4, state: 'readable' as const, indexed: false, reason: 'embedding_failed' },
+      ],
+    }
+    const { wrapper } = createWrapper()
+    render(
+      <DocumentRow
+        document={document}
+        selected={false}
+        onSelect={vi.fn()}
+        onRetry={retry}
+        onRecognize={vi.fn()}
+        onDelete={vi.fn()}
+        onStatus={vi.fn()}
+      />,
+      { wrapper },
+    )
+    expect(screen.getByText('Readable pages not indexed: 4.')).toBeInTheDocument()
+    expect(screen.getByText(/Existing readable pages remain available/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry indexing' }))
+    expect(retry).toHaveBeenCalledWith(7)
+  })
+
+  it('offers recovery when an older ready index has no page coverage rows', async () => {
+    const retry = vi.fn()
+    const { wrapper } = createWrapper()
+    render(
+      <DocumentRow
+        document={{ ...documentAt('ready'), coverage_complete: false, page_coverage: [] }}
+        selected={false}
+        onSelect={noop}
+        onRetry={retry}
+        onRecognize={noop}
+        onDelete={noop}
+        onStatus={noop}
+      />,
+      { wrapper },
+    )
+    expect(screen.getByText('Page coverage is incomplete.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry indexing' }))
+    expect(retry).toHaveBeenCalledWith(7)
   })
 
   it('counts pages only while recognition is running', async () => {

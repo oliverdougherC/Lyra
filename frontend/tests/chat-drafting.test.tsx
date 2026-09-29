@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ApiError, api, streamChat, streamWriterChat } from '@/lib/api'
+import { readChatDraft, resetChatDraftMemory, writeChatDraft } from '@/lib/chat-draft-store'
+import { RouterProvider, usePathname, useRouter } from '@/router/hooks'
 import type { ChatEvent } from '@/types'
 
 vi.mock('@/components/chat/message-bubble', () => ({
@@ -73,6 +75,48 @@ function mount(writer: boolean, sessionId: number | null = 7, onSessionIdChange 
   return { ...render(pane(sessionId)), pane }
 }
 
+function RoutedPane({ writer }: { writer: boolean }) {
+  const pathname = usePathname()
+  const router = useRouter()
+  return (
+    <>
+      <button onClick={() => router.push('/classes/1')} type="button">
+        Leave route
+      </button>
+      <button onClick={() => router.push('/classes/1/chat')} type="button">
+        Return to chat
+      </button>
+      {pathname.endsWith('/chat') ? (
+        <ChatPane
+          classId={1}
+          selectedDocumentId={null}
+          sessionId={7}
+          writer={writer ? { artifactId: 42 } : undefined}
+          layout={writer ? 'inline' : 'pane'}
+        />
+      ) : (
+        <p>Other route</p>
+      )}
+    </>
+  )
+}
+
+function mountRouter(writer: boolean) {
+  window.history.replaceState({}, '', '/#/classes/1/chat')
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <TooltipProvider>
+        <RouterProvider>
+          <RoutedPane writer={writer} />
+        </RouterProvider>
+      </TooltipProvider>
+    </QueryClientProvider>,
+  )
+}
+
 function holdStream(writer: boolean) {
   let emit!: (event: ChatEvent) => void
   let finish!: () => void
@@ -107,6 +151,8 @@ function holdStream(writer: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
+  resetChatDraftMemory()
   vi.mocked(api.listSessions).mockResolvedValue([])
   vi.mocked(api.listMessages).mockResolvedValue([])
   vi.mocked(api.listDocuments).mockResolvedValue([])
@@ -117,6 +163,126 @@ beforeEach(() => {
 })
 
 describe.each([false, true])('Follow-up drafting (embedded writer: %s)', (writer) => {
+  it('warns visibly when a prompt write is refused by storage', async () => {
+    mount(writer)
+    await waitFor(() => expect(input()).toBeEnabled())
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError')
+    })
+    try {
+      edit('Keep a copy of this')
+      expect(input()).toHaveValue('Keep a copy of this')
+      expect(screen.getByRole('status')).toHaveTextContent('only in this window')
+    } finally {
+      setItem.mockRestore()
+    }
+  })
+  it('sends a restored unchanged question once and retires the persisted revision', async () => {
+    const scope = `1:${writer ? 'writer:42' : 'tutor'}:0:7`
+    writeChatDraft(scope, 'Restored question')
+    resetChatDraftMemory()
+    const turn = holdStream(writer)
+    const view = mount(writer)
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('Restored question')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      turn.emit({ type: 'done', message_id: 11 })
+      turn.finish()
+    })
+    view.unmount()
+    resetChatDraftMemory()
+    mount(writer)
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('')
+    expect(readChatDraft(scope)?.value ?? '').toBe('')
+  })
+
+  it('settles a send after route unmount and blocks a second view while it is pending', async () => {
+    const scope = `1:${writer ? 'writer:42' : 'tutor'}:0:7`
+    const turn = holdStream(writer)
+    const first = mount(writer)
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('Question across routes')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    first.unmount()
+    const second = mount(writer)
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('Question across routes')
+    expect(screen.getByLabelText('Send message')).toBeDisabled()
+    enter()
+    expect(turn.stream).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      turn.emit({ type: 'done', message_id: 11 })
+      turn.finish()
+    })
+    second.unmount()
+    resetChatDraftMemory()
+    mount(writer)
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('')
+    expect(readChatDraft(scope)?.value ?? '').toBe('')
+  })
+
+  it('uses real route navigation to keep send ownership through unmount', async () => {
+    const scope = `1:${writer ? 'writer:42' : 'tutor'}:0:7`
+    const turn = holdStream(writer)
+    mountRouter(writer)
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('Question across the actual router')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Leave route' }))
+    expect(await screen.findByText('Other route')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Return to chat' }))
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue(
+      'Question across the actual router',
+    )
+    expect(screen.getByLabelText('Send message')).toBeDisabled()
+    await act(async () => {
+      turn.emit({ type: 'done', message_id: 11 })
+      turn.finish()
+    })
+    await waitFor(() => expect(input()).toHaveValue(''))
+    expect(screen.getByLabelText('Send message')).toBeDisabled()
+    expect(readChatDraft(scope)?.value ?? '').toBe('')
+    expect(turn.stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a newer draft typed in the returned route without a false warning', async () => {
+    const turn = holdStream(writer)
+    mountRouter(writer)
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('Question A')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Leave route' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Return to chat' }))
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('Question A')
+    edit('Question B')
+    await act(async () => {
+      turn.emit({ type: 'done', message_id: 11 })
+      turn.finish()
+    })
+    expect(input()).toHaveValue('Question B')
+    expect(screen.queryByText(/saved copy could not be removed/i)).not.toBeInTheDocument()
+    expect(turn.stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores a failed send after real route navigation', async () => {
+    const turn = holdStream(writer)
+    mountRouter(writer)
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('Retry after route change')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Leave route' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Return to chat' }))
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('Retry after route change')
+    expect(screen.getByLabelText('Send message')).toBeDisabled()
+    await act(async () => turn.fail(new Error('Offline')))
+    expect(input()).toHaveValue('Retry after route change')
+    expect(screen.getByLabelText('Send message')).toBeEnabled()
+    expect(turn.stream).toHaveBeenCalledTimes(1)
+  })
   it('keeps editing and focus through streaming and reveal, sending exactly once afterward', async () => {
     const turn = holdStream(writer)
     mount(writer)
@@ -136,12 +302,16 @@ describe.each([false, true])('Follow-up drafting (embedded writer: %s)', (writer
       turn.finish()
     })
     expect(input()).toHaveValue(FOLLOW_UP)
+    expect(screen.queryByText(/saved copy could not be removed/i)).not.toBeInTheDocument()
     expect(screen.getByLabelText('Send message')).toBeDisabled()
     enter()
     expect(turn.stream).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByText('Finish reveal'))
     await waitFor(() => expect(screen.getByLabelText('Send message')).toBeEnabled())
     expect(input()).toHaveValue(FOLLOW_UP)
+    fireEvent.keyDown(input(), { key: 'Enter', isComposing: true })
+    expect(input()).toHaveValue(FOLLOW_UP)
+    expect(turn.stream).toHaveBeenCalledTimes(1)
     enter()
     await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(2))
     const call = turn.stream.mock.calls[1]
@@ -184,7 +354,7 @@ describe.each([false, true])('Follow-up drafting (embedded writer: %s)', (writer
     expect(input()).toHaveValue('')
   })
 
-  it('clears drafts on conversation/class navigation and ignores a late failure', async () => {
+  it('keeps each scoped draft on conversation/class navigation and ignores a late failure', async () => {
     const turn = holdStream(writer)
     const view = mount(writer)
     await waitFor(() => expect(input()).toBeEnabled())
@@ -201,6 +371,8 @@ describe.each([false, true])('Follow-up drafting (embedded writer: %s)', (writer
     view.rerender(view.pane(8, 2))
     await waitFor(() => expect(input()).toBeEnabled())
     expect(input()).toHaveValue('')
+    view.rerender(view.pane(7))
+    expect(input()).toHaveValue(FOLLOW_UP)
   })
 })
 
@@ -275,7 +447,33 @@ it.each([false, true])(
 )
 
 describe.each([false, true])('New Chat handoff ownership (writer: %s)', (writer) => {
-  it('clears a New Chat draft when manually returning to the still-running conversation', async () => {
+  it('settles an unchanged restored New Chat question under the created session', async () => {
+    const oldScope = `1:${writer ? 'writer:42' : 'tutor'}:0:new`
+    const newScope = `1:${writer ? 'writer:42' : 'tutor'}:0:9`
+    writeChatDraft(oldScope, 'Restored New Chat question')
+    resetChatDraftMemory()
+    const turn = holdStream(writer)
+    const create = writer ? vi.mocked(api.createWriterSession) : vi.mocked(api.createSession)
+    create.mockResolvedValue({ id: 9, mode: writer ? 'writer' : 'guide' } as Awaited<
+      ReturnType<typeof api.createSession>
+    >)
+    const onSessionIdChange = vi.fn((id: number) => view.rerender(view.pane(id)))
+    const view = mount(writer, null, onSessionIdChange)
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('Restored New Chat question')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      turn.emit({ type: 'done', message_id: 11 })
+      turn.finish()
+    })
+    view.unmount()
+    resetChatDraftMemory()
+    mount(writer, 9)
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('')
+    expect(readChatDraft(oldScope)?.value ?? '').toBe('')
+    expect(readChatDraft(newScope)?.value ?? '').toBe('')
+  })
+  it('keeps a New Chat draft when manually returning to the still-running conversation', async () => {
     const turn = holdStream(writer)
     const view = mount(writer)
     await waitFor(() => expect(input()).toBeEnabled())
@@ -288,6 +486,8 @@ describe.each([false, true])('New Chat handoff ownership (writer: %s)', (writer)
     view.rerender(view.pane(7))
     expect(input()).toHaveValue('')
     expect(turn.stream).toHaveBeenCalledTimes(1)
+    view.rerender(view.pane(null))
+    expect(input()).toHaveValue(FOLLOW_UP)
   })
 
   it('revokes pending New Chat creation when returning to the still-running conversation', async () => {
@@ -349,6 +549,12 @@ it.each([false, true])(
     view.rerender(view.pane(null))
     edit('A different New Chat draft')
     view.rerender(view.pane(9))
-    expect(input()).toHaveValue('')
+    expect(input()).toHaveValue(FOLLOW_UP)
+    await act(async () => {
+      turn.emit({ type: 'done', message_id: 11 })
+      turn.finish()
+    })
+    expect(input()).toHaveValue(FOLLOW_UP)
+    expect(screen.queryByText(/saved copy could not be removed/i)).not.toBeInTheDocument()
   },
 )

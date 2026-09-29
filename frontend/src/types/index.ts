@@ -51,6 +51,13 @@ export interface ClassCreate {
 
 export type ClassUpdate = Partial<ClassCreate> & { archived?: boolean }
 
+export interface DocumentPageCoverage {
+  page_number: number
+  state: 'readable' | 'not_attempted' | 'recognition_failed' | 'blank'
+  indexed?: boolean
+  reason: string | null
+}
+
 export interface DocumentRead {
   id: number
   class_id: number
@@ -67,6 +74,11 @@ export interface DocumentRead {
    * which counts pages that had no text to find, and both can be true at once.
    */
   pages_failed: number
+  text_readable?: boolean
+  semantic_ready?: boolean
+  page_coverage?: DocumentPageCoverage[]
+  coverage_complete?: boolean
+  refresh_state?: string | null
   /** Whether this document has been asked to be read as images. */
   recognize: boolean
   error_message: string | null
@@ -80,6 +92,11 @@ export interface DocumentStatus {
   pages_done: number
   pages_skipped: number
   pages_failed: number
+  text_readable?: boolean
+  semantic_ready?: boolean
+  page_coverage?: DocumentPageCoverage[]
+  coverage_complete?: boolean
+  refresh_state?: string | null
   recognize: boolean
   error_message: string | null
 }
@@ -152,8 +169,8 @@ export interface MessageRead {
   thinking_ms: number
   retrieval_trimmed: boolean
   omitted_document_count: number
-  /** What a writer turn did on the way to this reply. Empty for tutor messages. */
-  tool_activity: WriterActivity[]
+  /** Tool calls made for this reply. Empty for tutor messages. */
+  tool_activity: (WriterActivity | AgentChatActivity)[]
   created_at: string
   /** The latest agent-turn attempt on this message, when it was an agent turn. */
   agent_attempt?: AgentAttempt | null
@@ -422,6 +439,20 @@ export interface AgentChatActivity {
   state: string
   target_kind: string | null
   target_id: string | null
+  class_id?: number | null
+  sources?: {
+    document_id: number
+    filename: string
+    page_number?: number | null
+    text_start?: number
+    text_end?: number
+    text_length?: number
+    state?: string
+    semantic_ready?: boolean
+    evidence?: string
+  }[]
+  detail?: string | null
+  has_more?: boolean
 }
 
 export interface AgentChatResult {

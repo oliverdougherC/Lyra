@@ -26,6 +26,7 @@ from backend.llm import client
 from backend.llm.locality import hostname_of, is_local_endpoint
 from backend.storage import secrets
 from backend.storage.database import get_db
+from backend.storage.secrets import wait_for_credential_read
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -254,7 +255,7 @@ def _write_settings(payload: SettingsUpdate, conn: sqlite3.Connection) -> Settin
 
 @router.post("/settings/test-connection", response_model=ConnectionTestResult)
 async def test_endpoint_connection(conn: DbConn) -> ConnectionTestResult:
-    config = resolve_tutor_config(conn)
+    config = await wait_for_credential_read(lambda: resolve_tutor_config(conn))
     result = await client.test_connection(config.endpoint_url, config.api_key)
     return ConnectionTestResult(
         ok=result.ok, model_count=result.model_count, message=result.message
@@ -271,11 +272,11 @@ def _probe_configuration_unchanged(conn: sqlite3.Connection, config: TutorConfig
     )
 
 
-def _probe_snapshot(conn: sqlite3.Connection) -> tuple[int, TutorConfig]:
+async def _probe_snapshot(conn: sqlite3.Connection) -> tuple[int, TutorConfig]:
     # No lock spans Keychain I/O. Immutable credentials belong to their settings
     # row; every endpoint/model/credential commit advances the durable revision.
     revision = int(get_settings_row(conn)["probe_revision"])
-    return revision, resolve_tutor_config(conn)
+    return revision, await wait_for_credential_read(lambda: resolve_tutor_config(conn))
 
 
 @router.post("/settings/test-tools", response_model=ToolSupportResult)
@@ -288,7 +289,7 @@ async def test_endpoint_tools(conn: DbConn) -> ToolSupportResult:
     this endpoint costs the student: without tool support, solutions are still produced
     and every one of them carries the verdict `Not checked`.
     """
-    revision, config = _probe_snapshot(conn)
+    revision, config = await _probe_snapshot(conn)
     support = await client.probe_tool_support(config.endpoint_url, config.api_key, config.model)
     if not _probe_configuration_unchanged(conn, config) or not publish_probe_result(
         conn, revision, "tools", support.ok, support.message
@@ -311,7 +312,7 @@ async def test_endpoint_vision(conn: DbConn) -> VisionSupportResult:
     Stored, so recognition can offer or withhold itself without a network round trip on
     every document row.
     """
-    revision, config = _probe_snapshot(conn)
+    revision, config = await _probe_snapshot(conn)
     support = await client.probe_vision_support(config.endpoint_url, config.api_key, config.model)
     if not _probe_configuration_unchanged(conn, config) or not publish_probe_result(
         conn, revision, "vision", support.ok, support.message
@@ -324,7 +325,7 @@ async def test_endpoint_vision(conn: DbConn) -> VisionSupportResult:
 
 @router.get("/settings/models", response_model=ModelList)
 async def read_endpoint_models(conn: DbConn) -> ModelList:
-    config = resolve_tutor_config(conn)
+    config = await wait_for_credential_read(lambda: resolve_tutor_config(conn))
     return ModelList(models=await client.list_models(config.endpoint_url, config.api_key))
 
 

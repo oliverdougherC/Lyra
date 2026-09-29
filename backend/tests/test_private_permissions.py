@@ -391,6 +391,43 @@ def test_read_private_text_refuses_a_symlink_target(tmp_path: Path, wide_open_um
     assert _mode(external) == 0o644
 
 
+def test_refused_owned_open_closes_every_descriptor_it_opened(tmp_path: Path) -> None:
+    """A refused open must not leak the descriptors the attempt itself opened.
+
+    The final-component refusal (a symlink at `link`) happens after the descent opened
+    the parent directory, so the error path has to close that parent. Count the process
+    descriptors before and after repeated refusals: any leak is one descriptor per
+    refused attempt.
+    """
+    if not os.path.isdir("/dev/fd"):
+        pytest.skip("descriptor counting needs /dev/fd")
+    root = tmp_path / "owned"
+    root.mkdir()
+    actual = tmp_path / "source"
+    actual.write_bytes(b"synthetic")
+    link = root / "link"
+    link.symlink_to(actual)
+
+    def open_count() -> int:
+        return len(os.listdir("/dev/fd"))
+
+    before = open_count()
+    for _ in range(5):
+        with pytest.raises(private.PrivacyContractError, match="symlink"):
+            private.read_owned_bytes(link, root=root, max_bytes=100)
+    assert open_count() == before
+
+    # The streaming twin walks the identical descent, so it must close the same way.
+    before = open_count()
+    for _ in range(5):
+        with (
+            pytest.raises(private.PrivacyContractError, match="symlink"),
+            private.open_owned_bytes(link, root=root, max_bytes=100),
+        ):
+            pass
+    assert open_count() == before
+
+
 def test_sentinel_symlink_neither_skips_migration_nor_touches_its_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
 ) -> None:

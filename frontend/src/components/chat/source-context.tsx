@@ -60,6 +60,14 @@ export function SourceContext({
   const [query, setQuery] = useState('')
 
   const selected = documents?.find((document) => document.id === selectedId) ?? null
+  const unresolvedSelection = selectedId !== null && !selected
+  const selectedLabel = selected
+    ? selected.filename
+    : unresolvedSelection
+      ? documents === undefined && !documentsError
+        ? 'Loading selected file'
+        : 'Selected file unavailable'
+      : 'All material'
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -68,12 +76,14 @@ export function SourceContext({
       .sort((a, b) => a.filename.localeCompare(b.filename))
     // Ready material is what the question can be about; the rest stay visible so a file
     // that just landed does not look lost, but they are not selectable until they can be.
-    const ready = list.filter((document) => document.state === 'ready')
-    const rest = list.filter((document) => document.state !== 'ready')
+    const ready = list.filter((document) => document.state === 'ready' || document.text_readable)
+    const rest = list.filter((document) => document.state !== 'ready' && !document.text_readable)
     return [...ready, ...rest]
   }, [documents, query])
 
-  const readyCount = documents?.filter((document) => document.state === 'ready').length ?? 0
+  const readableCount =
+    documents?.filter((document) => document.state === 'ready' || document.text_readable).length ??
+    0
 
   const value = selectedId === null ? ALL : String(selectedId)
 
@@ -90,8 +100,8 @@ export function SourceContext({
           <button
             type="button"
             aria-label={
-              selected
-                ? `Lyra reads only ${selected.filename}. Choose what Lyra reads for this answer.`
+              selectedId !== null
+                ? `Lyra reads only ${selectedLabel}. Choose what Lyra reads for this answer.`
                 : 'Lyra reads all of this class\u2019s material. Choose what Lyra reads for this answer.'
             }
             className={cn(
@@ -99,17 +109,19 @@ export function SourceContext({
               'transition-colors hover:text-text-primary',
               'focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
               'sm:max-w-[9rem]',
-              selected ? 'bg-muted text-text-secondary' : 'text-text-tertiary hover:bg-muted',
+              selectedId !== null
+                ? 'bg-muted text-text-secondary'
+                : 'text-text-tertiary hover:bg-muted',
             )}
           >
             <FileSearch aria-hidden className="size-3.5 shrink-0" />
-            <span className="truncate">{selected ? selected.filename : 'All material'}</span>
+            <span className="truncate">{selectedLabel}</span>
           </button>
         </PopoverTrigger>
-        {selected ? (
+        {selectedId !== null ? (
           <button
             type="button"
-            aria-label={`Stop reading only ${selected.filename}; read all of this class's material`}
+            aria-label={`Stop reading only ${selectedLabel}; read all of this class's material`}
             onClick={() => onSelect(null)}
             className="text-text-tertiary hover:text-text-primary flex size-5 items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
@@ -120,6 +132,19 @@ export function SourceContext({
 
       <PopoverContent align="start" sideOffset={8} className="w-72 max-w-[calc(100vw-1.5rem)] p-0">
         <p className="text-foreground border-b px-3 py-2 text-sm font-medium">What Lyra reads</p>
+
+        {unresolvedSelection && documents !== undefined ? (
+          <p className="text-danger-text px-3 py-2 text-xs" role="alert">
+            This selected file is no longer in this class. Choose another file or clear selection.
+          </p>
+        ) : null}
+        {selected && selected.state !== 'ready' ? (
+          <p className="text-info-text px-3 py-2 text-xs">
+            {selected.text_readable
+              ? 'Text is readable; semantic indexing is unavailable.'
+              : (STATE_NOTES[selected.state] ?? 'This file is not ready to read.')}
+          </p>
+        ) : null}
 
         {documentsError ? (
           <div className="flex flex-col gap-2 px-3 py-3 text-sm">
@@ -185,8 +210,8 @@ export function SourceContext({
                     id={`${ALL}-${ALL}`}
                     label="All material"
                     checked={selectedId === null}
-                    note={readyCount > 0 ? `${readyCount} ready` : null}
-                    disabled={readyCount === 0}
+                    note={readableCount > 0 ? `${readableCount} readable` : null}
+                    disabled={readableCount === 0}
                   />
                   {visible.map((document) => (
                     <SourceRow
@@ -194,14 +219,18 @@ export function SourceContext({
                       id={`${ALL}-${document.id}`}
                       label={document.filename}
                       checked={document.id === selectedId}
-                      note={STATE_NOTES[document.state] ?? null}
-                      disabled={document.state !== 'ready'}
+                      note={
+                        document.text_readable && document.state !== 'ready'
+                          ? 'Text readable; index unavailable'
+                          : (STATE_NOTES[document.state] ?? null)
+                      }
+                      disabled={document.state !== 'ready' && !document.text_readable}
                     />
                   ))}
                 </RadioGroup>
               )}
             </div>
-            {readyCount === 0 && documents.length > 0 && !documentsError ? (
+            {readableCount === 0 && documents.length > 0 && !documentsError ? (
               <p className="text-text-tertiary border-t px-3 py-2 text-xs">
                 Nothing is ready to read yet. Files Lyra has finished reading can be chosen here.
               </p>

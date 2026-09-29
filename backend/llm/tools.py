@@ -212,6 +212,10 @@ class ToolStopGate:
             return False
 
 
+class ToolContinuationError(Exception):
+    """A safe refusal to send the next provider request after a tool result."""
+
+
 @dataclass(frozen=True)
 class ContextBudget:
     """The window a growing tool loop must keep its next request inside.
@@ -282,7 +286,7 @@ def message_tokens(message: Mapping[str, object]) -> int:
     `ContextBudget.tool_tokens`); it is not part of any message, so nothing here
     double-counts it.
     """
-    return estimate_tokens(json.dumps(message, separators=(",", ":"), default=str))
+    return _wire_estimate(message)
 
 
 def conversation_tokens(conversation: list[dict[str, object]]) -> int:
@@ -299,7 +303,32 @@ def conversation_tokens(conversation: list[dict[str, object]]) -> int:
     helper is the one that must include.) The tool schema sent alongside `messages` is
     charged once, separately, by the caller.
     """
-    return estimate_tokens(json.dumps(conversation, separators=(",", ":"), default=str))
+    return _wire_estimate(conversation)
+
+
+def _wire_estimate(value: object) -> int:
+    """Charge image parts as image inputs without treating base64 as text tokens."""
+    images = 0
+
+    def normalize(item: object) -> object:
+        nonlocal images
+        if isinstance(item, dict):
+            if item.get("type") == "image_url":
+                image = item.get("image_url")
+                if isinstance(image, dict) and str(image.get("url", "")).startswith("data:image/"):
+                    images += 1
+                    return {"type": "image_url", "image_url": {"url": "[image]"}}
+            return {key: normalize(part) for key, part in item.items()}
+        if isinstance(item, list):
+            return [normalize(part) for part in item]
+        return item
+
+    # Image token costs vary by provider and resolution. Reserve a conservative fixed
+    # amount for each bounded rendered page, while preserving the exact text/framing cost.
+    return (
+        estimate_tokens(json.dumps(normalize(value), separators=(",", ":"), default=str))
+        + images * 2048
+    )
 
 
 @dataclass(frozen=True)
@@ -631,6 +660,8 @@ async def run_tool_loop(
     registry: dict[str, ToolDefinition] | None = None,
     on_call: Callable[[RecordedCall], None] | None = None,
     on_delta: Callable[[StreamDelta], None] | None = None,
+    after_call: Callable[[RecordedCall], list[dict[str, object]]] | None = None,
+    before_request: Callable[[], None] | None = None,
     context_budget: ContextBudget | None = None,
     stop_gate: ToolStopGate | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -652,6 +683,9 @@ async def run_tool_loop(
             a narration bug must not cost the pass.
         on_delta: Optional live text observer. A reset before each successive model
             round clears intermediate answer text while preserving reasoning.
+        after_call: Optional supplemental messages produced by a tool result. They are
+            measured with each result, then appended after every tool reply in that
+            assistant batch so a provider never sees an interrupted tool response set.
         context_budget: When given, the loop does two things an unguarded loop does not.
             It caps every request at the budgeted `generation_reserve` output tokens, so the
             reserve held back in the context arithmetic is the reserve the endpoint is
@@ -702,6 +736,8 @@ async def run_tool_loop(
                 REGISTRY if registry is None else registry,
                 on_call,
                 on_delta,
+                after_call,
+                before_request,
                 context_budget,
                 stop_gate,
                 transport,
@@ -724,6 +760,8 @@ async def _drive(
     registry: dict[str, ToolDefinition],
     on_call: Callable[[RecordedCall], None] | None,
     on_delta: Callable[[StreamDelta], None] | None,
+    after_call: Callable[[RecordedCall], list[dict[str, object]]] | None,
+    before_request: Callable[[], None] | None,
     context_budget: ContextBudget | None,
     stop_gate: ToolStopGate | None,
     transport: httpx.AsyncBaseTransport | None,
@@ -738,7 +776,7 @@ async def _drive(
     # exactly what they sent before.
     max_tokens = context_budget.generation_reserve if context_budget is not None else None
 
-    def overflowed() -> bool:
+    def overflowed(supplemental: list[dict[str, object]] | None = None) -> bool:
         """Whether the conversation as it stands can no longer fit the next request.
 
         Re-read after every growth boundary, not only between rounds: a single assistant
@@ -747,7 +785,8 @@ async def _drive(
         """
         return (
             context_budget is not None
-            and conversation_tokens(conversation) > context_budget.message_ceiling
+            and conversation_tokens(conversation + supplemental if supplemental else conversation)
+            > context_budget.message_ceiling
         )
 
     for round_index in range(max_depth):
@@ -778,6 +817,16 @@ async def _drive(
                 stopped=CONTEXT_OVERFLOW,
                 detail=_OVERFLOW_DETAIL,
             )
+        if before_request is not None:
+            try:
+                before_request()
+            except ToolContinuationError as exc:
+                return ToolLoopResult(
+                    content="",
+                    calls=tuple(calls),
+                    stopped=UPSTREAM_FAILED,
+                    detail=str(exc),
+                )
         try:
             if round_index and on_delta is not None:
                 on_delta(StreamDelta("reset", ""))
@@ -862,6 +911,7 @@ async def _drive(
                 stopped=CONTEXT_OVERFLOW,
                 detail=_OVERFLOW_DETAIL,
             )
+        supplemental: list[dict[str, object]] = []
         for call in answer.tool_calls:
             # Handlers block on a subprocess or the network, so they run off the event
             # loop. Known cost: `to_thread` cannot be cancelled once the handler is
@@ -917,19 +967,33 @@ async def _drive(
                     # Narration is an observer, never a participant: a broken callback
                     # is logged and the pass continues as if it were absent.
                     logger.exception("on_call callback raised; the loop continues")
+            if after_call is not None:
+                try:
+                    # A user image is evidence for the next model request, not a reply
+                    # to this tool. Keep the assistant's entire batch of tool replies
+                    # contiguous before appending any supplemental user turns.
+                    supplemental.extend(after_call(recorded))
+                except ToolContinuationError as exc:
+                    return ToolLoopResult(
+                        content="",
+                        calls=tuple(calls),
+                        stopped=UPSTREAM_FAILED,
+                        detail=str(exc),
+                    )
             # This result may be the one that fills the window. Stop the moment it does,
             # before dispatching the next call in this same assistant response: those calls
             # would run only to have their results discarded with a transcript that can no
             # longer be sent. The work that genuinely ran stays in `calls`; the loop simply
             # settles here rather than replaying a half-finished tool set as a request with
             # missing results.
-            if overflowed():
+            if overflowed(supplemental):
                 return ToolLoopResult(
                     content="",
                     calls=tuple(calls),
                     stopped=CONTEXT_OVERFLOW,
                     detail=_OVERFLOW_DETAIL,
                 )
+        conversation.extend(supplemental)
 
     return ToolLoopResult(
         content="",

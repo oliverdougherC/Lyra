@@ -18,6 +18,7 @@ type Capability = Literal[
     "compute",
     "web_read",
     "workspace_read",
+    "document_read",
     "change_proposal",
     "command_proposal",
     "source_proposal",
@@ -26,7 +27,9 @@ type Capability = Literal[
     "comment_proposal",
     "access_request",
 ]
-type Effect = Literal["pure", "network_read", "filesystem_read", "database_proposal"]
+type Effect = Literal[
+    "pure", "network_read", "filesystem_read", "database_read", "database_proposal"
+]
 type Trust = Literal["computed", "public_web", "workspace", "database"]
 type ProfileName = Literal["compute", "research", "code", "command", "agent", "writer"]
 
@@ -51,6 +54,7 @@ _ALLOWED_COMBINATIONS: Mapping[Capability, tuple[Effect, Trust]] = {
     "compute": ("pure", "computed"),
     "web_read": ("network_read", "public_web"),
     "workspace_read": ("filesystem_read", "workspace"),
+    "document_read": ("database_read", "database"),
     "change_proposal": ("database_proposal", "database"),
     "command_proposal": ("database_proposal", "database"),
     "access_request": ("pure", "computed"),
@@ -74,6 +78,7 @@ PROFILE_CAPABILITY_MATRIX: Mapping[ProfileName, frozenset[Capability]] = Mapping
                 "source_proposal",
                 "profile_proposal",
                 "workspace_read",
+                "document_read",
                 "change_proposal",
                 "command_proposal",
                 "access_request",

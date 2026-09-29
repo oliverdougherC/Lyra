@@ -1,9 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { memo, useState } from 'react'
+import Link from '@/router/link'
 import { AlertTriangle, Check, ChevronRight, Copy, RefreshCw, X } from 'lucide-react'
 
 import { activityLabel } from '@/components/chat/activity-label'
+import { chatWork } from '@/components/chat/work-counters'
 import { LyraAvatar } from '@/components/chat/lyra-mark'
 import { ReasoningTrace } from '@/components/chat/reasoning-trace'
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
@@ -13,7 +15,19 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { AgentAttempt, TutorAttempt, WriterActivity, WriterAttempt } from '@/types'
+import type {
+  AgentAttempt,
+  AgentChatActivity,
+  TutorAttempt,
+  WriterActivity,
+  WriterAttempt,
+} from '@/types'
+
+type ToolActivity = WriterActivity | AgentChatActivity
+
+function isAgentActivity(entry: ToolActivity): entry is AgentChatActivity {
+  return 'audit_id' in entry
+}
 
 export type ChatMessage = {
   id: number
@@ -23,8 +37,8 @@ export type ChatMessage = {
   thinking_ms: number
   retrieval_trimmed: boolean
   omitted_document_count: number
-  /** What a writer turn did on the way to this reply. Empty for tutor messages. */
-  tool_activity: WriterActivity[]
+  /** Tool calls made for this reply. Empty for tutor messages. */
+  tool_activity: ToolActivity[]
   created_at: string
   /** The latest agent-turn attempt on this message, when it was an agent turn (PLA-295). */
   agent_attempt?: AgentAttempt | null
@@ -46,7 +60,9 @@ type MessageRowProps = {
    * own in `tool_activity`. Passed separately because the streaming row is a
    * placeholder the pane fills in from frames as they arrive.
    */
-  activity?: WriterActivity[]
+  activity?: ToolActivity[]
+  /** Agent tools stay visible beside the answer after the turn settles. */
+  agent?: boolean
   /** The stage label to show before any text has arrived. */
   processingStage?: ProcessingStage | null
   /** When the turn started, so the wait can report how long it has run. */
@@ -67,14 +83,25 @@ type MessageRowProps = {
   selectionRestore?: { anchor: number; focus: number } | null
   canRetry?: boolean
   onRetry?: () => void
+  /**
+   * The live reasoning disclosure's open state, reported up at the boundary (PLA-509):
+   * the pane flushes the held thought the moment the reader opens it, and a closed
+   * disclosure no longer receives full-text publications. Only the live row passes this;
+   * settled rows keep their full text in the message itself.
+   */
+  onReasoningOpenChange?: (open: boolean) => void
 }
 
-export function MessageRow({
+// Memoized at the row boundary (PLA-510): a settled row's props are stable across
+// composer keystrokes and live-turn publications, so the whole settled transcript stops
+// re-rendering with every keystroke and reasoning delta — only the live row commits.
+export const MessageRow = memo(function MessageRow({
   message,
   className,
   startsTimeGap,
   streaming,
   activity,
+  agent = false,
   processingStage,
   turnStartedAt,
   turnEnded,
@@ -83,7 +110,10 @@ export function MessageRow({
   selectionRestore,
   canRetry,
   onRetry,
+  onReasoningOpenChange,
 }: MessageRowProps) {
+  chatWork.rowRenders += 1
+  if (streaming) chatWork.liveRowRenders += 1
   if (message.role === 'user') {
     const agentAttempt = message.agent_attempt
     const writerAttempt = message.writer_attempt
@@ -122,16 +152,17 @@ export function MessageRow({
   const thinkingNow = active && !hasAnswer && message.thinking.trim().length > 0
   const trail = activity ?? message.tool_activity
   const waiting = active && !hasAnswer && !thinkingNow
-  const label = activityLabel(trail, thinkingNow ? null : (processingStage ?? null))
+  const label = activityLabel(
+    trail.filter((entry): entry is WriterActivity => !isAgentActivity(entry)),
+    thinkingNow ? null : (processingStage ?? null),
+  )
 
   return (
     <div className={cn('group flex w-full gap-3', className)}>
       <LyraAvatar thinking={active && !hasAnswer} />
       <div className="min-w-0 flex-1">
-        {/* Live, the thought and the tool trail are visible while they move. Settled, the
-            turn keeps one quiet record of how the answer was made - a single collapsed
-            `Details` disclosure, because a `Thought for 6 seconds` line that outlives the
-            turn is the machine narrating itself, not the student's task. */}
+        {/* Keep agent tool use in the conversation. The detailed audit remains available
+            above it; ordinary writer reasoning still uses a disclosure. */}
         {streaming ? (
           <>
             {message.thinking.trim() ? (
@@ -140,10 +171,15 @@ export function MessageRow({
                 streaming={thinkingNow}
                 startedAt={turnStartedAt}
                 activityLabel={label}
+                onOpenChange={onReasoningOpenChange}
               />
             ) : null}
             {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
           </>
+        ) : agent ? (
+          message.thinking.trim() || trail.length > 0 ? (
+            <TurnDetails thinking={message.thinking} trail={trail} />
+          ) : null
         ) : message.thinking.trim() || trail.length > 0 ? (
           <TurnDetails thinking={message.thinking} trail={trail} />
         ) : null}
@@ -177,7 +213,7 @@ export function MessageRow({
       </div>
     </div>
   )
-}
+})
 
 /**
  * What a writer turn did on its way to the answer, one quiet line per tool call, in the
@@ -186,24 +222,81 @@ export function MessageRow({
  * call stays in the trail - the model was told and moved on, and hiding it would make
  * the record a story.
  */
-function ActivityTrail({ entries }: { entries: WriterActivity[] }) {
+function ActivityTrail({ entries }: { entries: ToolActivity[] }) {
   return (
     <div
       className="border-accent-primary/40 mb-2 flex flex-col gap-1 border-l-2 py-0.5 pl-3"
       aria-label="What Lyra did for this reply"
+      aria-live="polite"
     >
       {entries.map((entry, index) => {
+        const agentEntry = isAgentActivity(entry)
+        const ok = agentEntry ? entry.state === 'succeeded' : entry.ok
+        const running = agentEntry && entry.state === 'started'
         return (
           <div
-            key={`${index}-${entry.tool}`}
-            className="text-text-tertiary flex items-center gap-1.5 text-xs"
+            key={agentEntry ? entry.audit_id : `${index}-${entry.tool}`}
+            className="text-text-tertiary flex items-start gap-1.5 text-xs"
           >
-            {entry.ok ? (
+            {running ? (
+              <span
+                className="bg-accent-primary/70 mt-1 size-2.5 shrink-0 animate-pulse rounded-full"
+                aria-label="Running"
+              />
+            ) : ok ? (
               <Check className="text-accent-primary/70 size-3 shrink-0" />
             ) : (
               <X className="text-destructive/70 size-3 shrink-0" />
             )}
-            <span className="min-w-0 truncate">{entry.label}</span>
+            <span className="min-w-0 break-all">
+              {agentEntry ? (
+                <>
+                  <span className="font-medium">{entry.tool.replaceAll('_', ' ')}</span>
+                  {entry.sources?.slice(0, 3).map((source, sourceIndex) => (
+                    <span key={`${source.document_id}-${source.page_number ?? 0}-${sourceIndex}`}>
+                      {' · '}
+                      {entry.class_id ? (
+                        <Link
+                          href={`/classes/${entry.class_id}?tab=files&lyra-anchor=document-${source.document_id}${source.page_number ? `&source-document=${source.document_id}&source-page=${source.page_number}` : ''}`}
+                          className="text-text-secondary underline decoration-dotted underline-offset-2 hover:text-foreground"
+                        >
+                          {source.filename}
+                          {source.page_number ? ` p. ${source.page_number}` : ''}
+                        </Link>
+                      ) : (
+                        <span>
+                          {source.filename}
+                          {source.page_number ? ` p. ${source.page_number}` : ''}
+                        </span>
+                      )}
+                      {source.text_start !== undefined && source.text_end !== undefined
+                        ? ` chars ${source.text_start + 1}–${source.text_end}`
+                        : null}
+                      {source.evidence === 'image' ? ' image' : null}
+                    </span>
+                  ))}
+                  {!entry.sources?.length && entry.target_id ? (
+                    <span className="font-mono"> · {entry.target_id}</span>
+                  ) : null}
+                  {entry.detail ? <span> · {entry.detail}</span> : null}
+                </>
+              ) : (
+                entry.label
+              )}
+            </span>
+            {agentEntry ? (
+              <span className="shrink-0">
+                {running
+                  ? 'Running'
+                  : ok
+                    ? 'Done'
+                    : entry.state === 'refused' && entry.detail === 'This turn was stopped.'
+                      ? 'Stopped'
+                      : entry.state === 'refused'
+                        ? 'Refused'
+                        : 'Failed'}
+              </span>
+            ) : null}
           </div>
         )
       })}
@@ -224,7 +317,7 @@ function ActivityTrail({ entries }: { entries: WriterActivity[] }) {
  *
  * A model that neither thinks nor calls tools never renders this at all.
  */
-function TurnDetails({ thinking, trail }: { thinking: string; trail: WriterActivity[] }) {
+function TurnDetails({ thinking, trail }: { thinking: string; trail: ToolActivity[] }) {
   return (
     <Collapsible className="mb-3">
       <CollapsibleTrigger

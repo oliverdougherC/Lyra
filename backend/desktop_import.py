@@ -57,6 +57,7 @@ _PROFILE_PRESERVE_FILES = (
     ".exa_api_key.authority",
 )
 _DESTINATION_AUXILIARY_PREFIXES = ("chunk_embeddings", "chunks_fts")
+_DESTINATION_SCAFFOLD_TABLES = frozenset({"settings", "document_search_generation"})
 _STAGED_STATUS = "staged"
 _AWAITING_PUBLISH_PHASE = "awaiting_publish"
 _SOURCE_DRIFT_MESSAGE = (
@@ -780,7 +781,7 @@ def _destination_conflicts() -> tuple[str, ...]:
             ).fetchall()
             if (
                 isinstance(row[0], str)
-                and row[0] != "settings"
+                and row[0] not in _DESTINATION_SCAFFOLD_TABLES
                 and not any(
                     str(row[0]).startswith(prefix) for prefix in _DESTINATION_AUXILIARY_PREFIXES
                 )

@@ -57,7 +57,7 @@ export function partitionFiles(files: File[]): { accepted: File[]; rejected: str
   return { accepted, rejected }
 }
 
-/** Reads one file entry, resolving null when the file cannot be read. */
+/** Reads one file entry. An inaccessible file remains visible as an error. */
 function readFileEntry(entry: FileSystemFileEntry): Promise<File | null> {
   return new Promise((resolve) => {
     entry.file(resolve, () => resolve(null))
@@ -65,31 +65,43 @@ function readFileEntry(entry: FileSystemFileEntry): Promise<File | null> {
 }
 
 /** Reads every entry in a directory, looping because the API returns entries in batches. */
-function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+function readAllEntries(
+  reader: FileSystemDirectoryReader,
+  onBatch: (entries: FileSystemEntry[]) => Promise<void>,
+): Promise<void> {
   const readBatch = (): Promise<FileSystemEntry[]> =>
-    new Promise((resolve) => {
-      reader.readEntries(resolve, () => resolve([]))
+    new Promise((resolve, reject) => {
+      reader.readEntries(resolve, reject)
     })
-  const collect = async (): Promise<FileSystemEntry[]> => {
-    const entries: FileSystemEntry[] = []
+  const collect = async (): Promise<void> => {
     for (;;) {
       const batch = await readBatch()
-      if (batch.length === 0) return entries
-      entries.push(...batch)
+      if (batch.length === 0) return
+      await onBatch(batch)
     }
   }
   return collect()
 }
 
 /** Walks a dropped file system entry recursively and collects every readable file. */
-async function collectEntry(entry: FileSystemEntry, files: File[]): Promise<void> {
+async function collectEntry(
+  entry: FileSystemEntry,
+  files: File[],
+  errors: string[],
+): Promise<void> {
   if (entry.isFile) {
     const file = await readFileEntry(entry as FileSystemFileEntry)
     if (file) files.push(file)
+    else if (!isSystemNoise(entry.name)) errors.push(`${entry.name} could not be read`)
   } else if (entry.isDirectory) {
-    const reader = (entry as FileSystemDirectoryEntry).createReader()
-    const children = await readAllEntries(reader)
-    for (const child of children) await collectEntry(child, files)
+    try {
+      const reader = (entry as FileSystemDirectoryEntry).createReader()
+      await readAllEntries(reader, async (children) => {
+        for (const child of children) await collectEntry(child, files, errors)
+      })
+    } catch {
+      errors.push(`${entry.name} could not be fully scanned`)
+    }
   }
 }
 
@@ -110,25 +122,38 @@ async function collectEntry(entry: FileSystemEntry, files: File[]): Promise<void
 export function filesFromDrop(
   dataTransfer: DataTransfer | null,
   onFolderScan?: () => void,
-): Promise<{ files: File[]; folders: boolean }> {
+): Promise<{ files: File[]; folders: boolean; errors: string[] }> {
   const items = dataTransfer?.items
   if (items && items.length > 0) {
-    const entries = Array.from(items)
+    const claimed = Array.from(items)
       .filter((item) => typeof item.webkitGetAsEntry === 'function')
-      .map((item) => item.webkitGetAsEntry())
+      .map((item) => ({ entry: item.webkitGetAsEntry(), file: item.getAsFile?.() }))
+    const entries = claimed
+      .map((item) => item.entry)
       .filter((entry): entry is FileSystemEntry => entry !== null)
+    const looseFiles = claimed
+      .filter((item) => item.entry === null && item.file)
+      .map((item) => item.file!)
+    const entryErrors = claimed
+      .filter((item) => item.entry === null && !item.file)
+      .map(() => 'A dropped item could not be read')
 
-    if (entries.length > 0) {
+    if (entries.length > 0 || looseFiles.length > 0 || entryErrors.length > 0) {
       const folders = entries.some((entry) => entry.isDirectory)
       if (folders) onFolderScan?.()
       return (async () => {
-        const files: File[] = []
-        for (const entry of entries) await collectEntry(entry, files)
-        return { files, folders }
+        const files: File[] = [...looseFiles]
+        const errors: string[] = [...entryErrors]
+        for (const entry of entries) await collectEntry(entry, files, errors)
+        return { files, folders, errors }
       })()
     }
   }
-  return Promise.resolve({ files: Array.from(dataTransfer?.files ?? []), folders: false })
+  return Promise.resolve({
+    files: Array.from(dataTransfer?.files ?? []),
+    folders: false,
+    errors: [],
+  })
 }
 
 type DocumentDropzoneProps = {
@@ -232,6 +257,9 @@ export function DocumentDropzone({
             choose a folder
           </button>
         )}
+        {!expanded ? (
+          <p className="text-text-tertiary text-xs">PDF, TXT, MD, PNG, JPG · Word/slides → PDF</p>
+        ) : null}
 
         {scanning ? (
           <p className="text-text-secondary text-xs">

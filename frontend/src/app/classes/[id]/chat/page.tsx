@@ -11,6 +11,7 @@ import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { readChatHandoff, stripChatHandoff } from '@/lib/handoff'
+import { readChatSourceSelection, writeChatSourceSelection } from '@/lib/chat-draft-store'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
 
@@ -26,6 +27,18 @@ const DRAFT_SESSION = 'new'
 function readSessionId(value: string | null): number | null {
   const sessionId = Number(value)
   return Number.isSafeInteger(sessionId) && sessionId > 0 ? sessionId : null
+}
+
+export function readSavedDocumentSelection(key: string): number | null {
+  const durable = readChatSourceSelection(key)
+  try {
+    const saved = durable ?? sessionStorage.getItem(key)
+    if (!saved || saved === 'all') return null
+    const id = Number(saved)
+    return Number.isSafeInteger(id) && id > 0 ? id : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -51,7 +64,30 @@ export default function ClassWorkspacePage() {
   // change the params under a mounted page and never be applied.
   const [handoff] = useState(() => readChatHandoff(searchParams))
 
-  const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(handoff.documentId)
+  const selectionKey = `lyra:class:${classId}:chat-selected-document`
+  const [selection, setSelection] = useState(() => ({
+    classId,
+    documentId: handoff.documentId ?? readSavedDocumentSelection(selectionKey),
+  }))
+  const selectedDocumentId =
+    selection.classId === classId ? selection.documentId : readSavedDocumentSelection(selectionKey)
+  const setSelectedDocumentId = (documentId: number | null) => setSelection({ classId, documentId })
+
+  useEffect(() => {
+    if (selection.classId !== classId) return
+    writeChatSourceSelection(
+      selectionKey,
+      selectedDocumentId === null ? 'all' : String(selectedDocumentId),
+    )
+    try {
+      sessionStorage.setItem(
+        selectionKey,
+        selectedDocumentId === null ? 'all' : String(selectedDocumentId),
+      )
+    } catch {
+      // The selection remains valid in this mounted workspace if storage is unavailable.
+    }
+  }, [classId, selection.classId, selectedDocumentId, selectionKey])
 
   useEffect(() => {
     const stripped = stripChatHandoff(searchParams)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sqlite3
 import threading
@@ -10,6 +11,8 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
+import pymupdf
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -17,11 +20,14 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_agent_chat
 from backend.api.routes_agent_chat import AgentTurnCost
+from backend.config import settings
 from backend.core import (
     agent_attempts,
     agent_store,
     agent_tools,
     app_settings,
+    document_access,
+    ingestion,
     sessions,
     web_research,
 )
@@ -33,7 +39,571 @@ from backend.llm import prompts as llm_prompts
 from backend.llm import tools
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 from backend.rag.tokens import estimate_tokens
+from backend.storage import secrets
 from backend.storage.database import connect, get_db
+
+
+def test_selected_mixed_worksheet_sends_scanned_problem_image_to_provider(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Instructions alone never stand in for the scanned problem page."""
+    pdf = tmp_path / "mixed.pdf"
+    source = pymupdf.open()
+    first = source.new_page()
+    first.insert_text((72, 72), "Instructions: solve the problems on page two")
+    second = source.new_page()
+    second.draw_rect(pymupdf.Rect(80, 80, 300, 200), color=(0, 0, 0))
+    second.insert_text((95, 115), "Problem 9: resistor 12 ohm")
+    source.save(pdf)
+    source.close()
+    db.execute(
+        "update documents set stored_path = ?, pages_total = 2 where id = 7",
+        (str(pdf),),
+    )
+    db.execute(
+        "insert into document_pages (document_id, page_number, state) values (7, 2, 'scanned')"
+    )
+    db.execute("update settings set vision_supported = 1, allow_web_research = 1 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="I can see page two."))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Solve the worksheet", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    last = messages[-1]
+    assert isinstance(last["content"], list)
+    assert any(part.get("type") == "image_url" for part in last["content"])
+    assert any("page 2" in str(part.get("text")) for part in last["content"])
+    assert "coverage is incomplete" in str(messages[0]["content"])
+    assert "search_web" not in captured["registry"]
+
+
+def test_unreadable_short_worksheet_refuses_before_inference_without_vision(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute("update documents set pages_total = 2 where id = 7")
+    db.execute(
+        "insert into document_pages (document_id, page_number, state) values (7, 2, 'scanned')"
+    )
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Invented answer"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Solve the worksheet", "document_id": 7},
+    )
+    assert response.status_code == 409
+    assert "Recognize" in response.json()["detail"]
+    assert captured == {}
+    assert sessions.list_messages(db, session_id) == []
+
+
+def test_native_matrix_layout_is_sent_as_page_image_when_text_is_insufficient(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "matrix.pdf"
+    source = pymupdf.open()
+    page = source.new_page()
+    page.insert_text((72, 72), "Matrix A")
+    page.insert_text((100, 110), "2     7")
+    page.insert_text((100, 134), "5     11")
+    source.save(pdf)
+    source.close()
+    db.execute("update documents set stored_path = ?, pages_total = 1 where id = 7", (str(pdf),))
+    db.execute("insert into document_pages (document_id, page_number, state) values (7, 1, 'text')")
+    db.execute(
+        "insert into document_figures (document_id, page_number, figure_index, bbox) "
+        "values (7, 1, 0, '[0.1, 0.1, 0.6, 0.4]')"
+    )
+    db.execute("update settings set vision_supported = 1 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Layout preserved."))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain this matrix", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    user_parts = captured["messages"][-1]["content"]
+    assert isinstance(user_parts, list)
+    assert any(part.get("type") == "image_url" for part in user_parts)
+    assert any("page 1" in str(part.get("text")) for part in user_parts)
+
+
+def test_classwide_late_page_image_reaches_the_next_provider_round(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool-discovered visual page is delivered as image bytes, not a file path or claim."""
+    pdf = tmp_path / "late-diagram.pdf"
+    source = pymupdf.open()
+    for number in range(1, 6):
+        page = source.new_page()
+        if number != 5:
+            page.insert_text((72, 72), f"Worksheet page {number}")
+        if number == 5:
+            page.draw_rect(pymupdf.Rect(80, 100, 360, 340), color=(0, 0, 0))
+    source.save(pdf)
+    source.close()
+    db.execute(
+        "update documents set stored_path = ?, pages_total = 5 where id = 7",
+        (str(pdf),),
+    )
+    db.execute(
+        "insert into document_pages (document_id, page_number, state) values (7, 5, 'scanned')"
+    )
+    db.execute("update settings set vision_supported = 1, context_window = 16384 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    requests: list[list[dict[str, object]]] = []
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        messages: list[dict[str, object]],
+        schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        requests.append(messages)
+        names = {str(item["function"]["name"]) for item in schemas}
+        assert "read_document_image" in names
+        if len(requests) == 1:
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "page", "read_document_page", '{"document_id":7,"page_number":5}'
+                    ),
+                ),
+            )
+        if len(requests) == 2:
+            page_result = json.loads(str(messages[-1]["content"]))
+            assert page_result["needs_image"] is True
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "image", "read_document_image", '{"document_id":7,"page_number":5}'
+                    ),
+                ),
+            )
+        visual = [
+            item
+            for item in messages
+            if item["role"] == "user" and isinstance(item["content"], list)
+        ]
+        assert len(visual) == 1
+        parts = visual[0]["content"]
+        assert any("document 7, physical page 5" in str(part.get("text")) for part in parts)
+        image = next(part["image_url"]["url"] for part in parts if part.get("type") == "image_url")
+        assert base64.b64decode(str(image).split(",", 1)[1]).startswith(b"\x89PNG\r\n\x1a\n")
+        return routes_agent_chat.llm_client.AssistantMessage("Page five contains a diagram.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tools.run_tool_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "What about part b?"},
+    )
+    assert response.status_code == 200, response.text
+    assert len(requests) == 3
+    image_activity = [
+        event for event in response.json()["activity"] if event["tool"] == "read_document_image"
+    ]
+    assert len(image_activity) == 1
+    assert image_activity[0]["sources"] == [
+        {"document_id": 7, "filename": "signals.pdf", "page_number": 5, "evidence": "image"}
+    ]
+    page_activity = next(
+        event for event in response.json()["activity"] if event["tool"] == "read_document_page"
+    )
+    assert page_activity["detail"] == "Page image needed"
+    assert page_activity["sources"][0]["page_number"] == 5
+    persisted = sessions.list_messages(db, session_id)
+    assert persisted[-1]["tool_activity"] == response.json()["activity"]
+
+
+def test_http_batch_sends_real_page_image_after_all_tool_replies(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "two-pages.pdf"
+    source = pymupdf.open()
+    source.new_page().draw_rect(pymupdf.Rect(72, 72, 190, 180), color=(1, 0, 0))
+    source.new_page().insert_text((72, 72), "Second page text evidence")
+    source.save(pdf)
+    source.close()
+    db.execute("update documents set stored_path = ?, pages_total = 2 where id = 7", (str(pdf),))
+    db.execute("update settings set vision_supported = 1, context_window = 16384 where id = 1")
+    db.commit()
+    expected = document_access.image_page(db, class_id, None, 7, 1)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    received: list[dict[str, object]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        received.append(body)
+        if len(received) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "image",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_document_image",
+                                            "arguments": '{"document_id":7,"page_number":1}',
+                                        },
+                                    },
+                                    {
+                                        "id": "text",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_document_page",
+                                            "arguments": '{"document_id":7,"page_number":2}',
+                                        },
+                                    },
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+        messages = body["messages"]
+        assistant = next(i for i, item in enumerate(messages) if item["role"] == "assistant")
+        if [item.get("tool_call_id") for item in messages[assistant + 1 : assistant + 3]] != [
+            "image",
+            "text",
+        ]:
+            return httpx.Response(400, json={"error": "interrupted tool replies"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "The diagram is on page one."}}
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(provider)
+
+    async def real_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return await tools.run_tool_loop(*args, **kwargs, transport=transport)
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", real_loop)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the page-one diagram and page-two text"},
+    )
+    assert response.status_code == 200, response.text
+    assert len(received) == 2
+    messages = received[1]["messages"]
+    assistant = next(i for i, item in enumerate(messages) if item["role"] == "assistant")
+    image_message = messages[assistant + 3]
+    assert image_message["role"] == "user"
+    assert "Uploaded document 7, physical page 1" in image_message["content"][0]["text"]
+    encoded = image_message["content"][1]["image_url"]["url"]
+    assert base64.b64decode(encoded.split(",", 1)[1]) == expected
+    assert [event["tool"] for event in response.json()["activity"]] == [
+        "read_document_image",
+        "read_document_page",
+    ]
+
+
+def test_failed_first_index_still_sends_actual_worksheet_text_to_provider(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worksheet = settings.uploads_dir / "embedding-offline.md"
+    worksheet.write_text(
+        "Problem 3: ALPHA_SENTINEL is the quantity to compare. " + "signal " * 80,
+        encoding="utf-8",
+    )
+    db.execute(
+        "update documents set stored_path = ?, filename = ?, mime = ?, "
+        "byte_size = ?, state = 'pending' "
+        "where id = 7",
+        (str(worksheet), worksheet.name, "text/markdown", worksheet.stat().st_size),
+    )
+    db.execute("update settings set context_window = 16384 where id = 1")
+    db.commit()
+    monkeypatch.setattr(
+        ingestion,
+        "embed_documents",
+        lambda _texts: (_ for _ in ()).throw(RuntimeError("embedding helper stopped")),
+    )
+    ingestion.run_ingestion(7)
+    assert db.execute("select state from documents where id = 7").fetchone()[0] == "failed"
+    assert db.execute("select count(*) from chunks where document_id = 7").fetchone()[0] == 0
+
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    requests: list[list[dict[str, object]]] = []
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        messages: list[dict[str, object]],
+        _schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        requests.append(messages)
+        if len(requests) == 1:
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "find", "search_documents", '{"query":"ALPHA_SENTINEL"}'
+                    ),
+                ),
+            )
+        result = json.loads(str(messages[-1]["content"]))
+        assert "ALPHA_SENTINEL" in str(result["sources"])
+        assert result["sources"][0]["page_number"] == 1
+        return routes_agent_chat.llm_client.AssistantMessage("The worksheet names ALPHA_SENTINEL.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tools.run_tool_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Find the quantity in problem 3", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert len(requests) == 2
+
+
+def test_changed_endpoint_blocks_late_page_image_before_next_provider_request(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "diagram.pdf"
+    source = pymupdf.open()
+    source.new_page().draw_rect(pymupdf.Rect(72, 72, 280, 240), color=(0, 0, 0))
+    source.save(pdf)
+    source.close()
+    db.execute("update documents set stored_path = ?, pages_total = 1 where id = 7", (str(pdf),))
+    db.execute("update settings set vision_supported = 1, context_window = 16384 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    real_image_page = document_access.image_page
+
+    def change_settings_after_render(*args: object) -> bytes:
+        image = real_image_page(*args)
+        changed = connect()
+        try:
+            changed.execute(
+                "update settings set endpoint_url = 'http://127.0.0.1:9999/v1' where id = 1"
+            )
+            changed.commit()
+        finally:
+            changed.close()
+        return image
+
+    monkeypatch.setattr(document_access, "image_page", change_settings_after_render)
+    requests = 0
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        _messages: list[dict[str, object]],
+        _schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        nonlocal requests
+        requests += 1
+        assert requests == 1, "the changed endpoint received a private page image"
+        return routes_agent_chat.llm_client.AssistantMessage(
+            "",
+            (
+                routes_agent_chat.llm_client.ToolCall(
+                    "image", "read_document_image", '{"document_id":7,"page_number":1}'
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tools.run_tool_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the diagram"},
+    )
+    assert response.status_code == 502
+    assert "Tutor settings changed" in response.json()["detail"]
+    assert requests == 1
+
+
+def test_page_image_tool_bounds_count_and_selected_source(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute("update settings set vision_supported = 1 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    monkeypatch.setattr(document_access, "image_page", lambda *_args: b"synthetic-png")
+    registry, activity = agent_tools.build_agent_registry(
+        db,
+        class_id,
+        session_id,
+        "agent",
+        selected_document_id=7,
+        document_endpoint="http://127.0.0.1:8080/v1",
+        image_capable=True,
+    )
+    read_image = registry["read_document_image"].handler
+    refused_scope = read_image(document_id=3, page_number=1)
+    assert not refused_scope.ok
+    assert "selected document" in str(refused_scope.as_payload())
+    for page in (1, 2, 3):
+        assert read_image(document_id=7, page_number=page).ok
+    assert activity.image_count == 3
+    assert len(activity.pending_images) == 3
+    fourth = read_image(document_id=7, page_number=4)
+    assert not fourth.ok
+    assert "page-image limit" in str(fourth.as_payload())
+
+
+def test_stopped_page_image_is_a_durable_refusal_without_visual_delivery(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute("update settings set vision_supported = 1 where id = 1")
+    db.commit()
+    gate = tools.ToolStopGate()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    def stop_during_render(*_args: object) -> bytes:
+        gate.request_stop()
+        return b"synthetic-png"
+
+    monkeypatch.setattr(document_access, "image_page", stop_during_render)
+    registry, activity = agent_tools.build_agent_registry(
+        db,
+        class_id,
+        session_id,
+        "agent",
+        selected_document_id=7,
+        document_endpoint="http://127.0.0.1:8080/v1",
+        image_capable=True,
+        stop=gate,
+    )
+    result = registry["read_document_image"].handler(document_id=7, page_number=1)
+    assert not result.ok
+    assert activity.pending_images == []
+    assert activity.events[-1].state == "refused"
+    assert activity.events[-1].detail == "This turn was stopped."
+    audit = db.execute(
+        "select state, error_message from tool_audit_events where tool = 'read_document_image'"
+    ).fetchone()
+    assert tuple(audit) == ("refused", "This turn was stopped.")
+
+
+def test_required_matrix_figure_without_vision_refuses_before_provider(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute(
+        "insert into document_figures (document_id, page_number, figure_index, bbox) "
+        "values (7, 1, 0, '[0.1, 0.1, 0.6, 0.4]')"
+    )
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Invented matrix."))
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain this matrix", "document_id": 7},
+    )
+    assert response.status_code == 409
+    assert "vision-capable" in response.json()["detail"]
+    assert captured == {}
+
+
+def test_selected_later_problem_and_followup_reach_provider_from_exact_index(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poor semantic first pass cannot hide an explicitly numbered later problem."""
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "problem_number, doc_type, embedding_model, embedding_dim) "
+        "values (7, ?, 'Problem 9(a): solve 3x = 12', 9, 9, '9', 'generic', 'test', 768)",
+        (class_id,),
+    )
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "problem_number, doc_type, embedding_model, embedding_dim) "
+        "values (7, ?, 'Problem 9(b): check x = 4', 9, 9, '9', 'generic', 'test', 768)",
+        (class_id,),
+    )
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "problem_number, doc_type, embedding_model, embedding_dim) "
+        "values (3, ?, 'Problem 9: unrelated answer is 88', 9, 9, '9', 'generic', 'test', 768)",
+        (class_id,),
+    )
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Check the source."))
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Solve problem 9", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    prompt = str(captured["messages"][0]["content"])
+    assert "3x = 12" in prompt and "x = 4" in prompt
+    assert "unrelated answer" not in prompt
+    assert "signals.pdf" in prompt and "page 9" in prompt
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "What about part b?", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert "Problem 9(b): check x = 4" in str(captured["messages"][0]["content"])
 
 
 def _request_db() -> Iterator[sqlite3.Connection]:
@@ -58,7 +628,23 @@ def empty_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def client(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def client(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    # Scope tests use document 7. It is a real class-owned source so the live
+    # selected-document guard can distinguish it from a moved/deleted selection.
+    db.execute(
+        "insert into documents "
+        "(id, class_id, filename, stored_path, mime, byte_size, state) "
+        "values (7, ?, 'signals.pdf', 'unused/signals.pdf', 'application/pdf', 100, 'ready')",
+        (class_id,),
+    )
+    db.execute(
+        "insert into documents "
+        "(id, class_id, filename, stored_path, mime, byte_size, state) "
+        "values (3, ?, 'legacy.pdf', 'unused/legacy.pdf', 'application/pdf', 100, 'ready')",
+        (class_id,),
+    )
     db.execute(
         "update settings set endpoint_url = 'http://127.0.0.1:8080/v1', tools_supported = 1 "
         "where id = 1"
@@ -1684,6 +2270,8 @@ def test_the_agent_turn_builds_on_the_full_tutor_system_prompt(
     prompt = str(captured["messages"][0]["content"])
     assert "prefers visual proofs" in prompt
     assert "audits changes before merging" in prompt
+    assert "Do not mention unavailable workspace access" in prompt
+    assert "Never imply that workspace access is needed to read uploaded course material" in prompt
     # The unconfirmed, low-confidence proposal is not active material.
     assert "unconfirmed scheduling detail" not in prompt
 
@@ -3100,3 +3688,121 @@ def test_a_stale_tool_refusal_cannot_pre_block_the_new_endpoint(
     assert len(registries) == 2
     assert isinstance(registries[-1], dict)
     assert "cas_evaluate" in registries[-1]
+
+
+@pytest.mark.parametrize("slot", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+def test_first_send_waits_for_keychain_without_blocking_the_event_loop(
+    client, db, class_id, monkeypatch, isolated_keychain, slot, stream
+):
+    endpoint = "http://127.0.0.1:8080/v1"
+    if slot:
+        identity = secrets.stage_tutor_credential(endpoint, "synthetic-first-send")
+        db.execute("update settings set tutor_credential_id=? where id=1", (identity,))
+    else:
+        isolated_keychain[(secrets.SERVICE, secrets.USERNAME)] = "synthetic-first-send"
+        db.execute("update settings set legacy_credential_endpoint=? where id=1", (endpoint,))
+    db.commit()
+    monkeypatch.setattr(secrets, "_slot_read_cache", {})
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    started, release = threading.Event(), threading.Event()
+    reads = []
+
+    def delayed_read(service, username):
+        reads.append(username)
+        started.set()
+        assert release.wait(2)
+        return isolated_keychain.get((service, username))
+
+    monkeypatch.setattr(secrets.keyring, "get_password", delayed_read)
+    sent = []
+
+    async def answer(endpoint, key, *args, **kwargs):
+        sent.append((endpoint, key))
+        return tools.ToolLoopResult(content="First send succeeded.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", answer)
+
+    async def release_on_request_loop():
+        for _ in range(200):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.005)
+        else:
+            return
+        # Only the request event loop can release this read: a blocking wait
+        # on that loop cannot pass, even if a timeout eventually frees it.
+        await asyncio.sleep(0.05)
+        release.set()
+
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    future = client.portal.start_task_soon(release_on_request_loop)
+    try:
+        response = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "First question", "profile": "code"},
+            headers={"Accept": "text/event-stream"} if stream else {},
+        )
+        assert response.status_code == 200, response.text
+        assert "First send succeeded." in response.text
+        assert "responding" not in response.text
+        assert sent == [(endpoint, "synthetic-first-send")]
+        assert len(reads) == 1
+        assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+    finally:
+        release.set()
+        future.result(timeout=2)
+        if secrets._operation_thread:
+            secrets._operation_thread.join(2)
+
+
+def test_stop_during_keychain_read_releases_turn_without_sending(client, db, class_id, monkeypatch):
+    endpoint = "http://127.0.0.1:8080/v1"
+    identity = secrets.stage_tutor_credential(endpoint, "synthetic-stopped")
+    db.execute("update settings set tutor_credential_id=? where id=1", (identity,))
+    db.commit()
+    monkeypatch.setattr(secrets, "_slot_read_cache", {})
+    started, release = threading.Event(), threading.Event()
+
+    def delayed_read(*args):
+        started.set()
+        assert release.wait(3)
+        return "synthetic-stopped"
+
+    monkeypatch.setattr(secrets.keyring, "get_password", delayed_read)
+    sent = []
+
+    async def answer(*args, **kwargs):
+        sent.append(True)
+        return tools.ToolLoopResult(content="Should never send")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", answer)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+    responses = []
+    sender = threading.Thread(
+        target=lambda: responses.append(
+            client.post(url, json={"content": "Stop this", "profile": "code"})
+        )
+    )
+    sender.start()
+    try:
+        assert started.wait(2)
+        busy = client.post(url, json={"content": "Duplicate", "profile": "code"})
+        assert busy.status_code == 409
+        stopped = client.post(url + "/stop")
+        assert stopped.json() == {"stopped": True, "settling": False}
+        sender.join(2)
+        assert not sender.is_alive()
+        assert responses[0].json()["stopped"] == "stopped"
+        assert secrets._operation_thread.is_alive()
+        assert sessions.active_turn(session_id) is None
+        assert sessions.list_messages(db, session_id) == []
+        assert sent == []
+    finally:
+        release.set()
+        sender.join(3)
+        if secrets._operation_thread:
+            secrets._operation_thread.join(3)
+    assert sessions.list_messages(db, session_id) == []
+    assert sent == []

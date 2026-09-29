@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ApiError, api, streamChat, type AgentStreamEvent } from '@/lib/api'
+import { resetChatDraftMemory } from '@/lib/chat-draft-store'
 import type { ChatEvent, DocumentRead, MessageRead, SessionRead, SettingsRead } from '@/types'
 
 vi.mock('@/lib/api', async () => {
@@ -32,6 +33,11 @@ vi.mock('@/lib/api', async () => {
 })
 
 const QUESTION = 'Explain sum of two periodic signals'
+
+beforeEach(() => {
+  localStorage.clear()
+  resetChatDraftMemory()
+})
 
 function message(overrides: Partial<MessageRead> & { id: number }): MessageRead {
   return {
@@ -123,6 +129,23 @@ describe('ChatPane', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry conversation' }))
     expect(await screen.findByText('Saved question')).toBeInTheDocument()
     expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+  })
+
+  it('restores the actual unsent textarea across conversation navigation and remount', async () => {
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    const user = userEvent.setup()
+    const view = renderWorkspace()
+    const box = await screen.findByLabelText('Message Lyra')
+    await user.type(box, 'Unsent worksheet question')
+    await user.click(screen.getByRole('button', { name: 'Reopen chat' }))
+    await waitFor(() => expect(box).toHaveValue(''))
+    await user.click(screen.getByRole('button', { name: 'New chat' }))
+    await waitFor(() => expect(box).toHaveValue('Unsent worksheet question'))
+
+    view.unmount()
+    resetChatDraftMemory() // An ordinary relaunch has a new JS heap.
+    renderWorkspace()
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('Unsent worksheet question')
   })
 
   it('shows the first question once while the answer streams', async () => {
@@ -1114,6 +1137,50 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     expect(await screen.findByText('Here is how the starter works.')).toBeInTheDocument()
   })
 
+  it('keeps an explicit document ID when the document list has not loaded', async () => {
+    vi.mocked(api.listDocuments).mockImplementation(() => new Promise(() => {}))
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    vi.mocked(api.sendAgentChat).mockResolvedValue({
+      message_id: 42,
+      content: 'Answer',
+      stopped: 'complete',
+      detail: 'Complete.',
+      activity: [],
+      source_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+      profile_fact_ids: [],
+    })
+    renderAgentPane()
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Read my worksheet')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.sendAgentChat).mock.calls[0][4]).toBe(5)
+  })
+
+  it('does not broaden a selected file after it disappears from a refreshed list', async () => {
+    vi.mocked(api.listDocuments).mockResolvedValue([])
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    vi.mocked(api.sendAgentChat).mockResolvedValue({
+      message_id: 43,
+      content: 'Selected file unavailable',
+      stopped: 'complete',
+      detail: 'Selected file unavailable',
+      activity: [],
+      source_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+      profile_fact_ids: [],
+    })
+    renderAgentPane()
+    const user = userEvent.setup()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Read the selected file')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.sendAgentChat).mock.calls[0][4]).toBe(5)
+  })
+
   it('mints one operation ID per agent send and clears it once the turn settles', async () => {
     vi.mocked(api.sendAgentChat).mockClear()
     const transcript: MessageRead[] = []
@@ -1607,10 +1674,10 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       expect(secondOp).not.toBe(firstOp)
     })
 
-    it('case B: a durable failed turn retires the send key entirely - no prefill, next send is a new send', async () => {
+    it('case B: a durable failed turn retains its prompt and retires the send key', async () => {
       // The question landed; the attempt failed durably. The transcript shows the honest
-      // turn with its Retry. The composer must not prefill the text (Retry is the causal
-      // path) AND the send key is spent: a follow-up message - identical or different -
+      // turn with its Retry. The composer retains the unsent text, while the send key is
+      // spent: a follow-up message - identical or different -
       // is a NEW send that mints a fresh operation id, never a re-run of the spent one.
       vi.mocked(api.sendAgentChat).mockClear()
       const transcript: MessageRead[] = []
@@ -1643,10 +1710,10 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
       const firstOp = vi.mocked(api.sendAgentChat).mock.calls[0][6]
 
-      // No prefill: the composer is empty, not offered the failed question again.
-      await waitFor(() => expect(box).toHaveValue(''))
+      await waitFor(() => expect(box).toHaveValue(QUESTION))
 
       // A typed message after the failed turn - identical or different - is a NEW send.
+      await user.clear(box)
       await user.type(box, 'What about Fourier transforms?')
       await user.click(screen.getByLabelText('Send message'))
       await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
@@ -2490,8 +2557,8 @@ describe('frame-cadence token publication (PLA-501)', () => {
       act(() => frame?.())
       expect(answerText(container)).toBe('One two three')
 
-      // Let the backstop clock run out after the frame already won the race: it adds
-      // nothing.
+      // No timer exists behind the frame anymore (PLA-509 removed the hidden-tab
+      // backstop): waiting adds nothing once the frame has published.
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 120))
       })
@@ -2501,23 +2568,41 @@ describe('frame-cadence token publication (PLA-501)', () => {
     }
   })
 
-  it('keeps publishing while a hidden tab withholds the frame', async () => {
+  it('holds the publication while genuinely hidden, and reconciles on return (PLA-509)', async () => {
     const transcript: MessageRead[] = []
     primeApi(transcript)
-    // The withheld rAF: nothing is ever scheduled into a frame.
+    // A hidden document is owed no animation frames: withhold them and model the state.
     vi.stubGlobal('requestAnimationFrame', () => 0)
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    })
     const { emit, container } = await startTurn()
     try {
+      // The first word publishes immediately — a hidden pane still shows the turn began.
       await act(async () => emit({ type: 'token', text: 'One' }))
-      await act(async () => emit({ type: 'token', text: ' two' }))
       expect(answerText(container)).toBe('One')
 
-      // The bounded timer carries the publication while no frame comes.
+      // A genuinely hidden window is owed no frames: the second word is held, and the
+      // pane does no presentation work on it until the reader comes back. (The old 64 ms
+      // timer used to publish here; PLA-509 bounds that work to the hidden document.)
+      await act(async () => emit({ type: 'token', text: ' two' }))
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 120))
       })
+      expect(answerText(container)).toBe('One')
+
+      // The reader returns: whatever the stream gathered while away is published now.
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        value: 'visible',
+      })
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
       expect(answerText(container)).toBe('One two')
     } finally {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
       vi.unstubAllGlobals()
     }
   })

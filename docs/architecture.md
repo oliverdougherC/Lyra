@@ -66,6 +66,11 @@ The frontend is now a Vite/React application with client-side routing.
   the same per-class list query as the Files tab, so its first item and the tab's top row
   always agree.
 - The UI talks only to the FastAPI API surface; it does not call tutor providers or Exa directly.
+- Unsent Class Ask, class chat, and writer chat text is stored by class, answerer, and
+  conversation with per-window revisions. A successful send clears only its submitted
+  revision, so writing begun during an answer survives that answer's completion. Local
+  storage refusal leaves the current window editable and shows a warning; source selection
+  uses the same durable store across ordinary relaunches.
 - Scroll positions are tracked per history entry in memory and checkpointed to session storage,
   never to History on scroll. Navigation reserves History quota; refused updates fall back to
   same-document hash navigation. See [the scroll-quota correction](pla-486-scroll-quota.md).
@@ -97,6 +102,22 @@ any later buffered completion event. Readers are cancelled and released on compl
 failure, while UI generation checks prevent obsolete turns from changing the active view.
 EOF is not completion: chat and writing require their `done` or `error` event, and agent
 streams require a valid `result` or structured error. Agent JSON replay remains supported.
+
+Agent streams also emit `activity` frames as audited tools start and settle. The chat replaces
+each running item by audit ID with its terminal status. Document events carry safe source
+identity, physical page, character range, evidence type, and relevant continuation or failure
+detail. The live trail stays beside the active answer; settled activity and provider-exposed
+reasoning are collapsed in Details, including after reload. Source links open the exact page
+through the authenticated Files preview. The separate activity history retains the durable audit
+and results. An uploaded course document is retrieved as study context; it does not require an
+attached local workspace. The agent requests workspace access only for work that needs files in
+an attached folder.
+
+`search_documents` returns bounded cited excerpts and a `next_cursor` when more text is
+available. The agent passes that cursor with the same query to continue. Search cursors
+expire after any indexed chunk or readable-page write, including ingestion in another
+class, because FTS ranking uses database-wide statistics. Each page checks the cursor
+and reads its results in one SQLite snapshot; an expired cursor must restart the search.
 
 The backend prefers explicit provider reasoning fields. Legacy inline reasoning markers are
 recognized only at the start of content, before answer prose begins; tags in subsequent answer
@@ -213,3 +234,21 @@ restarts with a fresh session. Backup validation lives in `backend/desktop_backu
 publication/recovery spans `backend/desktop_backup.py` and `src-tauri/src/backup.rs`. Updates verify
 trusted signed artifacts and schema compatibility before replacement; see
 [releasing](releasing.md) and `src-tauri/src/updater.rs`. No update check runs automatically at launch.
+
+
+## Observation and rendering work
+
+Agent activity is observed while a turn or command is running and refreshed after mutations.
+Settled decisions use mutation invalidation and bounded dismissal-expiry checks. Document,
+draft, and study status requests skip hidden-window polling and reconcile on visibility
+return, while requested backend jobs continue independently. Error reads use a slower cadence.
+
+Chat keeps settled transcript elements separate from live presentation. Reasoning bytes are
+retained while a closed disclosure avoids per-delta presentation, and long Markdown answers
+use a memoized full-document renderer with adaptive publication scheduling. Editor citations
+rescan affected textblocks; comment resolution shares normalized document indexes. See
+[optimization evidence](optimization-evidence-20260908.md) for measurements and limits.
+
+Pre-migration backups retain consistent SQLite snapshots and private-file validation while
+copying and hashing in bounded chunks. Their 512 MiB source-file ceiling is independent of
+the upload route's limit. A failed verification or copy still prevents migration.

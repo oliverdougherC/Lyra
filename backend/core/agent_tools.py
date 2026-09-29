@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import uuid
@@ -27,6 +28,8 @@ from urllib.parse import urlsplit
 from backend.core import (
     agent_attempts,
     agent_store,
+    app_settings,
+    document_access,
     profiles,
     sessions,
     source_ledger,
@@ -42,6 +45,8 @@ from backend.llm import tool_profiles
 from backend.llm.tools import REGISTRY as COMPUTE_REGISTRY
 from backend.llm.tools import ToolDefinition, ToolStopGate
 from backend.tools.result import ToolResult, failure, success
+
+logger = logging.getLogger(__name__)
 
 type AgentProfile = Literal["research", "code", "command", "agent"]
 
@@ -120,6 +125,10 @@ class AgentActivity:
     state: str
     target_kind: str | None = None
     target_id: str | None = None
+    class_id: int | None = None
+    sources: tuple[dict[str, object], ...] = ()
+    detail: str | None = None
+    has_more: bool = False
 
 
 @dataclass(slots=True)
@@ -135,7 +144,9 @@ class AgentRunActivity:
     """
 
     events: list[AgentActivity] = field(default_factory=list)
+    on_event: Callable[[AgentActivity], None] | None = field(default=None, repr=False)
     attempt_id: int | None = None
+    class_id: int | None = None
     fetched_sources: dict[str, FetchedSource] = field(default_factory=dict, repr=False)
     source_ids: list[int] = field(default_factory=list)
     workspace_change_ids: list[int] = field(default_factory=list)
@@ -145,6 +156,10 @@ class AgentRunActivity:
     # asked at most once per turn: the student sees one card per missing capability,
     # and a repeat call in the same turn is told so instead of producing another card.
     requested_scopes: set[str] = field(default_factory=set)
+    pending_images: list[tuple[int, int, str, bytes]] = field(default_factory=list, repr=False)
+    sent_images: list[tuple[int, str]] = field(default_factory=list, repr=False)
+    image_count: int = 0
+    private_visual_seen: bool = False
 
     def note(
         self,
@@ -156,18 +171,35 @@ class AgentRunActivity:
         state: str,
         target_kind: str | None = None,
         target_id: str | None = None,
+        sources: tuple[dict[str, object], ...] = (),
+        detail: str | None = None,
+        has_more: bool = False,
     ) -> None:
-        self.events.append(
-            AgentActivity(
-                audit_id=audit_id,
-                tool=tool,
-                capability=capability,
-                effect=effect,
-                state=state,
-                target_kind=target_kind,
-                target_id=target_id,
-            )
+        event = AgentActivity(
+            audit_id=audit_id,
+            tool=tool,
+            capability=capability,
+            effect=effect,
+            state=state,
+            target_kind=target_kind,
+            target_id=target_id,
+            class_id=self.class_id,
+            sources=sources,
+            detail=detail,
+            has_more=has_more,
         )
+        self.events.append(event)
+        self.publish(event)
+
+    def publish(self, event: AgentActivity) -> None:
+        """Show progress without adding an unfinished event to the durable reply."""
+        if self.on_event is not None:
+            try:
+                self.on_event(event)
+            except Exception:
+                # The browser may disconnect after dispatch. Its progress feed must not
+                # change the tool's audited outcome or interrupt an authorized action.
+                logger.exception("Could not publish agent tool progress")
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +208,10 @@ class _Outcome:
     summary: Mapping[str, object]
     target_kind: str | None = None
     target_id: str | None = None
+    image: tuple[int, int, str, bytes] | None = None
+    sources: tuple[dict[str, object], ...] = ()
+    detail: str | None = None
+    has_more: bool = False
 
 
 class _RefusalError(Exception):
@@ -231,7 +267,7 @@ def _audit_arguments(tool: str, arguments: Mapping[str, object]) -> dict[str, ob
     """Project arguments into metadata without persisting private/bulky values."""
     projected: dict[str, object] = {}
     for name, value in arguments.items():
-        if name in {"query", "proposed_content", "excerpt"}:
+        if name in {"query", "cursor", "proposed_content", "excerpt"}:
             text = str(value)
             projected[f"{name}_chars"] = len(text)
             projected[f"{name}_sha256"] = hashlib.sha256(text.encode()).hexdigest()
@@ -351,9 +387,24 @@ def _audited_handler(
         if stop is not None and stop.stopped:
             return failure(_STOPPED_MESSAGE)
         safe_arguments = _audit_arguments(name, arguments)
+        source_hint: tuple[dict[str, object], ...] = ()
         try:
             authorization = authorize()
             policy_decision = "allowed"
+            if capability == "document_read" and type(arguments.get("document_id")) is int:
+                doc_id = int(arguments["document_id"])
+                doc = conn.execute(
+                    "select filename from documents where id = ? and class_id = ?",
+                    (doc_id, class_id),
+                ).fetchone()
+                if doc is not None:
+                    source_hint = (
+                        {
+                            "document_id": doc_id,
+                            "filename": str(doc["filename"]),
+                            "page_number": arguments.get("page_number"),
+                        },
+                    )
         except Exception as exc:
             message = _safe_error(exc)
             try:
@@ -377,6 +428,7 @@ def _audited_handler(
                     capability=capability,
                     effect=effect,
                     state="refused",
+                    detail=message,
                 )
             except Exception:
                 return failure("Tool audit is unavailable; no action was taken.")
@@ -399,6 +451,18 @@ def _audited_handler(
         except Exception:
             return failure("Tool audit is unavailable; no action was taken.")
 
+        activity.publish(
+            AgentActivity(
+                audit_id=started.id,
+                tool=name,
+                capability=capability,
+                effect=effect,
+                state=tool_audit.STARTED,
+                class_id=class_id,
+                sources=source_hint,
+            )
+        )
+
         try:
             outcome = action(authorization, **arguments)
         except Exception as exc:
@@ -415,6 +479,8 @@ def _audited_handler(
                 capability=capability,
                 effect=effect,
                 state=state,
+                sources=source_hint,
+                detail=message,
             )
             return failure(message)
 
@@ -430,6 +496,12 @@ def _audited_handler(
             )
         except Exception:
             terminal_state = tool_audit.STARTED
+        if outcome.image is not None:
+            if terminal_state != "succeeded":
+                return failure("Image evidence could not be audited; no image was delivered.")
+            activity.pending_images.append(outcome.image)
+            activity.image_count += 1
+            activity.private_visual_seen = True
         activity.note(
             audit_id=started.id,
             tool=name,
@@ -438,6 +510,9 @@ def _audited_handler(
             state=terminal_state,
             target_kind=outcome.target_kind,
             target_id=outcome.target_id,
+            sources=outcome.sources or source_hint,
+            detail=outcome.detail,
+            has_more=outcome.has_more,
         )
         return outcome.result
 
@@ -465,6 +540,10 @@ def build_agent_registry(
     private_context: PrivateContextLedger | Sequence[str] = (),
     snapshot: AgentCapabilitySnapshot | None = None,
     stop: ToolStopGate | None = None,
+    selected_document_id: int | None = None,
+    document_endpoint: str | None = None,
+    image_capable: bool = False,
+    initial_image_count: int = 0,
 ) -> tuple[dict[str, ToolDefinition], AgentRunActivity]:
     """Build the smallest raw registry allowed for one class-agent turn.
 
@@ -499,7 +578,9 @@ def build_agent_registry(
         if isinstance(private_context, PrivateContextLedger)
         else PrivateContextLedger(*private_context)
     )
-    activity = AgentRunActivity()
+    activity = AgentRunActivity(class_id=class_id)
+    activity.image_count = initial_image_count
+    activity.private_visual_seen = initial_image_count > 0
     definitions: list[tool_profiles.AnnotatedToolDefinition] = []
 
     def session_authorization() -> object:
@@ -544,6 +625,18 @@ def build_agent_registry(
         )
 
     if profile == "agent":
+        _add_document_tools(
+            conn,
+            class_id,
+            session_id,
+            definitions,
+            activity,
+            ledger,
+            selected_document_id,
+            document_endpoint,
+            stop,
+            image_capable,
+        )
         # The contextual turn plans across research, workspace, and command work on its
         # own: every group is added and self-gates on the same frozen snapshot, so the
         # exposed registry is the union of what the snapshot admits - no more, no less. The
@@ -583,6 +676,293 @@ def build_agent_registry(
     return {item.name: item.definition for item in selected.definitions}, activity
 
 
+def _add_document_tools(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    definitions: list[tool_profiles.AnnotatedToolDefinition],
+    activity: AgentRunActivity,
+    ledger: PrivateContextLedger,
+    selected_document_id: int | None,
+    document_endpoint: str | None,
+    stop: ToolStopGate | None,
+    image_capable: bool,
+) -> None:
+    """Read indexed coursework under the conversation's immutable source selection."""
+
+    def authorize() -> object:
+        _session_scope(conn, class_id, session_id)
+        row = app_settings.get_settings_row(conn)
+        if app_settings.document_text_allowed(conn) is not None:
+            raise _RefusalError("Course material may not be sent to this tutor endpoint.")
+        if document_endpoint is not None and str(row["endpoint_url"]).strip() != document_endpoint:
+            raise _RefusalError("Tutor settings changed during this reply. Try again.")
+        document_access._scope(conn, class_id, selected_document_id)
+        return None
+
+    def read_problem_primitive(
+        document_id: object,
+        problem_number: object,
+        page_number: object = None,
+        cursor: object = None,
+    ) -> dict[str, object]:
+        return document_access.read_problem(
+            conn,
+            class_id,
+            selected_document_id,
+            _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1),
+            _text(problem_number, "problem_number", maximum=40),
+            _integer(page_number, "page_number", minimum=1, maximum=100000)
+            if page_number is not None
+            else None,
+            cursor=_text(cursor, "cursor", maximum=2048) if cursor is not None else None,
+        )
+
+    specs = (
+        (
+            "list_documents",
+            "List uploaded coursework in this class, including page coverage and search readiness. "
+            "Use next_cursor to continue when has_more is true.",
+            {"cursor": {"type": "string", "maxLength": 2048}},
+            (),
+            lambda cursor=None: document_access.inventory(
+                conn,
+                class_id,
+                selected_document_id,
+                cursor=_text(cursor, "cursor", maximum=2048) if cursor is not None else None,
+            ),
+        ),
+        (
+            "search_documents",
+            "Search uploaded coursework by exact terms and return bounded cited excerpts. "
+            "Works without the embedding helper. Continue with next_cursor when has_more is true; "
+            "an expired cursor means restart the search.",
+            {
+                "query": {"type": "string", "maxLength": 200},
+                "cursor": {"type": "string", "maxLength": 2048},
+            },
+            ("query",),
+            lambda query, cursor=None: document_access.search(
+                conn,
+                class_id,
+                selected_document_id,
+                _text(query, "query", maximum=200),
+                cursor=_text(cursor, "cursor", maximum=2048) if cursor is not None else None,
+            ),
+        ),
+        (
+            "read_document_page",
+            "Read bounded text and coverage of a numbered physical page. Cite the returned source "
+            "and continue with next_cursor when has_more is true.",
+            {
+                "document_id": {"type": "integer", "minimum": 1},
+                "page_number": {"type": "integer", "minimum": 1},
+                "cursor": {"type": "string", "maxLength": 2048},
+            },
+            ("document_id", "page_number"),
+            lambda document_id, page_number, cursor=None: document_access.read_page(
+                conn,
+                class_id,
+                selected_document_id,
+                _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1),
+                _integer(page_number, "page_number", minimum=1, maximum=100000),
+                cursor=_text(cursor, "cursor", maximum=2048) if cursor is not None else None,
+            ),
+        ),
+        (
+            "read_document_problem",
+            "Read parts of one numbered uploaded problem with physical-page citations. "
+            "Continue with next_cursor when has_more is true.",
+            {
+                "document_id": {"type": "integer", "minimum": 1},
+                "problem_number": {"type": "string", "maxLength": 40},
+                "page_number": {"type": "integer", "minimum": 1},
+                "cursor": {"type": "string", "maxLength": 2048},
+            },
+            ("document_id", "problem_number"),
+            read_problem_primitive,
+        ),
+        (
+            "read_document_section",
+            "Read bounded chunks of one numbered section with page citations. "
+            "Continue with next_cursor when has_more is true.",
+            {
+                "document_id": {"type": "integer", "minimum": 1},
+                "section_number": {"type": "string", "maxLength": 40},
+                "cursor": {"type": "string", "maxLength": 2048},
+            },
+            ("document_id", "section_number"),
+            lambda document_id, section_number, cursor=None: document_access.read_section(
+                conn,
+                class_id,
+                selected_document_id,
+                _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1),
+                _text(section_number, "section_number", maximum=40),
+                cursor=_text(cursor, "cursor", maximum=2048) if cursor is not None else None,
+            ),
+        ),
+    )
+    for name, description, properties, required, primitive in specs:
+
+        def action(_authorization: object, _primitive=primitive, **arguments: object) -> _Outcome:
+            result = _primitive(**arguments)
+            for source in result.get("sources", []):
+                if isinstance(source, Mapping):
+                    ledger.add(source.get("text"), source.get("filename"))
+            visible = result.get("sources", result.get("documents", []))
+            source_details: list[dict[str, object]] = []
+            for source in visible[:3] if isinstance(visible, list) else []:
+                if not isinstance(source, Mapping):
+                    continue
+                source_details.append(
+                    {
+                        key: source[key]
+                        for key in (
+                            "document_id",
+                            "filename",
+                            "page_number",
+                            "text_start",
+                            "text_end",
+                            "text_length",
+                            "state",
+                            "semantic_ready",
+                        )
+                        if key in source
+                    }
+                )
+            detail = (
+                "Page image needed"
+                if result.get("needs_image")
+                else "More source text available"
+                if result.get("has_more")
+                else "Direct text; semantic index unavailable"
+                if result.get("semantic_ready") is False
+                else "No matching source text"
+                if not visible
+                else None
+            )
+            target_id = arguments.get("document_id")
+            if target_id is None and len(source_details) == 1:
+                target_id = source_details[0].get("document_id")
+            return _Outcome(
+                success(**result),
+                {
+                    "source_count": len(result.get("sources", [])),
+                    "truncated": result.get("truncated", False),
+                    "has_more": result.get("has_more", False),
+                },
+                target_kind="document",
+                target_id=str(target_id) if target_id is not None else None,
+                sources=tuple(source_details),
+                detail=detail,
+                has_more=bool(result.get("has_more")),
+            )
+
+        definition = _definition(
+            name,
+            description,
+            _audited_handler(
+                conn,
+                class_id=class_id,
+                session_id=session_id,
+                name=name,
+                capability="document_read",
+                effect="database_read",
+                activity=activity,
+                authorize=authorize,
+                action=action,
+                stop=stop,
+            ),
+            properties=properties,
+            required=required,
+        )
+        definitions.append(
+            _annotated(
+                definition, capability="document_read", effect="database_read", trust="database"
+            )
+        )
+
+    if image_capable:
+
+        def read_image(
+            _authorization: object, *, document_id: object, page_number: object
+        ) -> _Outcome:
+            _require_not_stopped(stop)
+            doc_id = _integer(document_id, "document_id", minimum=1, maximum=2**31 - 1)
+            page = _integer(page_number, "page_number", minimum=1, maximum=100000)
+            if selected_document_id is not None and doc_id != selected_document_id:
+                raise _RefusalError("This conversation is limited to the selected document.")
+            if activity.image_count >= document_access.MAX_VISUAL_PAGES:
+                raise _RefusalError(
+                    "This turn has reached its page-image limit. Start a follow-up for more pages."
+                )
+            before = conn.execute(
+                "select created_at from documents where id = ? and class_id = ?",
+                (doc_id, class_id),
+            ).fetchone()
+            if before is None:
+                raise _RefusalError("That document is no longer in this class.")
+            image = document_access.image_page(conn, class_id, selected_document_id, doc_id, page)
+            after = conn.execute(
+                "select created_at from documents where id = ? and class_id = ?",
+                (doc_id, class_id),
+            ).fetchone()
+            if after is None or after["created_at"] != before["created_at"]:
+                raise _RefusalError("That document changed while its image was read. Try again.")
+            _require_not_stopped(stop)
+            return _Outcome(
+                success(document_id=doc_id, page_number=page, image_prepared=True),
+                {"document_id": doc_id, "page_number": page, "image_bytes": len(image)},
+                target_kind="document",
+                target_id=str(doc_id),
+                image=(doc_id, page, str(before["created_at"]), image),
+                sources=(
+                    {
+                        "document_id": doc_id,
+                        "filename": str(
+                            conn.execute(
+                                "select filename from documents where id = ? and class_id = ?",
+                                (doc_id, class_id),
+                            ).fetchone()[0]
+                        ),
+                        "page_number": page,
+                        "evidence": "image",
+                    },
+                ),
+                detail="Page image prepared for the tutor",
+            )
+
+        definitions.append(
+            _annotated(
+                _definition(
+                    "read_document_image",
+                    "Read one exact physical page image when text evidence needs it. "
+                    "The next tutor round receives the image. Three images fit one turn.",
+                    _audited_handler(
+                        conn,
+                        class_id=class_id,
+                        session_id=session_id,
+                        name="read_document_image",
+                        capability="document_read",
+                        effect="database_read",
+                        activity=activity,
+                        authorize=authorize,
+                        action=read_image,
+                        stop=stop,
+                    ),
+                    properties={
+                        "document_id": {"type": "integer", "minimum": 1},
+                        "page_number": {"type": "integer", "minimum": 1},
+                    },
+                    required=("document_id", "page_number"),
+                ),
+                capability="document_read",
+                effect="database_read",
+                trust="database",
+            )
+        )
+
+
 def _add_research_tools(
     conn: sqlite3.Connection,
     class_id: int,
@@ -600,9 +980,13 @@ def _add_research_tools(
         return
 
     def research_auth() -> object:
+        if activity.private_visual_seen:
+            raise _RefusalError("Web research is unavailable after private page images are opened.")
         return _research_authorization(conn, class_id, session_id)
 
     def scrape_auth() -> object:
+        if activity.private_visual_seen:
+            raise _RefusalError("Web research is unavailable after private page images are opened.")
         return _research_authorization(conn, class_id, session_id, require_source_content=True)
 
     def search_action(capabilities: WriterCapabilities, *, query: str) -> _Outcome:

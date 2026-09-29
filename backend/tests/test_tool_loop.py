@@ -6,6 +6,7 @@ was checked, and a loop that gave up quietly would be read as agreement.
 """
 
 import asyncio
+import base64
 import json
 
 import httpx
@@ -15,7 +16,7 @@ from backend.core import artifacts, verification
 from backend.core.errors import ToolsUnsupportedError
 from backend.llm import client, tools
 from backend.rag.tokens import estimate_tokens
-from backend.tools.result import ToolResult, success
+from backend.tools.result import ToolResult, failure, success
 
 _ENDPOINT = "http://127.0.0.1:8080/v1"
 _MESSAGES: list[dict[str, object]] = [{"role": "user", "content": "Check this."}]
@@ -126,6 +127,86 @@ async def test_several_calls_in_one_turn_are_one_round() -> None:
 
     assert result.stopped == tools.COMPLETED
     assert [call.name for call in result.calls] == ["cas_evaluate", "cas_differentiate"]
+
+
+@pytest.mark.parametrize(
+    ("batch", "expected_images"),
+    [
+        (["image:a", "text:note"], ["a"]),
+        (["image:a", "image:b"], ["a", "b"]),
+        (["image:refused", "image:b"], ["b"]),
+        (["image:a", "image:refused"], ["a"]),
+    ],
+)
+async def test_http_tool_batch_replies_precede_supplemental_images(
+    batch: list[str], expected_images: list[str]
+) -> None:
+    """The real HTTP client must send every tool reply before a user image turn."""
+    images = {"a": b"\x89PNG\r\n\x1a\npage-a", "b": b"\x89PNG\r\n\x1a\npage-b"}
+
+    def read_image(tag: str) -> ToolResult:
+        if tag == "refused":
+            return failure("Page access was refused.")
+        return success(page=tag)
+
+    registry = {
+        "image": tools.ToolDefinition(
+            name="image",
+            description="Read an image.",
+            parameters={
+                "type": "object",
+                "properties": {"tag": {"type": "string"}},
+                "required": ["tag"],
+            },
+            handler=read_image,
+        ),
+        **_echo_registry(),
+    }
+    # The text call uses the existing echo tool's argument contract.
+    calls = [
+        _tool_call(
+            "echo" if name == "text" else name,
+            {"text": tag} if name == "text" else {"tag": tag},
+            f"call_{index}",
+        )
+        for index, (name, tag) in enumerate(item.split(":") for item in batch)
+    ]
+    received: list[dict[str, object]] = []
+
+    def strict_server(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        received.append(body)
+        if len(received) == 1:
+            return httpx.Response(200, json=_reply(tool_calls=calls))
+        messages = body["messages"]
+        assistant = next(i for i, item in enumerate(messages) if item["role"] == "assistant")
+        replies = messages[assistant + 1 : assistant + 1 + len(calls)]
+        if [item.get("tool_call_id") for item in replies] != [call["id"] for call in calls]:
+            return httpx.Response(400, json={"error": "tool replies were interrupted"})
+        if any(item["role"] != "tool" for item in replies):
+            return httpx.Response(400, json={"error": "non-tool before all replies"})
+        return httpx.Response(200, json=_reply(content="All evidence read."))
+
+    def after_call(recorded: tools.RecordedCall) -> list[dict[str, object]]:
+        if recorded.name != "image" or not recorded.ok:
+            return []
+        tag = str(recorded.arguments["tag"])
+        return [client.image_message(f"Document 7, physical page {tag}.", images[tag])]
+
+    result = await _run(
+        httpx.MockTransport(strict_server), registry=registry, after_call=after_call
+    )
+
+    assert result.stopped == tools.COMPLETED
+    assert [call.ok for call in result.calls] == [item != "image:refused" for item in batch]
+    assert len(received) == 2
+    supplemental = received[1]["messages"][2 + len(calls) :]
+    assert len(supplemental) == len(expected_images)
+    for message, tag in zip(supplemental, expected_images, strict=True):
+        assert message["role"] == "user"
+        assert f"Document 7, physical page {tag}" in message["content"][0]["text"]
+        encoded = message["content"][1]["image_url"]["url"]
+        assert base64.b64decode(encoded.split(",", 1)[1]) == images[tag]
 
 
 async def test_a_call_to_a_tool_outside_the_registry_is_refused() -> None:
@@ -736,6 +817,64 @@ async def test_a_first_result_that_overflows_stops_the_rest_of_the_same_response
     assert [call.arguments.get("tag") for call in result.calls] == ["a"]
     # The transcript stopped there rather than sending a request missing tool results.
     assert len(sent) == 1
+
+
+@pytest.mark.parametrize("cut", ["stop", "overflow"])
+async def test_image_batch_cut_after_first_call_never_sends_partial_replies(
+    cut: str,
+) -> None:
+    runs: list[str] = []
+    transport, sent = _scripted(
+        _reply(
+            tool_calls=[
+                _tool_call("work", {"tag": "image"}, call_id="image"),
+                _tool_call("work", {"tag": "later"}, call_id="later"),
+            ]
+        )
+    )
+    gate = tools.ToolStopGate()
+    supplementary: list[str] = []
+
+    def work(tag: str) -> ToolResult:
+        runs.append(tag)
+        if cut == "stop" and tag == "image":
+            gate.request_stop()
+        return success(payload="small")
+
+    registry = {
+        "work": tools.ToolDefinition(
+            name="work",
+            description="Read a page.",
+            parameters={
+                "type": "object",
+                "properties": {"tag": {"type": "string"}},
+                "required": ["tag"],
+            },
+            handler=work,
+        )
+    }
+
+    def after_call(recorded: tools.RecordedCall) -> list[dict[str, object]]:
+        supplementary.append(str(recorded.arguments["tag"]))
+        return [client.image_message("Document 7, physical page 1.", b"\x89PNG\r\n\x1a\npage")]
+
+    result = await _run(
+        transport,
+        registry=registry,
+        after_call=after_call,
+        stop_gate=gate,
+        context_budget=(
+            tools.ContextBudget(context_window=3000, generation_reserve=1024, tool_tokens=50)
+            if cut == "overflow"
+            else None
+        ),
+    )
+
+    assert result.stopped == (tools.STOPPED if cut == "stop" else tools.CONTEXT_OVERFLOW)
+    assert [call.arguments["tag"] for call in result.calls] == ["image"]
+    assert runs == ["image"]
+    assert supplementary == ([] if cut == "stop" else ["image"])
+    assert len(sent) == 1  # No request with only one of the required tool replies.
 
 
 # --- The reserved output ceiling and truncation (PLA-290 blocker 1) ------------------

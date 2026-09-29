@@ -1133,6 +1133,30 @@ def test_a_fact_is_believed_only_when_its_quote_is_really_in_the_document(
     assert [str(fact["confidence"]) for fact in facts] == [expected], reason
 
 
+def test_optional_extraction_discards_reply_after_document_moves(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = int(db.execute("insert into classes (name) values ('Other Class')").lastrowid)
+    db.commit()
+
+    async def move_during_model(*_args: object, **_kwargs: object) -> str:
+        mover = connect()
+        try:
+            mover.execute("update documents set class_id = ? where id = ?", (target, document_id))
+            mover.commit()
+        finally:
+            mover.close()
+        return MIDTERM_REPLY
+
+    monkeypatch.setattr(profiles.client, "complete", move_during_model)
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) is None
+    assert _fact_count(db) == 0
+
+
 def test_an_unverified_fact_is_kept_and_shown_but_never_reaches_a_prompt(
     db: sqlite3.Connection,
     class_id: int,

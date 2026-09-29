@@ -29,6 +29,75 @@ beforeEach(() => {
   window.__LYRA_BOOTSTRAP__ = { apiBase: 'http://127.0.0.1:8000' }
 })
 describe('agent response streaming', () => {
+  it('delivers validated tool progress before the answer', async () => {
+    const stream = start()
+    const events: AgentStreamEvent[] = []
+    const pending = api.sendAgentChat(
+      1,
+      7,
+      'Question',
+      undefined,
+      null,
+      'guide',
+      'operation',
+      undefined,
+      (event) => events.push(event),
+    )
+    const activity = {
+      audit_id: 'call-1',
+      tool: 'cas_evaluate',
+      capability: 'compute',
+      effect: 'pure',
+      state: 'started',
+      target_kind: null,
+      target_id: null,
+      class_id: 1,
+      sources: [
+        { document_id: 7, filename: 'signals.pdf', page_number: 5, text_start: 0, text_end: 2600 },
+      ],
+      detail: 'More source text available',
+      has_more: true,
+    }
+    stream.push(frame({ type: 'activity', activity }))
+    await vi.waitFor(() => expect(events).toHaveLength(1))
+    expect(events[0]).toEqual({ type: 'activity', activity })
+    stream.push(frame({ type: 'result', result }))
+    stream.close()
+    await pending
+  })
+
+  it('rejects malformed page provenance before it reaches the trail', async () => {
+    const stream = start()
+    const pending = api.sendAgentChat(
+      1,
+      7,
+      'Question',
+      undefined,
+      null,
+      'guide',
+      'operation',
+      undefined,
+      () => {},
+    )
+    stream.push(
+      frame({
+        type: 'activity',
+        activity: {
+          audit_id: 'bad',
+          tool: 'read_document_page',
+          capability: 'document_read',
+          effect: 'database_read',
+          state: 'succeeded',
+          target_kind: 'document',
+          target_id: '7',
+          sources: [{ document_id: 7, filename: 'signals.pdf', page_number: 'five' }],
+        },
+      }),
+    )
+    stream.close()
+    await expect(pending).rejects.toBeInstanceOf(SseStreamError)
+  })
+
   it('delivers split reasoning and answer frames before the final result', async () => {
     const stream = start()
     const events: AgentStreamEvent[] = []
