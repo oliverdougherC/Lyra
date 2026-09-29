@@ -1,13 +1,22 @@
 /** Unsent composer state is private to a class/conversation and to a window writer. */
 const PREFIX = 'lyra:unsent-chat:v1:'
+const REVISION_PREFIX = 'lyra:unsent-chat:v2:'
 const PREFERENCE_PREFIX = 'lyra:chat-source:v1:'
 const WINDOW_ID_KEY = 'lyra:chat-draft-writer:v1'
 const ACCEPTED_PREFIX = 'lyra:chat-sent-unretired:v1:'
 const RETIRED_PREFIX = 'lyra:chat-draft-retired:v1:'
+const REVISION_RETIRED_PREFIX = 'lyra:chat-draft-retired:v2:'
 const MAX_VALUE_LENGTH = 64_000
 const MAX_RECORDS = 128
 
-type RecordValue = { value: string; revision: string; updatedAt: number; lineage?: string }
+type Ancestor = { key: string; revision: string }
+type RecordValue = {
+  value: string
+  revision: string
+  updatedAt: number
+  lineage?: string
+  ancestors?: Ancestor[]
+}
 export type ChatDraftClearOutcome = 'retired' | 'superseded' | 'failed'
 
 function currentWindowId(): string {
@@ -56,49 +65,65 @@ function retiredKey(scope: string): string {
   return `${RETIRED_PREFIX}${encodeURIComponent(scope)}`
 }
 
+function revisionRetiredKey(scope: string, revision: string): string {
+  return `${REVISION_RETIRED_PREFIX}${encodeURIComponent(scope)}:${encodeURIComponent(revision)}`
+}
+
+function revisionRetiredPrefix(scope: string): string {
+  return `${REVISION_RETIRED_PREFIX}${encodeURIComponent(scope)}:`
+}
+
+function isRevisionKey(key: string): boolean {
+  return key.startsWith(REVISION_PREFIX)
+}
+
 function durablyRetired(scope: string): Set<string> {
+  const retired = new Set<string>()
   try {
     const raw = localStorage.getItem(retiredKey(scope))
     const saved: unknown = raw ? JSON.parse(raw) : []
-    return new Set(
-      Array.isArray(saved)
-        ? saved.filter((revision): revision is string => typeof revision === 'string')
-        : [],
-    )
+    if (Array.isArray(saved)) {
+      for (const revision of saved) if (typeof revision === 'string') retired.add(revision)
+    }
+    const prefix = revisionRetiredPrefix(scope)
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (key?.startsWith(prefix)) retired.add(decodeURIComponent(key.slice(prefix.length)))
+    }
   } catch {
-    return new Set()
+    // Keep any markers already found if storage becomes unavailable mid-scan.
+  }
+  return retired
+}
+
+function isDurablyRetired(scope: string, revision: string): boolean {
+  try {
+    if (localStorage.getItem(revisionRetiredKey(scope, revision)) !== null) return true
+    const raw = localStorage.getItem(retiredKey(scope))
+    const saved: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(saved) && saved.includes(revision)
+  } catch {
+    return false
   }
 }
 
 function readRetired(scope: string): Set<string> {
   const revisions = new Set(acceptedUncleared.get(scope) ?? [])
-  try {
-    const raw = localStorage.getItem(retiredKey(scope))
-    const saved: unknown = raw ? JSON.parse(raw) : []
-    if (Array.isArray(saved)) {
-      for (const revision of saved) {
-        if (typeof revision === 'string') revisions.add(revision)
-      }
-    }
-  } catch {
-    // Keep the in-memory acknowledgement if storage is unavailable.
-  }
+  for (const revision of durablyRetired(scope)) revisions.add(revision)
   return revisions
 }
 
-function retireRevision(scope: string, revision: string): boolean {
+function retireRevision(scope: string, revision: string, retainOnFailure = false): boolean {
   const revisions = readRetired(scope)
   revisions.add(revision)
-  acceptedUncleared.set(scope, revisions)
   try {
-    const present = new Set(storedRecords(scope).map(({ record }) => record.revision))
-    const retained = [...revisions].filter((item) => present.has(item))
-    if (retained.length > MAX_RECORDS) return false
-    if (retained.length === 0) localStorage.removeItem(retiredKey(scope))
-    else localStorage.setItem(retiredKey(scope), JSON.stringify(retained))
+    // One immutable marker per revision: simultaneous acknowledgements never replace one another.
+    localStorage.setItem(revisionRetiredKey(scope, revision), '1')
+    acceptedUncleared.set(scope, revisions)
     reclaimRetiredScope(scope)
     return true
   } catch {
+    if (retainOnFailure) acceptedUncleared.set(scope, revisions)
     return false
   }
 }
@@ -111,17 +136,16 @@ function reclaimRetiredScope(scope: string): number {
   try {
     for (const { key, record } of storedRecords(scope)) {
       if (!retired.has(record.revision)) continue
-      // A different window may have replaced the record since the first scan.
-      if (parse(localStorage.getItem(key))?.revision !== record.revision) continue
+      // Legacy writer slots can still be replaced by an older live context. Never delete them.
+      if (!isRevisionKey(key)) continue
       localStorage.removeItem(key)
       if (localStorage.getItem(key) === null) removed += 1
     }
     const present = new Set(storedRecords(scope).map(({ record }) => record.revision))
-    const needed = [...retired].filter((revision) => present.has(revision))
-    if (needed.length === 0) localStorage.removeItem(retiredKey(scope))
-    else if (needed.length !== retired.size) {
-      localStorage.setItem(retiredKey(scope), JSON.stringify(needed))
+    for (const revision of retired) {
+      if (!present.has(revision)) localStorage.removeItem(revisionRetiredKey(scope, revision))
     }
+    const needed = [...retired].filter((revision) => present.has(revision))
     if (needed.length === 0) acceptedUncleared.delete(scope)
     else acceptedUncleared.set(scope, new Set(needed))
   } catch {
@@ -135,9 +159,12 @@ function reclaimRetiredRecords(): number {
   const scopes = new Set<string>()
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index)
-    if (!key?.startsWith(RETIRED_PREFIX)) continue
+    if (!key?.startsWith(RETIRED_PREFIX) && !key?.startsWith(REVISION_RETIRED_PREFIX)) continue
     try {
-      scopes.add(decodeURIComponent(key.slice(RETIRED_PREFIX.length)))
+      const suffix = key.startsWith(RETIRED_PREFIX)
+        ? key.slice(RETIRED_PREFIX.length)
+        : key.slice(REVISION_RETIRED_PREFIX.length).split(':')[0]
+      scopes.add(decodeURIComponent(suffix))
     } catch {
       // Malformed keys are not evidence that a draft was acknowledged.
     }
@@ -152,7 +179,16 @@ function acceptedKey(scope: string): string {
 }
 
 function readAccepted(scope: string): Set<string> {
-  const revisions = readRetired(scope)
+  const revisions = new Set(acceptedUncleared.get(scope) ?? [])
+  try {
+    const raw = localStorage.getItem(retiredKey(scope))
+    const saved: unknown = raw ? JSON.parse(raw) : []
+    if (Array.isArray(saved)) {
+      for (const revision of saved) if (typeof revision === 'string') revisions.add(revision)
+    }
+  } catch {
+    // The current heap can still suppress a send after denied storage.
+  }
   for (const kind of ['session', 'local'] as const) {
     try {
       const storage = kind === 'session' ? sessionStorage : localStorage
@@ -172,30 +208,33 @@ function readAccepted(scope: string): Set<string> {
 }
 
 export function isChatDraftAccepted(scope: string, revision: string): boolean {
-  return readAccepted(scope).has(revision)
+  if (readAccepted(scope).has(revision)) return true
+  try {
+    return localStorage.getItem(revisionRetiredKey(scope, revision)) !== null
+  } catch {
+    return false
+  }
 }
 
 export function hasChatDraftAccepted(scope: string): boolean {
-  const accepted = readAccepted(scope)
-  if (accepted.size === 0) return false
   try {
-    return storedRecords(scope).some(({ record }) => accepted.has(record.revision))
+    return storedRecords(scope).some(({ record }) => isChatDraftAccepted(scope, record.revision))
   } catch {
-    return true
+    return readAccepted(scope).size > 0
   }
 }
 
 /** An accepted physical copy lacks durable cross-session suppression. */
 export function hasChatDraftRetirementRisk(scope: string): boolean {
   const accepted = readAccepted(scope)
-  if (accepted.size === 0) return false
-  const retired = durablyRetired(scope)
   try {
-    return storedRecords(scope).some(
-      ({ record }) => accepted.has(record.revision) && !retired.has(record.revision),
-    )
+    return storedRecords(scope).some(({ record }) => {
+      if (!accepted.has(record.revision) && !isChatDraftAccepted(scope, record.revision))
+        return false
+      return !isDurablyRetired(scope, record.revision)
+    })
   } catch {
-    return true
+    return accepted.size > 0
   }
 }
 
@@ -236,20 +275,21 @@ export function finishChatDraftSend(token: symbol): void {
   }
 }
 
-function recordKey(scope: string): string {
-  return `${PREFIX}${encodeURIComponent(scope)}:${windowId}`
+function recordKey(scope: string, revision: string): string {
+  return `${REVISION_PREFIX}${encodeURIComponent(scope)}:${windowId}:${revision}`
 }
 
-function scopePrefix(scope: string): string {
-  return `${PREFIX}${encodeURIComponent(scope)}:`
+function scopePrefixes(scope: string): string[] {
+  const encoded = encodeURIComponent(scope)
+  return [`${PREFIX}${encoded}:`, `${REVISION_PREFIX}${encoded}:`]
 }
 
 function storedRecords(scope: string): { key: string; record: RecordValue }[] {
-  const prefix = scopePrefix(scope)
+  const prefixes = scopePrefixes(scope)
   const records: { key: string; record: RecordValue }[] = []
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index)
-    if (!key?.startsWith(prefix)) continue
+    if (!key || !prefixes.some((prefix) => key.startsWith(prefix))) continue
     const record = parse(localStorage.getItem(key))
     if (record) records.push({ key, record })
   }
@@ -272,7 +312,22 @@ function parse(raw: string | null): RecordValue | null {
       typeof value.updatedAt === 'number' &&
       Number.isFinite(value.updatedAt)
     ) {
-      return value as RecordValue
+      const record = value as RecordValue
+      if (
+        record.ancestors !== undefined &&
+        (!Array.isArray(record.ancestors) ||
+          record.ancestors.length > MAX_RECORDS ||
+          record.ancestors.some(
+            (item) =>
+              !item ||
+              typeof item.key !== 'string' ||
+              typeof item.revision !== 'string' ||
+              (!item.key.startsWith(PREFIX) && !item.key.startsWith(REVISION_PREFIX)),
+          ))
+      ) {
+        return null
+      }
+      return record
     }
   } catch {
     // A malformed or unavailable entry cannot replace a valid draft.
@@ -280,15 +335,65 @@ function parse(raw: string | null): RecordValue | null {
   return null
 }
 
-function pruneEmptyScopes(): number {
-  const scopes = new Map<string, { keys: string[]; empty: boolean }>()
+function allStoredRecords(): { key: string; record: RecordValue; scope: string }[] {
+  const records: { key: string; record: RecordValue; scope: string }[] = []
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index)
-    if (!key?.startsWith(PREFIX)) continue
-    const scope = key.slice(PREFIX.length).split(':')[0]
+    if (!key) continue
+    const prefix = key.startsWith(REVISION_PREFIX)
+      ? REVISION_PREFIX
+      : key.startsWith(PREFIX)
+        ? PREFIX
+        : null
+    if (!prefix) continue
+    const record = parse(localStorage.getItem(key))
+    if (!record) continue
+    try {
+      records.push({
+        key,
+        record,
+        scope: decodeURIComponent(key.slice(prefix.length).split(':')[0]),
+      })
+    } catch {
+      // Malformed scope keys do not enter capacity decisions.
+    }
+  }
+  return records
+}
+
+function capacityRecordCount(): number {
+  const records = allStoredRecords()
+  const supersededLegacy = new Set<string>()
+  for (const { key, record } of records) {
+    if (!isRevisionKey(key)) continue
+    for (const ancestor of record.ancestors ?? []) {
+      if (!isRevisionKey(ancestor.key))
+        supersededLegacy.add(`${ancestor.key}\0${ancestor.revision}`)
+    }
+  }
+  let count = 0
+  for (const { key, record, scope } of records) {
+    if (scope.startsWith('source:')) continue
+    if (isRevisionKey(key)) {
+      count += 1
+      continue
+    }
+    if (
+      record.value !== '' &&
+      !isDurablyRetired(scope, record.revision) &&
+      !supersededLegacy.has(`${key}\0${record.revision}`)
+    )
+      count += 1
+  }
+  return count
+}
+
+function pruneEmptyScopes(): number {
+  const scopes = new Map<string, { keys: string[]; empty: boolean }>()
+  for (const { key, record, scope } of allStoredRecords()) {
     const group = scopes.get(scope) ?? { keys: [], empty: true }
-    group.keys.push(key)
-    group.empty &&= parse(localStorage.getItem(key))?.value === ''
+    if (isRevisionKey(key)) group.keys.push(key)
+    group.empty &&= record.value === ''
     scopes.set(scope, group)
   }
   let removed = 0
@@ -303,7 +408,7 @@ function pruneEmptyScopes(): number {
 }
 
 function migrateLegacySelections(): number {
-  const groups = new Map<string, { keys: string[]; latest: RecordValue | null }>()
+  const groups = new Map<string, RecordValue>()
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index)
     if (!key?.startsWith(PREFIX)) continue
@@ -316,31 +421,23 @@ function migrateLegacySelections(): number {
     }
     if (!scope.startsWith('source:')) continue
     const record = parse(localStorage.getItem(key))
-    const group = groups.get(scope) ?? { keys: [], latest: null }
-    group.keys.push(key)
-    if (record && (!group.latest || record.updatedAt > group.latest.updatedAt)) {
-      group.latest = record
-    }
-    groups.set(scope, group)
+    const latest = groups.get(scope)
+    if (record && (!latest || record.updatedAt > latest.updatedAt)) groups.set(scope, record)
   }
-  let removed = 0
-  for (const [scope, group] of groups) {
-    const choice = group.latest?.value
+  for (const [scope, latest] of groups) {
+    const choice = latest.value
     if (choice !== 'all' && !(choice && /^[1-9]\d*$/.test(choice))) continue
     const preferenceKey = `${PREFERENCE_PREFIX}${encodeURIComponent(scope.slice(7))}`
     try {
       if (localStorage.getItem(preferenceKey) === null) {
         localStorage.setItem(preferenceKey, choice)
       }
-      for (const key of group.keys) {
-        localStorage.removeItem(key)
-        if (localStorage.getItem(key) === null) removed += 1
-      }
     } catch {
       // Leave the old records intact if either migration step is refused.
     }
   }
-  return removed
+  // Legacy writer slots remain physically intact because an old context may still replace one.
+  return 0
 }
 
 export function readChatDraft(scope: string): RecordValue | null {
@@ -357,12 +454,20 @@ export function readChatDraft(scope: string): RecordValue | null {
     }
   }
   try {
-    const accepted = readAccepted(scope)
     let latest: { key: string; record: RecordValue } | null = null
+    let ownLatest: { key: string; record: RecordValue } | null = null
+    const ownPrefix = `${REVISION_PREFIX}${encodeURIComponent(scope)}:${windowId}:`
+    const ownLegacyKey = `${PREFIX}${encodeURIComponent(scope)}:${windowId}`
     for (const entry of storedRecords(scope)) {
-      if (accepted.has(entry.record.revision)) continue
+      if (isChatDraftAccepted(scope, entry.record.revision)) continue
       if (!latest || entry.record.updatedAt > latest.record.updatedAt) latest = entry
+      if (
+        (entry.key.startsWith(ownPrefix) || entry.key === ownLegacyKey) &&
+        (!ownLatest || entry.record.updatedAt > ownLatest.record.updatedAt)
+      )
+        ownLatest = entry
     }
+    latest = ownLatest ?? latest
     if (!latest) return null
     memory.set(scope, latest.record)
     draftSources.set(scope, { key: latest.key, revision: latest.record.revision })
@@ -377,47 +482,105 @@ export function writeChatDraft(
   scope: string,
   value: string,
 ): { record: RecordValue; durable: boolean } {
-  const record = {
+  if (!memory.has(scope)) {
+    try {
+      const ownPrefix = `${REVISION_PREFIX}${encodeURIComponent(scope)}:${windowId}:`
+      const ownLegacyKey = `${PREFIX}${encodeURIComponent(scope)}:${windowId}`
+      const own = storedRecords(scope)
+        .filter(
+          ({ key, record }) =>
+            (key.startsWith(ownPrefix) || key === ownLegacyKey) &&
+            !isChatDraftAccepted(scope, record.revision),
+        )
+        .sort((a, b) => b.record.updatedAt - a.record.updatedAt)[0]
+      if (own) {
+        memory.set(scope, own.record)
+        draftSources.set(scope, { key: own.key, revision: own.record.revision })
+      }
+    } catch {
+      // The in-memory write below remains available when storage is denied.
+    }
+  }
+  const previous = memory.get(scope)
+  const source = draftSources.get(scope)
+  const record: RecordValue = {
     value,
     revision: crypto.randomUUID(),
-    updatedAt: Math.max(Date.now(), (memory.get(scope)?.updatedAt ?? 0) + 1),
-    lineage: memory.get(scope)?.lineage ?? memory.get(scope)?.revision ?? crypto.randomUUID(),
+    updatedAt: Math.max(Date.now(), (previous?.updatedAt ?? 0) + 1),
+    lineage: previous?.lineage ?? previous?.revision ?? crypto.randomUUID(),
   }
-  const source = draftSources.get(scope)
   memory.set(scope, record)
   if (value.length > MAX_VALUE_LENGTH) {
     return { record, durable: false }
   }
   try {
-    const key = recordKey(scope)
-    if (localStorage.getItem(key) === null) {
-      let count = 0
-      for (let index = 0; index < localStorage.length; index += 1) {
-        if (localStorage.key(index)?.startsWith(PREFIX)) count += 1
-      }
+    const candidates: Ancestor[] = [...(previous?.ancestors ?? [])]
+    if (source) candidates.push(source)
+    if (previous && previous.revision !== source?.revision) {
+      candidates.push({ key: recordKey(scope, previous.revision), revision: previous.revision })
+    }
+    const seen = new Set<string>()
+    const ancestors = candidates.filter(({ key, revision }) => {
+      if (seen.has(key)) return false
+      seen.add(key)
+      return parse(localStorage.getItem(key))?.revision === revision
+    })
+    if (ancestors.length > MAX_RECORDS) return { record, durable: false }
+    if (ancestors.length) record.ancestors = ancestors
+    const key = recordKey(scope, record.revision)
+    const replacing = source && !isChatDraftAccepted(scope, source.revision)
+    const occupied = localStorage.length >= MAX_RECORDS ? capacityRecordCount() : 0
+    if ((!replacing && occupied >= MAX_RECORDS) || (replacing && occupied > MAX_RECORDS)) {
       if (
-        count >= MAX_RECORDS &&
-        !source &&
-        count - reclaimRetiredRecords() - pruneEmptyScopes() - migrateLegacySelections() >=
-          MAX_RECORDS
+        source &&
+        previous &&
+        source.revision === previous.revision &&
+        parse(localStorage.getItem(source.key))?.revision === previous.revision
+      ) {
+        for (const ancestor of previous.ancestors ?? []) {
+          if (!isRevisionKey(ancestor.key)) continue
+          try {
+            localStorage.removeItem(ancestor.key)
+          } catch {
+            /* Keep the recoverable copy. */
+          }
+        }
+      }
+      reclaimRetiredRecords()
+      pruneEmptyScopes()
+      migrateLegacySelections()
+      if (
+        (!replacing && capacityRecordCount() >= MAX_RECORDS) ||
+        (replacing && capacityRecordCount() > MAX_RECORDS)
       )
         return { record, durable: false }
     }
+    if (localStorage.getItem(key) !== null) return { record, durable: false }
     localStorage.setItem(key, JSON.stringify(record))
-    if (source && source.key !== key) {
-      const previous = parse(localStorage.getItem(source.key))
-      if (previous?.revision === source.revision) {
+    for (const ancestor of ancestors) {
+      if (!isRevisionKey(ancestor.key)) continue
+      try {
+        localStorage.removeItem(ancestor.key)
+      } catch {
+        // The immutable new record retains this predecessor until a later cleanup or send.
+      }
+    }
+    if (localStorage.length > MAX_RECORDS && capacityRecordCount() > MAX_RECORDS) {
+      reclaimRetiredRecords()
+      pruneEmptyScopes()
+      const immediateStillStored =
+        !previous ||
+        (source?.revision === previous.revision
+          ? parse(localStorage.getItem(source.key))?.revision === previous.revision
+          : parse(localStorage.getItem(recordKey(scope, previous.revision)))?.revision ===
+            previous.revision)
+      if (capacityRecordCount() > MAX_RECORDS && immediateStillStored) {
         try {
-          localStorage.removeItem(source.key)
-          if (
-            localStorage.getItem(source.key) !== null &&
-            !retireRevision(scope, source.revision)
-          ) {
-            return { record, durable: false }
-          }
+          localStorage.removeItem(key)
         } catch {
-          if (!retireRevision(scope, source.revision)) return { record, durable: false }
+          // The new revision remains recoverable; later writes see the occupied cap.
         }
+        return { record, durable: false }
       }
     }
     draftSources.set(scope, { key, revision: record.revision })
@@ -429,37 +592,48 @@ export function writeChatDraft(
 
 /** A settled send retires only the revision this writer actually submitted. */
 export function clearChatDraftIfRevision(scope: string, revision: string): ChatDraftClearOutcome {
-  if (memory.get(scope)?.revision !== revision) {
+  const current = memory.get(scope)
+  if (current?.revision !== revision) {
     notifySettlement(scope, 'superseded')
     return 'superseded'
   }
   let outcome: ChatDraftClearOutcome = 'retired'
   try {
-    const ownKey = recordKey(scope)
-    const records = storedRecords(scope)
     const source = draftSources.get(scope)
-    const own = records.find(({ key }) => key === ownKey)?.record
-    const foreignCopy = records.some(
-      ({ key, record }) => key !== ownKey && record.revision === revision,
-    )
-    if (own?.revision === revision && own.updatedAt <= memory.get(scope)!.updatedAt) {
-      localStorage.removeItem(ownKey)
-      if (localStorage.getItem(ownKey) !== null) {
+    const ancestors = [...(current.ancestors ?? [])]
+    if (source && source.revision !== revision) ancestors.push(source)
+    const seen = new Set<string>()
+    for (const ancestor of ancestors) {
+      if (seen.has(ancestor.revision)) continue
+      seen.add(ancestor.revision)
+      if (parse(localStorage.getItem(ancestor.key))?.revision !== ancestor.revision) continue
+      if (!retireRevision(scope, ancestor.revision, true)) {
         outcome = 'failed'
+        break
       }
     }
-    if (foreignCopy && !retireRevision(scope, revision)) outcome = 'failed'
-    if (source && source.revision !== revision) {
-      const predecessor = records.find(({ key }) => key === source.key)?.record
-      if (predecessor?.revision === source.revision && !retireRevision(scope, source.revision)) {
+    if (outcome === 'retired') {
+      if (!retireRevision(scope, revision, true)) outcome = 'failed'
+      else if (
+        storedRecords(scope).some(
+          ({ key, record }) => isRevisionKey(key) && record.revision === revision,
+        )
+      )
         outcome = 'failed'
-      }
     }
-    if (outcome === 'failed') retireRevision(scope, revision)
-    memory.delete(scope)
-    draftSources.delete(scope)
+    if (outcome === 'failed') {
+      const remembered = readRetired(scope)
+      remembered.add(revision)
+      for (const ancestor of ancestors) remembered.add(ancestor.revision)
+      acceptedUncleared.set(scope, remembered)
+    }
+    if (memory.get(scope)?.revision === revision) memory.delete(scope)
+    if (draftSources.get(scope)?.revision === revision) draftSources.delete(scope)
   } catch {
-    retireRevision(scope, revision)
+    const remembered = readRetired(scope)
+    remembered.add(revision)
+    for (const ancestor of current.ancestors ?? []) remembered.add(ancestor.revision)
+    acceptedUncleared.set(scope, remembered)
     outcome = 'failed'
   }
   notifySettlement(scope, outcome)
@@ -485,10 +659,10 @@ export function writeChatSourceSelection(key: string, value: string): boolean {
   if (value !== 'all' && !/^[1-9]\d*$/.test(value)) return false
   try {
     localStorage.setItem(`${PREFERENCE_PREFIX}${encodeURIComponent(key)}`, value)
-    // The old selection records are replaceable preferences, including other windows'.
-    for (const { key: oldKey } of storedRecords(`source:${key}`)) {
-      localStorage.removeItem(oldKey)
+    for (const entry of storedRecords(`source:${key}`)) {
+      if (isRevisionKey(entry.key)) localStorage.removeItem(entry.key)
     }
+    // Legacy mutable slots stay intact; a still-open older context can replace one.
     return true
   } catch {
     return false

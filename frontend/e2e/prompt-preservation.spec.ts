@@ -70,3 +70,28 @@ test('Class Ask retains its actual textarea through a route change and reload', 
   await page.reload()
   await expect(ask).toHaveValue('Help me plan the next study session.')
 })
+
+test('two live windows keep their own unsent edits through reload', async ({ page }) => {
+  await installLyraApi(page)
+  await page.goto(`/#/classes/${CLASS_ID}`)
+  const first = page.getByRole('textbox', { name: /Ask about/ })
+  await first.fill('Shared starting question')
+
+  const secondPage = await page.context().newPage()
+  try {
+    await installLyraApi(secondPage)
+    await secondPage.goto(`/#/classes/${CLASS_ID}`)
+    const second = secondPage.getByRole('textbox', { name: /Ask about/ })
+    await expect(second).toHaveValue('Shared starting question')
+    await first.fill('First window’s new unsent work')
+    await second.fill('Second window’s different unsent work')
+    await page.reload()
+    await secondPage.reload()
+    await expect(first).toHaveValue('First window’s new unsent work')
+    await expect(second).toHaveValue('Second window’s different unsent work')
+    await expect(page.getByText(/saved copy could not be removed/i)).toHaveCount(0)
+    await expect(secondPage.getByText(/saved copy could not be removed/i)).toHaveCount(0)
+  } finally {
+    await secondPage.close()
+  }
+})
