@@ -66,6 +66,11 @@ The frontend is now a Vite/React application with client-side routing.
   the same per-class list query as the Files tab, so its first item and the tab's top row
   always agree.
 - The UI talks only to the FastAPI API surface; it does not call tutor providers or Exa directly.
+- Unsent Class Ask, class chat, and writer chat text is stored by class, answerer, and
+  conversation with per-window revisions. A successful send clears only its submitted
+  revision, so writing begun during an answer survives that answer's completion. Local
+  storage refusal leaves the current window editable and shows a warning; source selection
+  uses the same durable store across ordinary relaunches.
 - Scroll positions are tracked per history entry in memory and checkpointed to session storage,
   never to History on scroll. Navigation reserves History quota; refused updates fall back to
   same-document hash navigation. See [the scroll-quota correction](pla-486-scroll-quota.md).
@@ -99,8 +104,11 @@ EOF is not completion: chat and writing require their `done` or `error` event, a
 streams require a valid `result` or structured error. Agent JSON replay remains supported.
 
 Agent streams also emit `activity` frames as audited tools start and settle. The chat replaces
-each running item by audit ID with its terminal status, then renders the saved terminal activity
-beside the answer after a reload. The separate activity history retains the full durable audit
+each running item by audit ID with its terminal status. Document events carry safe source
+identity, physical page, character range, evidence type, and relevant continuation or failure
+detail. The live trail stays beside the active answer; settled activity and provider-exposed
+reasoning are collapsed in Details, including after reload. Source links open the exact page
+through the authenticated Files preview. The separate activity history retains the durable audit
 and results. An uploaded course document is retrieved as study context; it does not require an
 attached local workspace. The agent requests workspace access only for work that needs files in
 an attached folder.

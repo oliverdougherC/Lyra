@@ -92,7 +92,16 @@ selected document, including a pure scan that has no text index yet; it never se
 of a long book merely because they are scanned.
 An explicit page-image read validates the class, selected file and physical page before rendering,
 then rechecks the source identity while reading at most 3 MiB of image bytes. Endpoint consent
-still gates sending those bytes to the tutor.
+still gates sending those bytes to the tutor. When a tool discovers a needed image after the
+initial request, the next provider round receives the actual encoded page image with document
+and page provenance. The same turn allows at most three page images in total, and a context
+guard stops before sending an overfull transcript. A confirmed vision-capable endpoint is
+required; a settings, consent, source identity, or Stop change blocks later delivery. Once a
+private image is opened, public web-research tools refuse dispatch for the rest of that turn.
+When a narrow context cannot fit the extra image tool schema alongside an already attached
+page, Lyra retains text tools and explains the image limit rather than pretending to have
+seen another page. The Files view labels page-native readable text separately from semantic
+index readiness, and that text can be selected for class chat while embedding retry is pending.
 
 Chat, solutions, study, drafting, and agent workflows build their own bounded prompts from the
 selected scope. They use the configured OpenAI-compatible tutor. Source references remain tied to

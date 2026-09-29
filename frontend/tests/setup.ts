@@ -1,7 +1,9 @@
 import '@testing-library/jest-dom/vitest'
 
 import { cleanup } from '@testing-library/react'
-import { afterEach } from 'vitest'
+import { afterEach, beforeEach } from 'vitest'
+
+import { resetChatDraftMemory } from '@/lib/chat-draft-store'
 
 // jsdom implements neither of these, and Radix primitives and the reduced-motion checks in
 // the reveal cascade both touch them on mount. Without the stubs every component test fails on the same
@@ -48,6 +50,11 @@ globalThis.fetch = ((input: RequestInfo | URL) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   throw new Error('unstubbed fetch in test: ' + url)
 }) as typeof fetch
+
+beforeEach(() => {
+  localStorage.clear()
+  resetChatDraftMemory()
+})
 
 afterEach(() => {
   cleanup()
