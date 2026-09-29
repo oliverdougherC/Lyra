@@ -55,4 +55,21 @@ describe('durable chat drafts', () => {
     )
     expect(readChatDraft('class:4:new')?.value).toBe('This window')
   })
+
+  it('reclaims settled scopes before the record cap without deleting unsent text', () => {
+    for (let index = 0; index < 127; index += 1) {
+      localStorage.setItem(
+        `lyra:unsent-chat:v1:settled-${index}:another-window`,
+        JSON.stringify({ value: '', revision: `empty-${index}`, updatedAt: index }),
+      )
+    }
+    localStorage.setItem(
+      'lyra:unsent-chat:v1:class%3A4%3Anew:another-window',
+      JSON.stringify({ value: 'Keep this prompt', revision: 'live', updatedAt: 128 }),
+    )
+    expect(writeChatDraft('class:5:new', 'New prompt').durable).toBe(true)
+    expect(localStorage.getItem('lyra:unsent-chat:v1:class%3A4%3Anew:another-window')).toContain(
+      'Keep this prompt',
+    )
+  })
 })
