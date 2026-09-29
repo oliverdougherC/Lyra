@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ClassAskComposer } from '@/components/classes/class-ask-composer'
-import { resetChatDraftMemory } from '@/lib/chat-draft-store'
+import { readChatDraft, resetChatDraftMemory, writeChatDraft } from '@/lib/chat-draft-store'
 
 afterEach(() => vi.useRealTimers())
 beforeEach(() => {
@@ -79,6 +79,28 @@ describe('class opening composer', () => {
     await act(async () => finish())
   })
 
+  it('blocks a second ClassAsk view while the first send settles after navigation', async () => {
+    let finish!: () => void
+    const onSend = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    const draftKey = 'lyra:class:6:ask-question'
+    const first = setup(onSend, draftKey)
+    fireEvent.change(first.box, { target: { value: 'One question' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    first.view.unmount()
+    const second = setup(onSend, draftKey)
+    expect(second.box).toHaveValue('One question')
+    expect(screen.getByRole('button', { name: 'Ask' })).toBeDisabled()
+    await act(async () => finish())
+    expect(second.box).toHaveValue('')
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(readChatDraft(`class-ask:${draftKey}`)).toBeNull()
+  })
+
   it('retains the question and makes retry available when navigation fails', async () => {
     const onSend = vi.fn().mockRejectedValue(new Error('Chunk unavailable'))
     const { box } = setup(onSend)
@@ -110,5 +132,47 @@ describe('class opening composer', () => {
     resetChatDraftMemory()
     setup(vi.fn(), draftKey)
     expect(screen.getByRole('textbox', { name: 'Ask about Signals' })).toHaveValue('')
+  })
+
+  it('settles an unchanged restored question after successful send', async () => {
+    const draftKey = 'lyra:class:7:ask-question'
+    writeChatDraft(`class-ask:${draftKey}`, 'Restored class question')
+    resetChatDraftMemory()
+    const { box, view, onSend } = setup(vi.fn().mockResolvedValue(undefined), draftKey)
+    expect(box).toHaveValue('Restored class question')
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    await act(async () => {})
+    expect(onSend).toHaveBeenCalledExactlyOnceWith('Restored class question')
+    view.unmount()
+    resetChatDraftMemory()
+    setup(vi.fn(), draftKey)
+    expect(screen.getByRole('textbox', { name: 'Ask about Signals' })).toHaveValue('')
+    expect(readChatDraft(`class-ask:${draftKey}`)?.value ?? '').toBe('')
+  })
+
+  it('warns when accepted text cannot be retired and blocks an unchanged resend after remount', async () => {
+    const draftKey = 'lyra:class:8:ask-question'
+    writeChatDraft(`class-ask:${draftKey}`, 'Already submitted')
+    resetChatDraftMemory()
+    const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Storage refused', 'SecurityError')
+    })
+    try {
+      const first = setup(vi.fn().mockResolvedValue(undefined), draftKey)
+      expect(first.box).toHaveValue('Already submitted')
+      fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('saved copy could not be removed')
+      first.view.unmount()
+      const navigated = setup(vi.fn(), draftKey)
+      expect(navigated.box).toHaveValue('')
+      navigated.view.unmount()
+      resetChatDraftMemory()
+      const second = setup(vi.fn(), draftKey)
+      expect(second.box).toHaveValue('')
+      expect(screen.getByRole('button', { name: 'Ask' })).toBeDisabled()
+      expect(second.onSend).not.toHaveBeenCalled()
+    } finally {
+      remove.mockRestore()
+    }
   })
 })

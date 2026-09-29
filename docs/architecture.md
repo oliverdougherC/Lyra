@@ -105,6 +105,12 @@ and results. An uploaded course document is retrieved as study context; it does 
 attached local workspace. The agent requests workspace access only for work that needs files in
 an attached folder.
 
+`search_documents` returns bounded cited excerpts and a `next_cursor` when more text is
+available. The agent passes that cursor with the same query to continue. Search cursors
+expire after any indexed chunk or readable-page write, including ingestion in another
+class, because FTS ranking uses database-wide statistics. Each page checks the cursor
+and reads its results in one SQLite snapshot; an expired cursor must restart the search.
+
 The backend prefers explicit provider reasoning fields. Legacy inline reasoning markers are
 recognized only at the start of content, before answer prose begins; tags in subsequent answer
 prose or code remain literal. A recognized explicit reasoning field holding a string, including

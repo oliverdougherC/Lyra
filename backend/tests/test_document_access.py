@@ -20,6 +20,7 @@ from backend.core import (
 from backend.core.errors import LyraError, NotFoundError
 from backend.rag import retrieve as retrieval
 from backend.rag.tokens import estimate_tokens
+from backend.storage.database import connect
 
 
 def _document(db: sqlite3.Connection, class_id: int, name: str, *, state: str = "ready") -> int:
@@ -242,6 +243,159 @@ def test_search_continuation_reaches_matches_after_eight(
         cursor = result["next_cursor"]
     assert len(found) == 12
     assert len(set(found)) == 12
+
+
+def test_search_continuation_reaches_every_character(db: sqlite3.Connection, class_id: int) -> None:
+    selected = _document(db, class_id, "long-search.pdf")
+    content = "needle " + "α" * 9000
+    _chunk(db, class_id, selected, 1, content)
+    cursor = None
+    pieces = []
+    while True:
+        result = document_access.search(db, class_id, selected, "needle", cursor=cursor)
+        pieces.extend(str(source["text"]) for source in result["sources"])
+        cursor = result["next_cursor"]
+        if cursor is None:
+            break
+    assert "".join(pieces) == content
+
+
+def test_search_cursor_expires_after_page_native_text_changes(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    selected = _document(db, class_id, "pending.pdf", state="extracting")
+    db.executemany(
+        "insert into document_read_pages values (?, ?, 'fixture', ?)",
+        ((selected, number, f"needle page {number}") for number in range(1, 10)),
+    )
+    db.commit()
+    first = document_access.search(db, class_id, selected, "needle")
+    assert first["next_cursor"] is not None
+    db.execute(
+        "update document_read_pages set content = 'needle revised' "
+        "where document_id = ? and page_number = 9",
+        (selected,),
+    )
+    db.commit()
+    with pytest.raises(ValueError, match="expired document cursor"):
+        document_access.search(db, class_id, selected, "needle", cursor=first["next_cursor"])
+
+
+def test_search_cursor_expires_when_other_class_changes_bm25_order(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    other_class = int(classes.create_class(db, name="Other")["id"])
+    wanted = []
+    for number in range(1, 10):
+        document_id = _document(db, class_id, f"source-{number}.pdf")
+        wanted.append(document_id)
+        _chunk(db, class_id, document_id, 1, "alpha" if number == 1 else "beta")
+    for number in range(100):
+        document_id = _document(db, other_class, f"other-alpha-{number}.pdf")
+        _chunk(db, other_class, document_id, 1, "alpha")
+
+    first = document_access.search(db, class_id, None, "alpha beta")
+    assert [source["document_id"] for source in first["sources"]] == wanted[1:]
+    assert first["next_cursor"] is not None
+
+    for number in range(300):
+        document_id = _document(db, other_class, f"other-beta-{number}.pdf")
+        _chunk(db, other_class, document_id, 1, "beta")
+    with pytest.raises(ValueError, match="expired document cursor"):
+        document_access.search(db, class_id, None, "alpha beta", cursor=first["next_cursor"])
+
+
+def test_search_cursor_expires_after_same_class_replacement_and_deletion(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    documents = [_document(db, class_id, f"source-{number}.pdf") for number in range(9)]
+    for document_id in documents:
+        _chunk(db, class_id, document_id, 1, "needle")
+    first = document_access.search(db, class_id, None, "needle")
+    assert first["next_cursor"] is not None
+    db.execute(
+        "update chunks set content = 'needle revised' where document_id = ?", (documents[8],)
+    )
+    db.commit()
+    with pytest.raises(ValueError, match="expired document cursor"):
+        document_access.search(db, class_id, None, "needle", cursor=first["next_cursor"])
+
+    second = document_access.search(db, class_id, None, "needle")
+    db.execute("delete from documents where id = ?", (documents[8],))
+    db.commit()
+    with pytest.raises(ValueError, match="expired document cursor"):
+        document_access.search(db, class_id, None, "needle", cursor=second["next_cursor"])
+
+
+def test_search_revision_and_query_share_one_read_snapshot(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    documents = [_document(db, class_id, f"source-{number}.pdf") for number in range(9)]
+    for document_id in documents:
+        _chunk(db, class_id, document_id, 1, "needle")
+    original_revision = document_access._revision
+
+    def mutate_after_revision(
+        conn: sqlite3.Connection, scoped_class: int, selected: int | None
+    ) -> str:
+        revision = original_revision(conn, scoped_class, selected)
+        writer = connect()
+        try:
+            writer.execute("delete from documents where id = ?", (documents[8],))
+            writer.commit()
+        finally:
+            writer.close()
+        return revision
+
+    monkeypatch.setattr(document_access, "_revision", mutate_after_revision)
+    first = document_access.search(db, class_id, None, "needle")
+    assert len(first["sources"]) == 8
+    assert first["has_more"] is True
+    monkeypatch.setattr(document_access, "_revision", original_revision)
+    with pytest.raises(ValueError, match="expired document cursor"):
+        document_access.search(db, class_id, None, "needle", cursor=first["next_cursor"])
+
+
+def test_provider_search_tool_can_continue_and_expires_after_other_class_ingestion(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    db.executescript(agent_store.TABLE_SQL)
+    db.executescript(tool_audit.TABLE_SQL)
+    app_settings.update_settings_row(db, {"endpoint_url": "http://127.0.0.1:8080/v1"})
+    selected = _document(db, class_id, "selected.pdf")
+    for number in range(9):
+        _chunk(db, class_id, selected, number + 1, f"needle {number}")
+    session = int(sessions.create_session(db, class_id)["id"])
+    registry, _ = agent_tools.build_agent_registry(
+        db,
+        class_id,
+        session,
+        "agent",
+        selected_document_id=selected,
+        document_endpoint="http://127.0.0.1:8080/v1",
+    )
+    search = registry["search_documents"]
+    assert search.parameters["properties"]["cursor"]["maxLength"] == 2048
+    first = search.handler(query="needle")
+    assert first.ok
+    assert len(first.value["sources"]) == 8
+    second = search.handler(query="needle", cursor=first.value["next_cursor"])
+    assert second.ok
+    assert len(second.value["sources"]) == 1
+    assert second.value["sources"][0]["document_id"] == selected
+    audit = db.execute(
+        "select arguments_json from tool_audit_events "
+        "where tool = 'search_documents' and arguments_json like '%cursor_sha256%' limit 1"
+    ).fetchone()[0]
+    assert first.value["next_cursor"] not in audit
+    assert '"cursor_sha256"' in audit
+
+    other_class = int(classes.create_class(db, name="Other")["id"])
+    foreign = _document(db, other_class, "foreign.pdf")
+    _chunk(db, other_class, foreign, 1, "needle")
+    expired = search.handler(query="needle", cursor=first.value["next_cursor"])
+    assert not expired.ok
+    assert "expired document cursor" in str(expired.error)
 
 
 def test_continuation_rechecks_selected_document_ownership(
