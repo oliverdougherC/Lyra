@@ -74,6 +74,54 @@ def test_migrate_is_idempotent(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_search_generation_upgrade_tracks_index_writes_transactionally(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "search-generation.db")
+    try:
+        _migrate_to(conn, 48)
+        class_id = conn.execute("insert into classes (name) values ('Synthetic')").lastrowid
+        document_id = conn.execute(
+            "insert into documents "
+            "(class_id, filename, stored_path, mime, byte_size, state) "
+            "values (?, 'source.pdf', 'unused', 'application/pdf', 1, 'ready')",
+            (class_id,),
+        ).lastrowid
+        conn.execute(
+            "insert into chunks "
+            "(document_id, class_id, content, token_count, "
+            "doc_type, embedding_model, embedding_dim) "
+            "values (?, ?, 'alpha', 1, 'generic', 'test', 768)",
+            (document_id, class_id),
+        )
+        conn.commit()
+        assert migrate(conn) == LATEST
+
+        def generation() -> int:
+            return int(
+                conn.execute("select generation from document_search_generation").fetchone()[0]
+            )
+
+        assert generation() == 0
+        conn.execute("update chunks set content = 'beta' where document_id = ?", (document_id,))
+        assert generation() == 1
+        conn.rollback()
+        assert generation() == 0
+        conn.execute(
+            "insert into document_read_pages values (?, 1, 'fixture', 'page text')",
+            (document_id,),
+        )
+        conn.commit()
+        assert generation() == 1
+        conn.execute("delete from chunks where document_id = ?", (document_id,))
+        conn.execute(
+            "update document_read_pages set content = 'new page' where document_id = ?",
+            (document_id,),
+        )
+        conn.commit()
+        assert generation() == 3
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("start", NUMBERS[:-1])
 def test_an_install_at_any_released_version_upgrades_to_head(tmp_path: Path, start: int) -> None:
     """From every intermediate version, the real upgrade path reaches head with FKs intact."""
