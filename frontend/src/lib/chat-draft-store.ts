@@ -36,6 +36,28 @@ function parse(raw: string | null): RecordValue | null {
   return null
 }
 
+function pruneEmptyScopes(): number {
+  const scopes = new Map<string, { keys: string[]; empty: boolean }>()
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index)
+    if (!key?.startsWith(PREFIX)) continue
+    const scope = key.slice(PREFIX.length).split(':')[0]
+    const group = scopes.get(scope) ?? { keys: [], empty: true }
+    group.keys.push(key)
+    group.empty &&= parse(localStorage.getItem(key))?.value === ''
+    scopes.set(scope, group)
+  }
+  let removed = 0
+  for (const group of scopes.values()) {
+    if (!group.empty) continue
+    for (const key of group.keys) {
+      localStorage.removeItem(key)
+      removed += 1
+    }
+  }
+  return removed
+}
+
 export function readChatDraft(scope: string): RecordValue | null {
   const own = memory.get(scope)
   if (own) return own
@@ -76,7 +98,8 @@ export function writeChatDraft(
       for (let index = 0; index < localStorage.length; index += 1) {
         if (localStorage.key(index)?.startsWith(PREFIX)) count += 1
       }
-      if (count >= MAX_RECORDS) return { record, durable: false }
+      if (count >= MAX_RECORDS && count - pruneEmptyScopes() >= MAX_RECORDS)
+        return { record, durable: false }
     }
     localStorage.setItem(key, JSON.stringify(record))
     return { record, durable: true }
