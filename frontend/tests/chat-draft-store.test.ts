@@ -102,7 +102,7 @@ describe('durable chat drafts', () => {
     expect(writeChatDraft('class:53:new', 'Another prompt').durable).toBe(true)
     expect(
       Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(
-        (key) => key?.startsWith(`lyra:unsent-chat:v1:${encodeURIComponent(scope)}:`),
+        (key) => key?.startsWith(`lyra:unsent-chat:v2:${encodeURIComponent(scope)}:`),
       ),
     ).toHaveLength(1)
   })
@@ -123,8 +123,8 @@ describe('durable chat drafts', () => {
       const keys = Array.from({ length: localStorage.length }, (_, offset) =>
         localStorage.key(offset),
       )
-      expect(keys.filter((key) => key?.startsWith('lyra:unsent-chat:v1:'))).toHaveLength(1)
-      expect(keys.filter((key) => key?.startsWith('lyra:chat-draft-retired:v1:'))).toHaveLength(0)
+      expect(keys.filter((key) => key?.startsWith('lyra:unsent-chat:v2:'))).toHaveLength(1)
+      expect(keys.filter((key) => key?.startsWith('lyra:chat-draft-retired:v2:'))).toHaveLength(0)
     }
     sessionStorage.clear()
     vi.resetModules()
@@ -150,8 +150,8 @@ describe('durable chat drafts', () => {
     }
     expect(writeChatDraft('class:129:new', 'New durable question').durable).toBe(true)
     const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
-    expect(keys.filter((key) => key?.startsWith('lyra:unsent-chat:v1:'))).toHaveLength(65)
-    expect(keys.filter((key) => key?.startsWith('lyra:chat-draft-retired:v1:'))).toHaveLength(0)
+    expect(keys.filter((key) => key?.startsWith('lyra:unsent-chat:v1:'))).toHaveLength(128)
+    expect(keys.filter((key) => key?.startsWith('lyra:unsent-chat:v2:'))).toHaveLength(1)
     for (let index = 0; index < 64; index += 1) {
       expect(
         localStorage.getItem(
@@ -178,7 +178,7 @@ describe('durable chat drafts', () => {
     })
     try {
       expect(clearChatDraftIfRevision(scope, 'sent')).toBe('retired')
-      for (let index = 0; index < 127; index += 1) {
+      for (let index = 0; index < 128; index += 1) {
         localStorage.setItem(
           `lyra:unsent-chat:v1:${encodeURIComponent(`class:${index + 200}:new`)}:live`,
           JSON.stringify({ value: `Unsent ${index}`, revision: `live-${index}`, updatedAt: 2 }),
@@ -190,8 +190,10 @@ describe('durable chat drafts', () => {
     } finally {
       remove.mockRestore()
     }
+    expect(writeChatDraft('class:401:new', 'Still full').durable).toBe(false)
+    localStorage.removeItem(`lyra:unsent-chat:v1:${encodeURIComponent('class:200:new')}:live`)
     expect(writeChatDraft('class:401:new', 'Recovered storage').durable).toBe(true)
-    expect(localStorage.getItem(foreignKey)).toBeNull()
+    expect(localStorage.getItem(foreignKey)).toContain('Already sent')
   })
 
   it('does not remove a foreign writer revision changed during retirement cleanup', () => {
@@ -202,27 +204,217 @@ describe('durable chat drafts', () => {
       JSON.stringify({ value: 'Shared question', revision: 'sent', updatedAt: 1 }),
     )
     expect(readChatDraft(scope)?.revision).toBe('sent')
-    const getItem = Storage.prototype.getItem
-    let reads = 0
-    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (
+    expect(clearChatDraftIfRevision(scope, 'sent')).toBe('retired')
+    localStorage.setItem(
+      foreignKey,
+      JSON.stringify({ value: 'New unsent work', revision: 'new', updatedAt: 2 }),
+    )
+    expect(localStorage.getItem(foreignKey)).toContain('New unsent work')
+    expect(readChatDraft(scope)?.value).toBe('New unsent work')
+  })
+
+  it('keeps a completed newer write when another context deletes the accepted revision', async () => {
+    const scope = 'class:134:new'
+    const first = writeChatDraft(scope, 'Question being sent')
+    sessionStorage.clear()
+    vi.resetModules()
+    const acceptingWindow = await import('@/lib/chat-draft-store')
+    expect(acceptingWindow.readChatDraft(scope)?.revision).toBe(first.record.revision)
+
+    const removeItem = Storage.prototype.removeItem
+    let competing: ReturnType<typeof writeChatDraft> | null = null
+    let inserted = false
+    const spy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (
       this: Storage,
       key,
     ) {
-      if (key === foreignKey && ++reads === 4) {
-        localStorage.setItem(
-          foreignKey,
-          JSON.stringify({ value: 'New unsent work', revision: 'new', updatedAt: 2 }),
-        )
+      if (
+        !inserted &&
+        key.startsWith('lyra:unsent-chat:') &&
+        key.includes(encodeURIComponent(scope))
+      ) {
+        inserted = true
+        competing = writeChatDraft(scope, 'New unsent work')
+        expect(competing.durable).toBe(true)
       }
-      return getItem.call(this, key)
+      removeItem.call(this, key)
     })
     try {
-      expect(clearChatDraftIfRevision(scope, 'sent')).toBe('retired')
+      expect(acceptingWindow.clearChatDraftIfRevision(scope, first.record.revision)).toBe('retired')
     } finally {
       spy.mockRestore()
     }
-    expect(localStorage.getItem(foreignKey)).toContain('New unsent work')
+    expect((competing as ReturnType<typeof writeChatDraft> | null)?.record.value).toBe(
+      'New unsent work',
+    )
     expect(readChatDraft(scope)?.value).toBe('New unsent work')
+    sessionStorage.clear()
+    vi.resetModules()
+    const relaunched = await import('@/lib/chat-draft-store')
+    expect(relaunched.readChatDraft(scope)?.value).toBe('New unsent work')
+  })
+
+  it('keeps an active writer edit inserted during another context’s adoption cleanup', async () => {
+    const scope = 'class:135:new'
+    const first = writeChatDraft(scope, 'Starting text')
+    sessionStorage.clear()
+    vi.resetModules()
+    const adoptingWindow = await import('@/lib/chat-draft-store')
+    expect(adoptingWindow.readChatDraft(scope)?.revision).toBe(first.record.revision)
+
+    const removeItem = Storage.prototype.removeItem
+    let competing: ReturnType<typeof writeChatDraft> | null = null
+    let inserted = false
+    const spy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (
+      this: Storage,
+      key,
+    ) {
+      if (
+        !inserted &&
+        key.startsWith('lyra:unsent-chat:v2:') &&
+        key.includes(first.record.revision)
+      ) {
+        inserted = true
+        competing = writeChatDraft(scope, 'Active writer edit')
+        expect(competing.durable).toBe(true)
+      }
+      removeItem.call(this, key)
+    })
+    let adopted: ReturnType<typeof writeChatDraft>
+    try {
+      adopted = adoptingWindow.writeChatDraft(scope, 'Adopted edit')
+    } finally {
+      spy.mockRestore()
+    }
+    expect(adopted.durable).toBe(true)
+    expect((competing as ReturnType<typeof writeChatDraft> | null)?.record.value).toBe(
+      'Active writer edit',
+    )
+    expect(adoptingWindow.clearChatDraftIfRevision(scope, adopted.record.revision)).toBe('retired')
+    expect(readChatDraft(scope)?.value).toBe('Active writer edit')
+    sessionStorage.clear()
+    vi.resetModules()
+    const relaunched = await import('@/lib/chat-draft-store')
+    expect(relaunched.readChatDraft(scope)?.value).toBe('Active writer edit')
+  })
+
+  it('does not resurrect a predecessor after interrupted cleanup and a later send', async () => {
+    const scope = 'class:138:new'
+    const first = writeChatDraft(scope, 'Original unsent words')
+    const setItem = Storage.prototype.setItem
+    const removeItem = Storage.prototype.removeItem
+    const denyMarker = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key,
+      value,
+    ) {
+      if (key.startsWith('lyra:chat-draft-retired:v2:')) {
+        throw new DOMException('Marker refused', 'QuotaExceededError')
+      }
+      setItem.call(this, key, value)
+    })
+    const denyRemoval = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (
+      this: Storage,
+      key,
+    ) {
+      if (key.startsWith('lyra:unsent-chat:v2:')) {
+        throw new DOMException('Cleanup refused', 'SecurityError')
+      }
+      removeItem.call(this, key)
+    })
+    try {
+      writeChatDraft(scope, 'Edited but cleanup interrupted')
+    } finally {
+      denyMarker.mockRestore()
+      denyRemoval.mockRestore()
+    }
+    sessionStorage.clear()
+    vi.resetModules()
+    const returned = await import('@/lib/chat-draft-store')
+    expect(returned.readChatDraft(scope)?.value).toBe('Edited but cleanup interrupted')
+    const finalEdit = returned.writeChatDraft(scope, 'Final version sent')
+    expect(finalEdit.durable).toBe(true)
+    expect(returned.clearChatDraftIfRevision(scope, finalEdit.record.revision)).toBe('retired')
+    sessionStorage.clear()
+    vi.resetModules()
+    const relaunched = await import('@/lib/chat-draft-store')
+    expect(relaunched.readChatDraft(scope)).toBeNull()
+    expect(
+      localStorage.getItem(
+        Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).find((key) =>
+          key?.includes(first.record.revision),
+        ) ?? '',
+      ),
+    ).toBeNull()
+  })
+
+  it('recovers a full store after denied predecessor cleanup without losing the edit', async () => {
+    const scope = 'class:139:new'
+    for (let index = 0; index < 127; index += 1) {
+      localStorage.setItem(
+        `lyra:unsent-chat:v1:${encodeURIComponent(`class:${index}:new`)}:foreign-window`,
+        JSON.stringify({
+          value: `Unsent ${index}`,
+          revision: `foreign-${index}`,
+          updatedAt: index,
+        }),
+      )
+    }
+    writeChatDraft(scope, 'Original draft')
+    const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('Cleanup refused', 'SecurityError')
+    })
+    try {
+      expect(writeChatDraft(scope, 'Edited draft').durable).toBe(false)
+    } finally {
+      remove.mockRestore()
+    }
+    sessionStorage.clear()
+    vi.resetModules()
+    const returned = await import('@/lib/chat-draft-store')
+    expect(returned.readChatDraft(scope)?.value).toBe('Edited draft')
+    const final = returned.writeChatDraft(scope, 'Final accepted edit')
+    expect(final.durable).toBe(true)
+    expect(returned.clearChatDraftIfRevision(scope, final.record.revision)).toBe('retired')
+    sessionStorage.clear()
+    vi.resetModules()
+    const relaunched = await import('@/lib/chat-draft-store')
+    expect(relaunched.readChatDraft(scope)).toBeNull()
+    expect(localStorage.length).toBe(127)
+  })
+
+  it('keeps simultaneous acknowledgements separate and compacts obsolete markers', async () => {
+    const scope = 'class:136:new'
+    const first = writeChatDraft(scope, 'First accepted')
+    sessionStorage.clear()
+    vi.resetModules()
+    const otherWindow = await import('@/lib/chat-draft-store')
+    const second = otherWindow.writeChatDraft(scope, 'Second accepted')
+    expect(second.durable).toBe(true)
+
+    const setItem = Storage.prototype.setItem
+    let interleaved = false
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key,
+      value,
+    ) {
+      if (!interleaved && key.startsWith('lyra:chat-draft-retired:v2:')) {
+        interleaved = true
+        expect(otherWindow.clearChatDraftIfRevision(scope, second.record.revision)).toBe('retired')
+      }
+      setItem.call(this, key, value)
+    })
+    try {
+      expect(clearChatDraftIfRevision(scope, first.record.revision)).toBe('retired')
+    } finally {
+      spy.mockRestore()
+    }
+    sessionStorage.clear()
+    vi.resetModules()
+    const relaunched = await import('@/lib/chat-draft-store')
+    expect(relaunched.readChatDraft(scope)).toBeNull()
+    expect(Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i))).toEqual([])
   })
 
   it('does not resurface an old writer’s in-memory copy after another session accepts it', async () => {
@@ -357,7 +549,7 @@ describe('durable chat drafts', () => {
     )
     expect(readChatDraft(scope)?.value).toBe('Shared restored question')
     expect(clearChatDraftIfRevision(scope, 'shared')).toBe('retired')
-    expect(localStorage.getItem(foreignKey)).toBeNull()
+    expect(localStorage.getItem(foreignKey)).toContain('Shared restored question')
     resetChatDraftMemory()
     expect(readChatDraft(scope)).toBeNull()
     sessionStorage.clear()
@@ -386,12 +578,12 @@ describe('durable chat drafts', () => {
       expect(readChatDraft(scope)?.revision).toBe(revision)
       expect(clearChatDraftIfRevision(scope, revision)).toBe('retired')
     }
-    expect(localStorage.getItem(foreignKey)).toBeNull()
+    expect(localStorage.getItem(foreignKey)).toContain('Question 209')
     expect(
       Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(
-        (key) => key?.startsWith('lyra:chat-draft-retired:v1:'),
+        (key) => key?.startsWith('lyra:chat-draft-retired:v2:'),
       ),
-    ).toHaveLength(0)
+    ).toHaveLength(1)
   })
 
   it('keeps a newer local follow-up visible after accepting a foreign restored revision', () => {
@@ -406,7 +598,7 @@ describe('durable chat drafts', () => {
     const followUp = writeChatDraft(scope, 'A separate follow-up')
     resetChatDraftMemory()
     expect(readChatDraft(scope)).toEqual(followUp.record)
-    expect(localStorage.getItem(foreignKey)).toBeNull()
+    expect(localStorage.getItem(foreignKey)).toContain('Accepted')
   })
 
   it('reports a refused retirement and keeps the accepted record without offering a resend', () => {
@@ -419,7 +611,7 @@ describe('durable chat drafts', () => {
       expect(clearChatDraftIfRevision(scope, submitted.record.revision)).toBe('failed')
       expect(
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).some(
-          (key) => key?.startsWith(`lyra:unsent-chat:v1:${encodeURIComponent(scope)}:`),
+          (key) => key?.startsWith(`lyra:unsent-chat:v2:${encodeURIComponent(scope)}:`),
         ),
       ).toBe(true)
       expect(readChatDraft(scope)).toBeNull()
@@ -507,6 +699,50 @@ describe('durable chat drafts', () => {
     expect(localStorage.getItem('lyra:unsent-chat:v1:class%3A0%3Anew:foreign-window')).toContain(
       'Unsent 0',
     )
+  })
+
+  it('keeps the live cap when two windows write the last available slot', async () => {
+    for (let index = 0; index < 127; index += 1) {
+      localStorage.setItem(
+        `lyra:unsent-chat:v1:${encodeURIComponent(`class:${index}:new`)}:foreign-window`,
+        JSON.stringify({
+          value: `Unsent ${index}`,
+          revision: `foreign-${index}`,
+          updatedAt: index,
+        }),
+      )
+    }
+    sessionStorage.clear()
+    vi.resetModules()
+    const secondWindow = await import('@/lib/chat-draft-store')
+    const setItem = Storage.prototype.setItem
+    let competing: ReturnType<typeof writeChatDraft> | null = null
+    let inserted = false
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key,
+      value,
+    ) {
+      if (!inserted && key.startsWith('lyra:unsent-chat:v2:class%3A129%3Anew:')) {
+        inserted = true
+        competing = writeChatDraft('class:128:new', 'First new prompt')
+      }
+      setItem.call(this, key, value)
+    })
+    let second: ReturnType<typeof writeChatDraft>
+    try {
+      second = secondWindow.writeChatDraft('class:129:new', 'Second new prompt')
+    } finally {
+      spy.mockRestore()
+    }
+    expect((competing as ReturnType<typeof writeChatDraft> | null)?.durable).toBe(true)
+    expect(second.durable).toBe(false)
+    expect(localStorage.length).toBe(128)
+    sessionStorage.clear()
+    vi.resetModules()
+    const relaunched = await import('@/lib/chat-draft-store')
+    expect(relaunched.readChatDraft('class:128:new')?.value).toBe('First new prompt')
+    expect(relaunched.readChatDraft('class:129:new')).toBeNull()
   })
   it('keeps the newer follow-up when an older send settles', () => {
     const first = writeChatDraft('class:1:session:7', 'Solve part a')
