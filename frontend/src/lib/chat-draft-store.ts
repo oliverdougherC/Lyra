@@ -3,10 +3,12 @@ const PREFIX = 'lyra:unsent-chat:v1:'
 const PREFERENCE_PREFIX = 'lyra:chat-source:v1:'
 const WINDOW_ID_KEY = 'lyra:chat-draft-writer:v1'
 const ACCEPTED_PREFIX = 'lyra:chat-sent-unretired:v1:'
+const RETIRED_PREFIX = 'lyra:chat-draft-retired:v1:'
 const MAX_VALUE_LENGTH = 64_000
 const MAX_RECORDS = 128
 
-type RecordValue = { value: string; revision: string; updatedAt: number }
+type RecordValue = { value: string; revision: string; updatedAt: number; lineage?: string }
+export type ChatDraftClearOutcome = 'retired' | 'superseded' | 'failed'
 
 function currentWindowId(): string {
   try {
@@ -26,15 +28,88 @@ const memory = new Map<string, RecordValue>()
 const pendingSends = new Map<string, symbol>()
 const pendingListeners = new Set<() => void>()
 const acceptedUncleared = new Map<string, Set<string>>()
+const draftSources = new Map<string, { key: string; revision: string }>()
+const settlementVersions = new Map<string, number>()
+const settlementOutcomes = new Map<string, ChatDraftClearOutcome>()
+const settlementListeners = new Set<() => void>()
+
+export function subscribeChatDraftSettlements(listener: () => void): () => void {
+  settlementListeners.add(listener)
+  return () => settlementListeners.delete(listener)
+}
+
+export function getChatDraftSettlementVersion(scope: string): number {
+  return settlementVersions.get(scope) ?? 0
+}
+
+export function getChatDraftSettlementOutcome(scope: string): ChatDraftClearOutcome | null {
+  return settlementOutcomes.get(scope) ?? null
+}
+
+function notifySettlement(scope: string, outcome: ChatDraftClearOutcome): void {
+  settlementOutcomes.set(scope, outcome)
+  settlementVersions.set(scope, getChatDraftSettlementVersion(scope) + 1)
+  for (const listener of settlementListeners) listener()
+}
+
+function retiredKey(scope: string): string {
+  return `${RETIRED_PREFIX}${encodeURIComponent(scope)}`
+}
+
+function durablyRetired(scope: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(retiredKey(scope))
+    const saved: unknown = raw ? JSON.parse(raw) : []
+    return new Set(
+      Array.isArray(saved)
+        ? saved.filter((revision): revision is string => typeof revision === 'string')
+        : [],
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+function readRetired(scope: string): Set<string> {
+  const revisions = new Set(acceptedUncleared.get(scope) ?? [])
+  try {
+    const raw = localStorage.getItem(retiredKey(scope))
+    const saved: unknown = raw ? JSON.parse(raw) : []
+    if (Array.isArray(saved)) {
+      for (const revision of saved) {
+        if (typeof revision === 'string') revisions.add(revision)
+      }
+    }
+  } catch {
+    // Keep the in-memory acknowledgement if storage is unavailable.
+  }
+  return revisions
+}
+
+function retireRevision(scope: string, revision: string): boolean {
+  const revisions = readRetired(scope)
+  revisions.add(revision)
+  acceptedUncleared.set(scope, revisions)
+  try {
+    const present = new Set(storedRecords(scope).map(({ record }) => record.revision))
+    const retained = [...revisions].filter((item) => present.has(item))
+    if (retained.length > MAX_RECORDS) return false
+    localStorage.setItem(retiredKey(scope), JSON.stringify(retained))
+    return true
+  } catch {
+    return false
+  }
+}
 
 function acceptedKey(scope: string): string {
   return `${ACCEPTED_PREFIX}${encodeURIComponent(scope)}:${windowId}`
 }
 
 function readAccepted(scope: string): Set<string> {
-  const revisions = new Set(acceptedUncleared.get(scope) ?? [])
-  for (const storage of [sessionStorage, localStorage]) {
+  const revisions = readRetired(scope)
+  for (const kind of ['session', 'local'] as const) {
     try {
+      const storage = kind === 'session' ? sessionStorage : localStorage
       const raw = storage.getItem(acceptedKey(scope))
       if (!raw) continue
       const saved: unknown = JSON.parse(raw)
@@ -50,35 +125,6 @@ function readAccepted(scope: string): Set<string> {
   return revisions
 }
 
-function markAcceptedUncleared(scope: string, revision: string): boolean {
-  let present: Set<string>
-  try {
-    present = new Set(storedRecords(scope).map(({ record }) => record.revision))
-  } catch {
-    acceptedUncleared.set(scope, new Set([...readAccepted(scope), revision]))
-    return false
-  }
-  const revisions = new Set([...readAccepted(scope)].filter((item) => present.has(item)))
-  revisions.add(revision)
-  acceptedUncleared.set(scope, revisions)
-  if (revisions.size > MAX_RECORDS) return false
-  const value = JSON.stringify([...revisions])
-  let durable = false
-  try {
-    sessionStorage.setItem(acceptedKey(scope), value)
-    durable = true
-  } catch {
-    // Another store may still accept the acknowledgement.
-  }
-  try {
-    localStorage.setItem(acceptedKey(scope), value)
-    durable = true
-  } catch {
-    // The visible warning explains when neither store can retain it.
-  }
-  return durable
-}
-
 export function isChatDraftAccepted(scope: string, revision: string): boolean {
   return readAccepted(scope).has(revision)
 }
@@ -88,6 +134,20 @@ export function hasChatDraftAccepted(scope: string): boolean {
   if (accepted.size === 0) return false
   try {
     return storedRecords(scope).some(({ record }) => accepted.has(record.revision))
+  } catch {
+    return true
+  }
+}
+
+/** An accepted physical copy lacks durable cross-session suppression. */
+export function hasChatDraftRetirementRisk(scope: string): boolean {
+  const accepted = readAccepted(scope)
+  if (accepted.size === 0) return false
+  const retired = durablyRetired(scope)
+  try {
+    return storedRecords(scope).some(
+      ({ record }) => accepted.has(record.revision) && !retired.has(record.revision),
+    )
   } catch {
     return true
   }
@@ -240,17 +300,17 @@ function migrateLegacySelections(): number {
 export function readChatDraft(scope: string): RecordValue | null {
   const own = memory.get(scope)
   if (own && !isChatDraftAccepted(scope, own.revision)) return own
-  if (typeof localStorage === 'undefined') return null
   try {
     const accepted = readAccepted(scope)
-    let latest: RecordValue | null = null
+    let latest: { key: string; record: RecordValue } | null = null
     for (const entry of storedRecords(scope)) {
       if (accepted.has(entry.record.revision)) continue
-      if (!latest || entry.record.updatedAt > latest.updatedAt) latest = entry.record
+      if (!latest || entry.record.updatedAt > latest.record.updatedAt) latest = entry
     }
     if (!latest) return null
-    memory.set(scope, latest)
-    return latest
+    memory.set(scope, latest.record)
+    draftSources.set(scope, { key: latest.key, revision: latest.record.revision })
+    return latest.record
   } catch {
     return null
   }
@@ -265,9 +325,11 @@ export function writeChatDraft(
     value,
     revision: crypto.randomUUID(),
     updatedAt: Math.max(Date.now(), (memory.get(scope)?.updatedAt ?? 0) + 1),
+    lineage: memory.get(scope)?.lineage ?? memory.get(scope)?.revision ?? crypto.randomUUID(),
   }
+  const source = draftSources.get(scope)
   memory.set(scope, record)
-  if (value.length > MAX_VALUE_LENGTH || typeof localStorage === 'undefined') {
+  if (value.length > MAX_VALUE_LENGTH) {
     return { record, durable: false }
   }
   try {
@@ -279,11 +341,29 @@ export function writeChatDraft(
       }
       if (
         count >= MAX_RECORDS &&
+        !source &&
         count - pruneEmptyScopes() - migrateLegacySelections() >= MAX_RECORDS
       )
         return { record, durable: false }
     }
     localStorage.setItem(key, JSON.stringify(record))
+    if (source && source.key !== key) {
+      const previous = parse(localStorage.getItem(source.key))
+      if (previous?.revision === source.revision) {
+        try {
+          localStorage.removeItem(source.key)
+          if (
+            localStorage.getItem(source.key) !== null &&
+            !retireRevision(scope, source.revision)
+          ) {
+            return { record, durable: false }
+          }
+        } catch {
+          if (!retireRevision(scope, source.revision)) return { record, durable: false }
+        }
+      }
+    }
+    draftSources.set(scope, { key, revision: record.revision })
     return { record, durable: true }
   } catch {
     return { record, durable: false }
@@ -291,30 +371,42 @@ export function writeChatDraft(
 }
 
 /** A settled send retires only the revision this writer actually submitted. */
-export function clearChatDraftIfRevision(scope: string, revision: string): boolean {
-  if (memory.get(scope)?.revision !== revision) return false
-  if (typeof localStorage === 'undefined') return false
+export function clearChatDraftIfRevision(scope: string, revision: string): ChatDraftClearOutcome {
+  if (memory.get(scope)?.revision !== revision) {
+    notifySettlement(scope, 'superseded')
+    return 'superseded'
+  }
+  let outcome: ChatDraftClearOutcome = 'retired'
   try {
     const ownKey = recordKey(scope)
     const records = storedRecords(scope)
+    const source = draftSources.get(scope)
     const own = records.find(({ key }) => key === ownKey)?.record
     const foreignCopy = records.some(
       ({ key, record }) => key !== ownKey && record.revision === revision,
     )
-    if (own && own.updatedAt <= memory.get(scope)!.updatedAt) {
+    if (own?.revision === revision && own.updatedAt <= memory.get(scope)!.updatedAt) {
       localStorage.removeItem(ownKey)
       if (localStorage.getItem(ownKey) !== null) {
-        markAcceptedUncleared(scope, revision)
-        return false
+        outcome = 'failed'
       }
     }
-    if (foreignCopy && !markAcceptedUncleared(scope, revision)) return false
+    if (foreignCopy && !retireRevision(scope, revision)) outcome = 'failed'
+    if (source && source.revision !== revision) {
+      const predecessor = records.find(({ key }) => key === source.key)?.record
+      if (predecessor?.revision === source.revision && !retireRevision(scope, source.revision)) {
+        outcome = 'failed'
+      }
+    }
+    if (outcome === 'failed') retireRevision(scope, revision)
     memory.delete(scope)
-    return true
+    draftSources.delete(scope)
   } catch {
-    markAcceptedUncleared(scope, revision)
-    return false
+    retireRevision(scope, revision)
+    outcome = 'failed'
   }
+  notifySettlement(scope, outcome)
+  return outcome
 }
 
 /** Replaceable source choice lives outside the capped unsent-question store. */
@@ -351,5 +443,8 @@ export function resetChatDraftMemory(): void {
   memory.clear()
   pendingSends.clear()
   acceptedUncleared.clear()
+  draftSources.clear()
+  settlementVersions.clear()
+  settlementOutcomes.clear()
   notifyPending()
 }

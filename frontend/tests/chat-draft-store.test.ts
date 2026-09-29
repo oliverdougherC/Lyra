@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   clearChatDraftIfRevision,
+  getChatDraftSettlementVersion,
   isChatDraftAccepted,
   readChatDraft,
   readChatSourceSelection,
   resetChatDraftMemory,
+  subscribeChatDraftSettlements,
   writeChatDraft,
   writeChatSourceSelection,
 } from '@/lib/chat-draft-store'
@@ -17,13 +19,163 @@ beforeEach(() => {
 })
 
 describe('durable chat drafts', () => {
+  it('retires an adopted draft across fresh page sessions without resurrecting the first writer', async () => {
+    const scope = 'class:50:writer:3:0:new'
+    const original = writeChatDraft(scope, 'A question left behind')
+    sessionStorage.clear()
+    vi.resetModules()
+    const returned = await import('@/lib/chat-draft-store')
+    expect(returned.readChatDraft(scope)?.revision).toBe(original.record.revision)
+    expect(returned.clearChatDraftIfRevision(scope, original.record.revision)).toBe('retired')
+    sessionStorage.clear()
+    vi.resetModules()
+    const next = await import('@/lib/chat-draft-store')
+    expect(next.readChatDraft(scope)).toBeNull()
+  })
+
+  it('does not expose pre-edit wording after an adopted edit is sent', async () => {
+    const scope = 'class:51:writer:3:0:new'
+    writeChatDraft(scope, 'Original wording')
+    sessionStorage.clear()
+    vi.resetModules()
+    const returned = await import('@/lib/chat-draft-store')
+    expect(returned.readChatDraft(scope)?.value).toBe('Original wording')
+    const edited = returned.writeChatDraft(scope, 'Edited wording')
+    expect(edited.durable).toBe(true)
+    expect(returned.clearChatDraftIfRevision(scope, edited.record.revision)).toBe('retired')
+    sessionStorage.clear()
+    vi.resetModules()
+    const next = await import('@/lib/chat-draft-store')
+    expect(next.readChatDraft(scope)).toBeNull()
+  })
+
+  it('reports failed retirement when an adopted edit could not replace its predecessor', async () => {
+    const scope = 'class:56:writer:3:0:new'
+    writeChatDraft(scope, 'Original unsent wording')
+    sessionStorage.clear()
+    vi.resetModules()
+    const returned = await import('@/lib/chat-draft-store')
+    expect(returned.readChatDraft(scope)?.value).toBe('Original unsent wording')
+    const save = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage refused', 'QuotaExceededError')
+    })
+    const edited = returned.writeChatDraft(scope, 'Edited wording sent')
+    expect(edited.durable).toBe(false)
+    expect(returned.clearChatDraftIfRevision(scope, edited.record.revision)).toBe('failed')
+    save.mockRestore()
+    sessionStorage.clear()
+    vi.resetModules()
+    const next = await import('@/lib/chat-draft-store')
+    expect(next.readChatDraft(scope)?.value).toBe('Original unsent wording')
+  })
+
+  it('retires an adopted predecessor when storage recovers before send settlement', async () => {
+    const scope = 'class:57:writer:3:0:new'
+    writeChatDraft(scope, 'Original unsent wording')
+    sessionStorage.clear()
+    vi.resetModules()
+    const returned = await import('@/lib/chat-draft-store')
+    expect(returned.readChatDraft(scope)?.value).toBe('Original unsent wording')
+    const save = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage refused', 'QuotaExceededError')
+    })
+    const edited = returned.writeChatDraft(scope, 'Edited wording sent')
+    expect(edited.durable).toBe(false)
+    save.mockRestore()
+    expect(returned.clearChatDraftIfRevision(scope, edited.record.revision)).toBe('retired')
+    sessionStorage.clear()
+    vi.resetModules()
+    const next = await import('@/lib/chat-draft-store')
+    expect(next.readChatDraft(scope)).toBeNull()
+  })
+
+  it('does not fill the cap through hundreds of fresh-session adoptions', async () => {
+    const scope = 'class:52:writer:3:0:new'
+    writeChatDraft(scope, 'First wording')
+    for (let index = 0; index < 240; index += 1) {
+      sessionStorage.clear()
+      vi.resetModules()
+      const lifetime = await import('@/lib/chat-draft-store')
+      expect(lifetime.readChatDraft(scope)).not.toBeNull()
+      expect(lifetime.writeChatDraft(scope, `Question ${index}`).durable).toBe(true)
+    }
+    expect(writeChatDraft('class:53:new', 'Another prompt').durable).toBe(true)
+    expect(
+      Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(
+        (key) => key?.startsWith(`lyra:unsent-chat:v1:${encodeURIComponent(scope)}:`),
+      ),
+    ).toHaveLength(1)
+  })
+
+  it('preserves a live writer’s different revision while an adopted copy is edited and sent', async () => {
+    const scope = 'class:56:new'
+    const original = writeChatDraft(scope, 'Shared starting point')
+    sessionStorage.clear()
+    vi.resetModules()
+    const adoptingWindow = await import('@/lib/chat-draft-store')
+    expect(adoptingWindow.readChatDraft(scope)?.revision).toBe(original.record.revision)
+    const activeFollowUp = writeChatDraft(scope, 'A’s different unsent work')
+    const adoptedEdit = adoptingWindow.writeChatDraft(scope, 'B’s sent edit')
+    expect(adoptedEdit.durable).toBe(true)
+    expect(adoptingWindow.clearChatDraftIfRevision(scope, adoptedEdit.record.revision)).toBe(
+      'retired',
+    )
+    expect(readChatDraft(scope)).toEqual(activeFollowUp.record)
+    sessionStorage.clear()
+    vi.resetModules()
+    const next = await import('@/lib/chat-draft-store')
+    expect(next.readChatDraft(scope)?.value).toBe('A’s different unsent work')
+  })
+
+  it('notifies subscribers of settlement outcomes without notifying for typing', () => {
+    const scope = 'class:57:new'
+    const notifications = vi.fn()
+    const unsubscribe = subscribeChatDraftSettlements(notifications)
+    const sent = writeChatDraft(scope, 'Sent wording')
+    expect(notifications).not.toHaveBeenCalled()
+    writeChatDraft(scope, 'Follow-up wording')
+    expect(clearChatDraftIfRevision(scope, sent.record.revision)).toBe('superseded')
+    expect(getChatDraftSettlementVersion(scope)).toBe(1)
+    expect(notifications).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
+  it('treats a protected newer draft as supersession rather than a retirement failure', () => {
+    const scope = 'class:54:new'
+    const first = writeChatDraft(scope, 'Sent wording')
+    const next = writeChatDraft(scope, 'New unsent wording')
+    expect(clearChatDraftIfRevision(scope, first.record.revision)).toBe('superseded')
+    expect(readChatDraft(scope)).toEqual(next.record)
+  })
+
+  it('uses in-memory acknowledgement when storage properties themselves deny access', () => {
+    const scope = 'class:55:new'
+    const draft = writeChatDraft(scope, 'Sent while storage locks')
+    const local = vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => {
+      throw new DOMException('Storage denied', 'SecurityError')
+    })
+    const session = vi.spyOn(window, 'sessionStorage', 'get').mockImplementation(() => {
+      throw new DOMException('Storage denied', 'SecurityError')
+    })
+    try {
+      expect(clearChatDraftIfRevision(scope, draft.record.revision)).toBe('failed')
+      expect(isChatDraftAccepted(scope, draft.record.revision)).toBe(true)
+      expect(readChatDraft(scope)).toBeNull()
+      expect(writeChatDraft(scope, 'A recoverable follow-up').durable).toBe(false)
+      expect(readChatDraft(scope)?.value).toBe('A recoverable follow-up')
+    } finally {
+      local.mockRestore()
+      session.mockRestore()
+    }
+  })
+
   it('adopts a restored revision and retires it after unchanged acceptance across module loads', async () => {
     const scope = 'class:1:writer:9:0:7'
     const first = writeChatDraft(scope, 'A saved question')
     vi.resetModules()
     const restored = await import('@/lib/chat-draft-store')
     expect(restored.readChatDraft(scope)?.revision).toBe(first.record.revision)
-    expect(restored.clearChatDraftIfRevision(scope, first.record.revision)).toBe(true)
+    expect(restored.clearChatDraftIfRevision(scope, first.record.revision)).toBe('retired')
     vi.resetModules()
     const relaunched = await import('@/lib/chat-draft-store')
     expect(relaunched.readChatDraft(scope)?.value ?? '').toBe('')
@@ -49,14 +201,14 @@ describe('durable chat drafts', () => {
       JSON.stringify({ value: 'Shared restored question', revision: 'shared', updatedAt: 1 }),
     )
     expect(readChatDraft(scope)?.value).toBe('Shared restored question')
-    expect(clearChatDraftIfRevision(scope, 'shared')).toBe(true)
+    expect(clearChatDraftIfRevision(scope, 'shared')).toBe('retired')
     expect(localStorage.getItem(foreignKey)).toContain('Shared restored question')
     resetChatDraftMemory()
     expect(readChatDraft(scope)).toBeNull()
     sessionStorage.clear()
     vi.resetModules()
     const otherWindow = await import('@/lib/chat-draft-store')
-    expect(otherWindow.readChatDraft(scope)?.value).toBe('Shared restored question')
+    expect(otherWindow.readChatDraft(scope)).toBeNull()
     localStorage.setItem(
       foreignKey,
       JSON.stringify({ value: 'Other window follow-up', revision: 'follow-up', updatedAt: 2 }),
@@ -77,11 +229,11 @@ describe('durable chat drafts', () => {
         JSON.stringify({ value: `Question ${index}`, revision, updatedAt: index + 1 }),
       )
       expect(readChatDraft(scope)?.revision).toBe(revision)
-      expect(clearChatDraftIfRevision(scope, revision)).toBe(true)
+      expect(clearChatDraftIfRevision(scope, revision)).toBe('retired')
     }
     const markerKey = Array.from({ length: localStorage.length }, (_, index) =>
       localStorage.key(index),
-    ).find((key) => key?.startsWith('lyra:chat-sent-unretired:v1:'))
+    ).find((key) => key?.startsWith('lyra:chat-draft-retired:v1:'))
     expect(markerKey).toBeDefined()
     expect(JSON.parse(localStorage.getItem(markerKey!) ?? '[]')).toEqual(['shared-209'])
     expect(localStorage.getItem(foreignKey)).toContain('Question 209')
@@ -95,7 +247,7 @@ describe('durable chat drafts', () => {
       JSON.stringify({ value: 'Accepted', revision: 'shared', updatedAt: 1 }),
     )
     expect(readChatDraft(scope)?.value).toBe('Accepted')
-    expect(clearChatDraftIfRevision(scope, 'shared')).toBe(true)
+    expect(clearChatDraftIfRevision(scope, 'shared')).toBe('retired')
     const followUp = writeChatDraft(scope, 'A separate follow-up')
     resetChatDraftMemory()
     expect(readChatDraft(scope)).toEqual(followUp.record)
@@ -109,7 +261,7 @@ describe('durable chat drafts', () => {
       throw new DOMException('Storage refused', 'SecurityError')
     })
     try {
-      expect(clearChatDraftIfRevision(scope, submitted.record.revision)).toBe(false)
+      expect(clearChatDraftIfRevision(scope, submitted.record.revision)).toBe('failed')
       expect(
         Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).some(
           (key) => key?.startsWith(`lyra:unsent-chat:v1:${encodeURIComponent(scope)}:`),
@@ -130,10 +282,10 @@ describe('durable chat drafts', () => {
       otherKey,
       JSON.stringify({ value: 'Other unsent question', revision: 'other', updatedAt: 1 }),
     )
-    expect(clearChatDraftIfRevision(scope, first.record.revision)).toBe(true)
+    expect(clearChatDraftIfRevision(scope, first.record.revision)).toBe('retired')
     expect(localStorage.getItem(otherKey)).toContain('Other unsent question')
     const followUp = writeChatDraft(scope, 'Follow-up')
-    expect(clearChatDraftIfRevision(scope, first.record.revision)).toBe(false)
+    expect(clearChatDraftIfRevision(scope, first.record.revision)).toBe('superseded')
     expect(readChatDraft(scope)).toEqual(followUp.record)
   })
 
@@ -205,7 +357,7 @@ describe('durable chat drafts', () => {
     const first = writeChatDraft('class:1:session:7', 'Solve part a')
     const followUp = writeChatDraft('class:1:session:7', 'What about part b?')
 
-    expect(clearChatDraftIfRevision('class:1:session:7', first.record.revision)).toBe(false)
+    expect(clearChatDraftIfRevision('class:1:session:7', first.record.revision)).toBe('superseded')
     expect(readChatDraft('class:1:session:7')).toEqual(followUp.record)
     resetChatDraftMemory()
     expect(readChatDraft('class:1:session:7')?.value).toBe('What about part b?')
@@ -213,7 +365,7 @@ describe('durable chat drafts', () => {
 
   it('retires an accepted revision so a relaunch does not resurrect the submitted words', () => {
     const submitted = writeChatDraft('class:1:new', 'Explain this')
-    expect(clearChatDraftIfRevision('class:1:new', submitted.record.revision)).toBe(true)
+    expect(clearChatDraftIfRevision('class:1:new', submitted.record.revision)).toBe('retired')
     resetChatDraftMemory()
     expect(readChatDraft('class:1:new')?.value ?? '').toBe('')
   })

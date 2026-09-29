@@ -8,10 +8,14 @@ import {
   clearChatDraftIfRevision,
   beginChatDraftSend,
   finishChatDraftSend,
+  getChatDraftSettlementOutcome,
+  getChatDraftSettlementVersion,
   hasChatDraftAccepted,
+  hasChatDraftRetirementRisk,
   isChatDraftSendPending,
   readChatDraft,
   subscribeChatDraftSends,
+  subscribeChatDraftSettlements,
   writeChatDraft,
 } from '@/lib/chat-draft-store'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
@@ -62,9 +66,16 @@ export function ClassAskComposer({
     () => isChatDraftSendPending(scope),
     () => false,
   )
+  const settlementVersion = useSyncExternalStore(
+    subscribeChatDraftSettlements,
+    () => getChatDraftSettlementVersion(scope),
+    () => 0,
+  )
   const [error, setError] = useState(false)
   const [storageWarning, setStorageWarning] = useState(false)
-  const [settlementWarning, setSettlementWarning] = useState(acceptedOnRestore.current)
+  const [settlementWarning, setSettlementWarning] = useState(() =>
+    hasChatDraftRetirementRisk(scope),
+  )
   const submitting = useRef(false)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -83,17 +94,21 @@ export function ClassAskComposer({
   useEffect(() => {
     if (pendingInWindow || !revision.current) return
     const current = readChatDraft(scope)
-    if (current?.revision === revision.current) return
-    revision.current = null
-    setQuestion('')
-    setSettlementWarning(hasChatDraftAccepted(scope))
-  }, [pendingInWindow, scope])
+    if (current?.revision !== revision.current) {
+      revision.current = current?.revision ?? null
+      setQuestion(current?.value ?? '')
+    }
+    setSettlementWarning(
+      getChatDraftSettlementOutcome(scope) === 'failed' || hasChatDraftRetirementRisk(scope),
+    )
+  }, [pendingInWindow, scope, settlementVersion])
 
   function changeQuestion(value: string) {
     setQuestion(value)
     const saved = writeChatDraft(scope, value)
     revision.current = saved.record.revision
     setStorageWarning(!saved.durable)
+    setSettlementWarning(hasChatDraftRetirementRisk(scope))
   }
 
   useEffect(() => {
@@ -121,10 +136,12 @@ export function ClassAskComposer({
     setError(false)
     try {
       await onSend(question.trim())
-      const settled = !submittedRevision || clearChatDraftIfRevision(scope, submittedRevision)
-      setSettlementWarning(!settled)
-      if (settled) setStorageWarning(false)
-      if (settled) {
+      const outcome = submittedRevision
+        ? clearChatDraftIfRevision(scope, submittedRevision)
+        : 'retired'
+      setSettlementWarning(outcome === 'failed' || hasChatDraftRetirementRisk(scope))
+      if (outcome !== 'failed') setStorageWarning(false)
+      if (outcome !== 'failed') {
         try {
           sessionStorage.removeItem(draftKey)
         } catch {
