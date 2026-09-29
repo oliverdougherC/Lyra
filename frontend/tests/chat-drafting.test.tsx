@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ApiError, api, streamChat, streamWriterChat } from '@/lib/api'
+import { resetChatDraftMemory } from '@/lib/chat-draft-store'
 import type { ChatEvent } from '@/types'
 
 vi.mock('@/components/chat/message-bubble', () => ({
@@ -107,6 +108,8 @@ function holdStream(writer: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.clear()
+  resetChatDraftMemory()
   vi.mocked(api.listSessions).mockResolvedValue([])
   vi.mocked(api.listMessages).mockResolvedValue([])
   vi.mocked(api.listDocuments).mockResolvedValue([])
@@ -142,6 +145,9 @@ describe.each([false, true])('Follow-up drafting (embedded writer: %s)', (writer
     fireEvent.click(screen.getByText('Finish reveal'))
     await waitFor(() => expect(screen.getByLabelText('Send message')).toBeEnabled())
     expect(input()).toHaveValue(FOLLOW_UP)
+    fireEvent.keyDown(input(), { key: 'Enter', isComposing: true })
+    expect(input()).toHaveValue(FOLLOW_UP)
+    expect(turn.stream).toHaveBeenCalledTimes(1)
     enter()
     await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(2))
     const call = turn.stream.mock.calls[1]
@@ -184,7 +190,7 @@ describe.each([false, true])('Follow-up drafting (embedded writer: %s)', (writer
     expect(input()).toHaveValue('')
   })
 
-  it('clears drafts on conversation/class navigation and ignores a late failure', async () => {
+  it('keeps each scoped draft on conversation/class navigation and ignores a late failure', async () => {
     const turn = holdStream(writer)
     const view = mount(writer)
     await waitFor(() => expect(input()).toBeEnabled())
@@ -201,6 +207,8 @@ describe.each([false, true])('Follow-up drafting (embedded writer: %s)', (writer
     view.rerender(view.pane(8, 2))
     await waitFor(() => expect(input()).toBeEnabled())
     expect(input()).toHaveValue('')
+    view.rerender(view.pane(7))
+    expect(input()).toHaveValue(FOLLOW_UP)
   })
 })
 
@@ -275,7 +283,7 @@ it.each([false, true])(
 )
 
 describe.each([false, true])('New Chat handoff ownership (writer: %s)', (writer) => {
-  it('clears a New Chat draft when manually returning to the still-running conversation', async () => {
+  it('keeps a New Chat draft when manually returning to the still-running conversation', async () => {
     const turn = holdStream(writer)
     const view = mount(writer)
     await waitFor(() => expect(input()).toBeEnabled())
@@ -288,6 +296,8 @@ describe.each([false, true])('New Chat handoff ownership (writer: %s)', (writer)
     view.rerender(view.pane(7))
     expect(input()).toHaveValue('')
     expect(turn.stream).toHaveBeenCalledTimes(1)
+    view.rerender(view.pane(null))
+    expect(input()).toHaveValue(FOLLOW_UP)
   })
 
   it('revokes pending New Chat creation when returning to the still-running conversation', async () => {
@@ -349,6 +359,6 @@ it.each([false, true])(
     view.rerender(view.pane(null))
     edit('A different New Chat draft')
     view.rerender(view.pane(9))
-    expect(input()).toHaveValue('')
+    expect(input()).toHaveValue(FOLLOW_UP)
   },
 )

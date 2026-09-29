@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ApiError, api, streamChat, type AgentStreamEvent } from '@/lib/api'
+import { resetChatDraftMemory } from '@/lib/chat-draft-store'
 import type { ChatEvent, DocumentRead, MessageRead, SessionRead, SettingsRead } from '@/types'
 
 vi.mock('@/lib/api', async () => {
@@ -32,6 +33,11 @@ vi.mock('@/lib/api', async () => {
 })
 
 const QUESTION = 'Explain sum of two periodic signals'
+
+beforeEach(() => {
+  localStorage.clear()
+  resetChatDraftMemory()
+})
 
 function message(overrides: Partial<MessageRead> & { id: number }): MessageRead {
   return {
@@ -123,6 +129,23 @@ describe('ChatPane', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry conversation' }))
     expect(await screen.findByText('Saved question')).toBeInTheDocument()
     expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+  })
+
+  it('restores the actual unsent textarea across conversation navigation and remount', async () => {
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    const user = userEvent.setup()
+    const view = renderWorkspace()
+    const box = await screen.findByLabelText('Message Lyra')
+    await user.type(box, 'Unsent worksheet question')
+    await user.click(screen.getByRole('button', { name: 'Reopen chat' }))
+    await waitFor(() => expect(box).toHaveValue(''))
+    await user.click(screen.getByRole('button', { name: 'New chat' }))
+    await waitFor(() => expect(box).toHaveValue('Unsent worksheet question'))
+
+    view.unmount()
+    resetChatDraftMemory() // An ordinary relaunch has a new JS heap.
+    renderWorkspace()
+    expect(await screen.findByLabelText('Message Lyra')).toHaveValue('Unsent worksheet question')
   })
 
   it('shows the first question once while the answer streams', async () => {
@@ -1651,10 +1674,10 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       expect(secondOp).not.toBe(firstOp)
     })
 
-    it('case B: a durable failed turn retires the send key entirely - no prefill, next send is a new send', async () => {
+    it('case B: a durable failed turn retains its prompt and retires the send key', async () => {
       // The question landed; the attempt failed durably. The transcript shows the honest
-      // turn with its Retry. The composer must not prefill the text (Retry is the causal
-      // path) AND the send key is spent: a follow-up message - identical or different -
+      // turn with its Retry. The composer retains the unsent text, while the send key is
+      // spent: a follow-up message - identical or different -
       // is a NEW send that mints a fresh operation id, never a re-run of the spent one.
       vi.mocked(api.sendAgentChat).mockClear()
       const transcript: MessageRead[] = []
@@ -1687,10 +1710,10 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
       const firstOp = vi.mocked(api.sendAgentChat).mock.calls[0][6]
 
-      // No prefill: the composer is empty, not offered the failed question again.
-      await waitFor(() => expect(box).toHaveValue(''))
+      await waitFor(() => expect(box).toHaveValue(QUESTION))
 
       // A typed message after the failed turn - identical or different - is a NEW send.
+      await user.clear(box)
       await user.type(box, 'What about Fourier transforms?')
       await user.click(screen.getByLabelText('Send message'))
       await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))

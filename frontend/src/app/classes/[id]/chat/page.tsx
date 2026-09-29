@@ -11,6 +11,7 @@ import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { readChatHandoff, stripChatHandoff } from '@/lib/handoff'
+import { readChatDraft, writeChatDraft } from '@/lib/chat-draft-store'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
 
@@ -29,8 +30,9 @@ function readSessionId(value: string | null): number | null {
 }
 
 export function readSavedDocumentSelection(key: string): number | null {
+  const durable = readChatDraft(`source:${key}`)?.value
   try {
-    const saved = sessionStorage.getItem(key)
+    const saved = durable ?? sessionStorage.getItem(key)
     if (!saved || saved === 'all') return null
     const id = Number(saved)
     return Number.isSafeInteger(id) && id > 0 ? id : null
@@ -73,6 +75,10 @@ export default function ClassWorkspacePage() {
 
   useEffect(() => {
     if (selection.classId !== classId) return
+    writeChatDraft(
+      `source:${selectionKey}`,
+      selectedDocumentId === null ? 'all' : String(selectedDocumentId),
+    )
     try {
       sessionStorage.setItem(
         selectionKey,

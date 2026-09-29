@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowUp } from 'lucide-react'
 
 import { Asterism } from '@/components/ui/asterism'
+import { clearChatDraftIfRevision, readChatDraft, writeChatDraft } from '@/lib/chat-draft-store'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 
 const GENERAL_PROMPTS = [
@@ -14,9 +15,7 @@ const GENERAL_PROMPTS = [
 
 /** A blank sheet, with ideas that yield as soon as the student starts writing.
  *
- * The draft lives under `draftKey` in sessionStorage: navigating to Settings and back
- * used to unmount this component and wipe a half-typed question with it. A question
- * that sends successfully clears the entry, so returning does not resurrect it.
+ * Questions survive navigation and relaunch until the exact submitted revision is accepted.
  */
 export function ClassAskComposer({
   className,
@@ -29,7 +28,14 @@ export function ClassAskComposer({
   suggestions?: string[]
   onSend: (question: string) => void | Promise<void>
 }) {
+  const scope = `class-ask:${draftKey}`
+  const revision = useRef<string | null>(null)
   const [question, setQuestion] = useState(() => {
+    const saved = readChatDraft(scope)
+    if (saved) {
+      revision.current = saved.revision
+      return saved.value
+    }
     try {
       return sessionStorage.getItem(draftKey) ?? ''
     } catch {
@@ -40,6 +46,7 @@ export function ClassAskComposer({
   const [focused, setFocused] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(false)
+  const [storageWarning, setStorageWarning] = useState(false)
   const submitting = useRef(false)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -49,12 +56,18 @@ export function ClassAskComposer({
   const empty = question.length === 0
 
   useEffect(() => {
-    try {
-      sessionStorage.setItem(draftKey, question)
-    } catch {
-      /* Asking still works in memory. */
-    }
-  }, [draftKey, question])
+    if (revision.current !== null || !question) return
+    const saved = writeChatDraft(scope, question)
+    revision.current = saved.record.revision
+    setStorageWarning(!saved.durable)
+  }, [question, scope])
+
+  function changeQuestion(value: string) {
+    setQuestion(value)
+    const saved = writeChatDraft(scope, value)
+    revision.current = saved.record.revision
+    setStorageWarning(!saved.durable)
+  }
 
   useEffect(() => {
     if (!empty || focused || reduceMotion || sending || prompts.length < 2) return
@@ -74,15 +87,16 @@ export function ClassAskComposer({
   async function send() {
     if (!question.trim() || submitting.current) return
     submitting.current = true
+    const submittedRevision = revision.current
     setSending(true)
     setError(false)
     try {
       await onSend(question.trim())
-      // The handoff navigates away; the sent question must not wait on remount.
+      if (submittedRevision) clearChatDraftIfRevision(scope, submittedRevision)
       try {
         sessionStorage.removeItem(draftKey)
       } catch {
-        /* Nothing left to persist if the draft could not be cleared. */
+        // The durable record has already been settled.
       }
     } catch {
       setError(true)
@@ -126,7 +140,7 @@ export function ClassAskComposer({
             aria-describedby={empty ? `${id}-idea` : undefined}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            onChange={(event) => setQuestion(event.target.value)}
+            onChange={(event) => changeQuestion(event.target.value)}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
               if (event.key === 'Enter' && !event.shiftKey) {
@@ -150,6 +164,11 @@ export function ClassAskComposer({
         {error ? (
           <p role="alert" className="mt-3 text-sm text-danger-text">
             Could not open the conversation. Your question is still here; try again.
+          </p>
+        ) : null}
+        {storageWarning ? (
+          <p role="status" className="mt-3 text-sm text-danger-text">
+            This question is only in this window. Make a copy before closing Lyra.
           </p>
         ) : null}
       </form>

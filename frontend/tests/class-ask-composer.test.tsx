@@ -1,9 +1,14 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ClassAskComposer } from '@/components/classes/class-ask-composer'
+import { resetChatDraftMemory } from '@/lib/chat-draft-store'
 
 afterEach(() => vi.useRealTimers())
+beforeEach(() => {
+  localStorage.clear()
+  resetChatDraftMemory()
+})
 
 const ideas = ['Explain convolution', 'Walk me through Fourier series']
 let keySeq = 0
@@ -88,6 +93,8 @@ describe('class opening composer', () => {
     const { box, view, draftKey } = setup()
     fireEvent.change(box, { target: { value: 'Set up a study plan' } })
     view.unmount()
+    sessionStorage.clear()
+    resetChatDraftMemory()
     setup(vi.fn(), draftKey)
     expect(screen.getByRole('textbox', { name: 'Ask about Signals' })).toHaveValue(
       'Set up a study plan',
@@ -100,6 +107,7 @@ describe('class opening composer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
     await act(async () => {})
     view.unmount()
+    resetChatDraftMemory()
     setup(vi.fn(), draftKey)
     expect(screen.getByRole('textbox', { name: 'Ask about Signals' })).toHaveValue('')
   })
