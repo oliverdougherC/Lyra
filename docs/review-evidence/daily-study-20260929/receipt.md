@@ -21,12 +21,13 @@ failing-before route test now keeps a separate preview document ID until the
 dialog closes. The signed isolated app visibly opened pages 5 and 8 of a
 12-page synthetic PDF. This fix is on #98 and does not alter #96/#97 ownership.
 
-Combined local verification after R8: 1,419 frontend unit tests and 81 Chromium
+Final combined local verification: 1,420 frontend unit tests and 81 Chromium
 browser checks passed (three WebKit-specific skips); affected router/store,
 frontend typecheck/lint/format, docs checks, and frozen-backend smoke passed.
-The source-page follow-up passed its focused tests and native diagnostic; final
-combined-head CI is tracked on #98. The retained production-identity review
-bundle is signed and smoke checked separately from native diagnostic acceptance.
+The source-page follow-up also passed its native diagnostic. Exact final-head
+CI is tracked on #98. The retained production-identity review bundle at
+`src-tauri/target/release/bundle/macos/Lyra.app` is signed and smoke checked
+separately from native diagnostic acceptance.
 
 [Final-code native method, timings, process samples, and limits](native-final-r8.md)
 cover actual chat and source journeys. The same WKWebView's minimal control
