@@ -39,7 +39,11 @@ export default function ClassHubPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const tab = searchParams.get('tab')
-  const sourceId = /^document-(\d+)$/.exec(searchParams.get('lyra-anchor') ?? '')?.[1]
+  // AttentionReveal consumes the one-shot anchor after focusing the file row. Keep
+  // the preview's document identity in a separate query key until it closes.
+  const sourceId =
+    searchParams.get('source-document') ??
+    /^document-(\d+)$/.exec(searchParams.get('lyra-anchor') ?? '')?.[1]
   const sourcePage = searchParams.get('source-page')
   const previewDocumentId = sourceId ? Number(sourceId) : null
   const previewPage = sourcePage ? Number(sourcePage) : null
@@ -131,6 +135,7 @@ export default function ClassHubPage() {
           onClose={() => {
             const query = new URLSearchParams(searchParams)
             query.delete('source-page')
+            query.delete('source-document')
             router.replace(`/classes/${classId}?${query.toString()}`, { scroll: false })
           }}
         />

@@ -257,7 +257,7 @@ function ActivityTrail({ entries }: { entries: ToolActivity[] }) {
                       {' · '}
                       {entry.class_id ? (
                         <Link
-                          href={`/classes/${entry.class_id}?tab=files&lyra-anchor=document-${source.document_id}${source.page_number ? `&source-page=${source.page_number}` : ''}`}
+                          href={`/classes/${entry.class_id}?tab=files&lyra-anchor=document-${source.document_id}${source.page_number ? `&source-document=${source.document_id}&source-page=${source.page_number}` : ''}`}
                           className="text-text-secondary underline decoration-dotted underline-offset-2 hover:text-foreground"
                         >
                           {source.filename}

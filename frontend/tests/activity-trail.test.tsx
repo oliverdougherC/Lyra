@@ -104,7 +104,7 @@ describe('the activity trail on a message', () => {
     expect(trail).toHaveTextContent('More source text available')
     expect(screen.getByRole('link', { name: 'signals.pdf p. 5' })).toHaveAttribute(
       'href',
-      '/#/classes/1?tab=files&lyra-anchor=document-7&source-page=5',
+      '/#/classes/1?tab=files&lyra-anchor=document-7&source-document=7&source-page=5',
     )
   })
 
