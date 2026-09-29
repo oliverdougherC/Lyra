@@ -42,15 +42,20 @@ test('unsent chat and source scope survive real router history and reload', asyn
   await expect(composer).toHaveValue('Explain the third graph, but keep this unsent.')
   await expect(page.getByRole('button', { name: /Lyra reads only lecture.pdf/ })).toBeVisible()
 
-  await page.evaluate(({ classId, sessionId }) => {
-    window.location.hash = `#/classes/${classId}/chat?session=${sessionId}`
-  }, { classId: CLASS_ID, sessionId: TWIN_SESSION_ID })
+  await page.evaluate(
+    ({ classId, sessionId }) => {
+      window.location.hash = `#/classes/${classId}/chat?session=${sessionId}`
+    },
+    { classId: CLASS_ID, sessionId: TWIN_SESSION_ID },
+  )
   await expect(composer).toHaveValue('')
   await page.goBack()
   await expect(composer).toHaveValue('Explain the third graph, but keep this unsent.')
 })
 
-test('Class Ask retains its actual textarea through a route change and reload', async ({ page }) => {
+test('Class Ask retains its actual textarea through a route change and reload', async ({
+  page,
+}) => {
   await installLyraApi(page)
   await page.goto(`/#/classes/${CLASS_ID}`)
   const ask = page.getByRole('textbox', { name: /Ask about/ })
