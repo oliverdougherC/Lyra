@@ -27,6 +27,14 @@ to return to the class workspace. A failed initialization does not report the ed
 or schedule an autosave. If opening the editor keeps failing, quit and reopen Lyra before
 trying again.
 
+## If an unsent question has a storage warning
+
+Keep Lyra open and copy the question before closing the window. The composer still has the text,
+but browser storage refused the durable write. A successfully sent question is removed only after
+its own saved revision is accepted; newer follow-up text remains available. If Lyra says a sent
+question's saved copy could not be removed, check the conversation before sending it again. That
+copy may reappear after a restart if storage continues to refuse the cleanup.
+
 ## If web research is unavailable
 
 - Open Settings and confirm an Exa API key is configured.

@@ -36,7 +36,7 @@ def _revision(conn: sqlite3.Connection, class_id: int, selected_id: int | None) 
     """A cheap fingerprint of every row that a continuation is allowed to read."""
     digest = hashlib.sha256()
     sql = (
-        "select d.id, d.class_id, d.created_at, d.state, d.refresh_state, "
+        "select d.id, d.class_id, d.filename, d.created_at, d.state, d.refresh_state, "
         "(select count(*) from chunks c where c.document_id = d.id), "
         "coalesce((select max(c.id) from chunks c where c.document_id = d.id), 0), "
         "coalesce((select max(p.generation) from document_read_pages p "
@@ -297,16 +297,23 @@ def search(
         f"select * from ({sql} union all {direct}) "  # noqa: S608
         "order by tier, score, document_id, source_order"
     )
-    revision = _revision(conn, class_id, selected_id)
-    return _page_result(
-        conn,
-        combined,
-        args,
-        ["search", class_id, selected_id, query],
-        revision,
-        cursor,
-        limit=limit,
-    )
+    context: list[object] = ["search", class_id, selected_id, query]
+    # One SQLite read snapshot covers ownership, revision, ranking, and excerpts. A
+    # concurrent ingestion can commit in WAL, but cannot split these observations.
+    conn.execute("savepoint document_search_read")
+    try:
+        _scope(conn, class_id, selected_id)
+        # All FTS5 statistics (including other classes) advance with chunk writes.
+        # The generation and the bounded page query share this read snapshot.
+        generation = conn.execute(
+            "select generation from document_search_generation where id = 1"
+        ).fetchone()[0]
+        revision = hashlib.sha256(
+            f"{_revision(conn, class_id, selected_id)}:{generation}".encode()
+        ).hexdigest()[:24]
+        return _page_result(conn, combined, args, context, revision, cursor, limit=limit)
+    finally:
+        conn.execute("release savepoint document_search_read")
 
 
 def read_page(

@@ -267,7 +267,7 @@ def _audit_arguments(tool: str, arguments: Mapping[str, object]) -> dict[str, ob
     """Project arguments into metadata without persisting private/bulky values."""
     projected: dict[str, object] = {}
     for name, value in arguments.items():
-        if name in {"query", "proposed_content", "excerpt"}:
+        if name in {"query", "cursor", "proposed_content", "excerpt"}:
             text = str(value)
             projected[f"{name}_chars"] = len(text)
             projected[f"{name}_sha256"] = hashlib.sha256(text.encode()).hexdigest()
@@ -735,7 +735,8 @@ def _add_document_tools(
         (
             "search_documents",
             "Search uploaded coursework by exact terms and return bounded cited excerpts. "
-            "Works without the embedding helper. Continue with next_cursor when has_more is true.",
+            "Works without the embedding helper. Continue with next_cursor when has_more is true; "
+            "an expired cursor means restart the search.",
             {
                 "query": {"type": "string", "maxLength": 200},
                 "cursor": {"type": "string", "maxLength": 2048},

@@ -683,6 +683,9 @@ async def run_tool_loop(
             a narration bug must not cost the pass.
         on_delta: Optional live text observer. A reset before each successive model
             round clears intermediate answer text while preserving reasoning.
+        after_call: Optional supplemental messages produced by a tool result. They are
+            measured with each result, then appended after every tool reply in that
+            assistant batch so a provider never sees an interrupted tool response set.
         context_budget: When given, the loop does two things an unguarded loop does not.
             It caps every request at the budgeted `generation_reserve` output tokens, so the
             reserve held back in the context arithmetic is the reserve the endpoint is
@@ -773,7 +776,7 @@ async def _drive(
     # exactly what they sent before.
     max_tokens = context_budget.generation_reserve if context_budget is not None else None
 
-    def overflowed() -> bool:
+    def overflowed(supplemental: list[dict[str, object]] | None = None) -> bool:
         """Whether the conversation as it stands can no longer fit the next request.
 
         Re-read after every growth boundary, not only between rounds: a single assistant
@@ -782,7 +785,8 @@ async def _drive(
         """
         return (
             context_budget is not None
-            and conversation_tokens(conversation) > context_budget.message_ceiling
+            and conversation_tokens(conversation + supplemental if supplemental else conversation)
+            > context_budget.message_ceiling
         )
 
     for round_index in range(max_depth):
@@ -907,6 +911,7 @@ async def _drive(
                 stopped=CONTEXT_OVERFLOW,
                 detail=_OVERFLOW_DETAIL,
             )
+        supplemental: list[dict[str, object]] = []
         for call in answer.tool_calls:
             # Handlers block on a subprocess or the network, so they run off the event
             # loop. Known cost: `to_thread` cannot be cancelled once the handler is
@@ -964,7 +969,10 @@ async def _drive(
                     logger.exception("on_call callback raised; the loop continues")
             if after_call is not None:
                 try:
-                    conversation.extend(after_call(recorded))
+                    # A user image is evidence for the next model request, not a reply
+                    # to this tool. Keep the assistant's entire batch of tool replies
+                    # contiguous before appending any supplemental user turns.
+                    supplemental.extend(after_call(recorded))
                 except ToolContinuationError as exc:
                     return ToolLoopResult(
                         content="",
@@ -978,13 +986,14 @@ async def _drive(
             # longer be sent. The work that genuinely ran stays in `calls`; the loop simply
             # settles here rather than replaying a half-finished tool set as a request with
             # missing results.
-            if overflowed():
+            if overflowed(supplemental):
                 return ToolLoopResult(
                     content="",
                     calls=tuple(calls),
                     stopped=CONTEXT_OVERFLOW,
                     detail=_OVERFLOW_DETAIL,
                 )
+        conversation.extend(supplemental)
 
     return ToolLoopResult(
         content="",
