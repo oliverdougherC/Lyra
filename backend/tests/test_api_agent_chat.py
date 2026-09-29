@@ -404,6 +404,43 @@ def test_page_image_tool_bounds_count_and_selected_source(
     assert "page-image limit" in str(fourth.as_payload())
 
 
+def test_stopped_page_image_is_a_durable_refusal_without_visual_delivery(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute("update settings set vision_supported = 1 where id = 1")
+    db.commit()
+    gate = tools.ToolStopGate()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    def stop_during_render(*_args: object) -> bytes:
+        gate.request_stop()
+        return b"synthetic-png"
+
+    monkeypatch.setattr(document_access, "image_page", stop_during_render)
+    registry, activity = agent_tools.build_agent_registry(
+        db,
+        class_id,
+        session_id,
+        "agent",
+        selected_document_id=7,
+        document_endpoint="http://127.0.0.1:8080/v1",
+        image_capable=True,
+        stop=gate,
+    )
+    result = registry["read_document_image"].handler(document_id=7, page_number=1)
+    assert not result.ok
+    assert activity.pending_images == []
+    assert activity.events[-1].state == "refused"
+    assert activity.events[-1].detail == "This turn was stopped."
+    audit = db.execute(
+        "select state, error_message from tool_audit_events where tool = 'read_document_image'"
+    ).fetchone()
+    assert tuple(audit) == ("refused", "This turn was stopped.")
+
+
 def test_required_matrix_figure_without_vision_refuses_before_provider(
     client: TestClient,
     db: sqlite3.Connection,
