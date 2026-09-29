@@ -25,6 +25,7 @@ from backend.core import (
     agent_store,
     agent_tools,
     app_settings,
+    document_access,
     ingestion,
     sessions,
     web_research,
@@ -305,6 +306,70 @@ def test_failed_first_index_still_sends_actual_worksheet_text_to_provider(
     )
     assert response.status_code == 200, response.text
     assert len(requests) == 2
+
+
+def test_changed_endpoint_blocks_late_page_image_before_next_provider_request(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "diagram.pdf"
+    source = pymupdf.open()
+    source.new_page().draw_rect(pymupdf.Rect(72, 72, 280, 240), color=(0, 0, 0))
+    source.save(pdf)
+    source.close()
+    db.execute("update documents set stored_path = ?, pages_total = 1 where id = 7", (str(pdf),))
+    db.execute("update settings set vision_supported = 1, context_window = 16384 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    real_image_page = document_access.image_page
+
+    def change_settings_after_render(*args: object) -> bytes:
+        image = real_image_page(*args)
+        changed = connect()
+        try:
+            changed.execute(
+                "update settings set endpoint_url = 'http://127.0.0.1:9999/v1' where id = 1"
+            )
+            changed.commit()
+        finally:
+            changed.close()
+        return image
+
+    monkeypatch.setattr(document_access, "image_page", change_settings_after_render)
+    requests = 0
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        _messages: list[dict[str, object]],
+        _schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        nonlocal requests
+        requests += 1
+        assert requests == 1, "the changed endpoint received a private page image"
+        return routes_agent_chat.llm_client.AssistantMessage(
+            "",
+            (
+                routes_agent_chat.llm_client.ToolCall(
+                    "image", "read_document_image", '{"document_id":7,"page_number":1}'
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tools.run_tool_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the diagram"},
+    )
+    assert response.status_code == 502
+    assert "Tutor settings changed" in response.json()["detail"]
+    assert requests == 1
 
 
 def test_required_matrix_figure_without_vision_refuses_before_provider(
