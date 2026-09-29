@@ -1,8 +1,58 @@
 # Daily-study correction review receipt — September 29, 2026
 
-## Current review pass: R8 and final-code native diagnostic
+## R9 competing-write correction — current review handoff
 
-This section supersedes the historical head and native status below. The owning
+The owning #96 head is `2767ef8daedc0f4e775ec0b21ccca096073dce65`.
+It reaches #97 at `7b95edb7281aa724531e9140b1b56c9ba517f8a9` and
+combined #98 code at `17d038e3cb4179ef51e748648bf2fd493daee028`, with
+the review-stack ancestry intact. The retained signed production-identity
+review bundle embeds the #98 code SHA; the receipt commit that follows changes
+documentation only. All three PRs remain unmerged for independent review.
+
+The [storage contract](../../chat-draft-persistence.md) uses a distinct key
+for each draft revision. Cleanup names an immutable revision key, so a
+competing newer write cannot occupy the key being removed. Each saved revision
+also records its surviving predecessor keys before it reaches storage. If
+cleanup is refused or interrupted, later acceptance acknowledges those exact
+predecessors before the submitted revision; a different active writer's branch
+is not in that ancestry. Acknowledgement markers are per revision, so two
+windows cannot overwrite one another's acknowledgement. Legacy mutable writer
+slots are read and suppressed but never removed by new code.
+
+| Check | Evidence on this correction |
+| --- | --- |
+| Original ordering | The new two-module regression failed on the reviewed mutable-key implementation: writer A completed a durable newer write in the removal hook after B's final comparison, then B deleted that key; A and a relaunched reader lost the text. The same exact hook passes with revision keys and restores A's text. |
+| Related interleavings | Adoption cleanup with an active competing edit; two acknowledgements in one scope; an interrupted/denied predecessor cleanup followed by another edit and accepted send; a full-store cleanup recovery; and two windows racing for the last of 128 unsent slots pass. The two-page Chromium test preserves distinct visible window drafts through reload without a false saved-copy warning. |
+| Bounds and refusal | 240 fresh-session accepted-send cycles leave one unsent revision and no obsolete v2 markers. Mixed 64 retired/64 genuinely unsent legacy records admit the next prompt without deleting a legacy mutable slot; 128 genuine unsent records refuse another durable write. v2 records are admitted to 128 live slots; a refused deletion can temporarily leave an extra physical copy, and further writes refuse the occupied cap until cleanup recovers. Pre-existing v1 slots form a fixed migration population. Denied marker writes remain visible as failed settlement rather than a false durable claim. |
+| Combined checks | 1,426 frontend unit tests, lint, typecheck, formatting, documentation links, and active-reference scan passed. The Chromium run had 81 passes, three platform skips, and one source-picker stability timeout; that exact case passed on rerun. The retained review app was rebuilt with the frozen Python sidecar, signed with the established Apple Development identity (78 code objects), bundle-verified, and passed authenticated frozen-backend smoke. A copied app passed the private installer rehearsal without opening or replacing the normal app. Exact-head GitHub CI is checked separately before handoff. |
+
+The exact-head [#96 CI](https://github.com/oliverdougherC/Lyra/actions/runs/36606787394)
+and [#97 CI](https://github.com/oliverdougherC/Lyra/actions/runs/36606850822)
+each passed all 11 jobs. The [#98 code-head CI](https://github.com/oliverdougherC/Lyra/actions/runs/36610148493)
+is the combined gate; its final disposition is checked before handoff.
+
+A temporary synthetic store benchmark at 127 existing unsent records measured
+100 replacement writes at 0.39 ms median, 0.62 ms p95, and 1.22 ms maximum
+in the jsdom test runtime; it is a write-cost check, not a native frame result.
+The separate signed R9 diagnostic used code `17d038e`, a unique compiled ID
+and persistent WebKit store, disposable backend profile, null Keyring, and a
+keyless loopback tutor. Its frontend asset bytes and frozen backend executable
+matched the retained production-identity review build; only diagnostic native
+identity, profile, WebKit store, and event-timing overlay differed. In its Class
+Ask composer, 71 synthetic keydowns reached
+the next callback in 12/22 ms median/p95; 48 later chat follow-up keydowns were
+9/37 ms. One synthetic send completed with an empty, warning-free composer;
+a real Quit/relaunch kept it retired, and another real Quit/relaunch restored
+the later unsent follow-up. The fixture logged one completion request. These
+are isolated-variant observations with automation and overlay overhead, not
+presented frames, physical input-to-paint, or production-default WebKit/Keychain
+acceptance. The R8 [chat/source/idle report](native-final-r8.md) remains the
+broader native evidence, and PLA-570's 120 Hz requirement remains open.
+`/Applications/Lyra.app` was neither launched nor replaced.
+
+## Historical R8 review pass and final-code native diagnostic
+
+The owning
 R8 commit is `ae6c063` on #96, merged through #97 into #98. The combined code
 used for the isolated diagnostic is `7d9e447fdb49a58a1675e056d7980cd3365ed5b6`;
 the later receipt-only commit does not change its frontend or frozen backend bytes.
