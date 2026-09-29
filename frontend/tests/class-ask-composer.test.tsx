@@ -101,6 +101,28 @@ describe('class opening composer', () => {
     expect(readChatDraft(`class-ask:${draftKey}`)).toBeNull()
   })
 
+  it('keeps a newer question in the returned view without a retirement warning', async () => {
+    let finish!: () => void
+    const onSend = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    const draftKey = 'lyra:class:9:ask-question'
+    const first = setup(onSend, draftKey)
+    fireEvent.change(first.box, { target: { value: 'Question A' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    first.view.unmount()
+    const second = setup(onSend, draftKey)
+    fireEvent.change(second.box, { target: { value: 'Question B' } })
+    await act(async () => finish())
+    expect(second.box).toHaveValue('Question B')
+    expect(readChatDraft(`class-ask:${draftKey}`)?.value).toBe('Question B')
+    expect(screen.queryByText(/saved copy could not be removed/i)).not.toBeInTheDocument()
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
   it('retains the question and makes retry available when navigation fails', async () => {
     const onSend = vi.fn().mockRejectedValue(new Error('Chunk unavailable'))
     const { box } = setup(onSend)
