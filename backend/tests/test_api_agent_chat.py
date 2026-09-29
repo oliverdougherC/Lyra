@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pymupdf
 import pytest
 from fastapi import FastAPI, Request
@@ -242,6 +243,102 @@ def test_classwide_late_page_image_reaches_the_next_provider_round(
     assert page_activity["sources"][0]["page_number"] == 5
     persisted = sessions.list_messages(db, session_id)
     assert persisted[-1]["tool_activity"] == response.json()["activity"]
+
+
+def test_http_batch_sends_real_page_image_after_all_tool_replies(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "two-pages.pdf"
+    source = pymupdf.open()
+    source.new_page().draw_rect(pymupdf.Rect(72, 72, 190, 180), color=(1, 0, 0))
+    source.new_page().insert_text((72, 72), "Second page text evidence")
+    source.save(pdf)
+    source.close()
+    db.execute("update documents set stored_path = ?, pages_total = 2 where id = 7", (str(pdf),))
+    db.execute("update settings set vision_supported = 1, context_window = 16384 where id = 1")
+    db.commit()
+    expected = document_access.image_page(db, class_id, None, 7, 1)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    received: list[dict[str, object]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        received.append(body)
+        if len(received) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "image",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_document_image",
+                                            "arguments": '{"document_id":7,"page_number":1}',
+                                        },
+                                    },
+                                    {
+                                        "id": "text",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_document_page",
+                                            "arguments": '{"document_id":7,"page_number":2}',
+                                        },
+                                    },
+                                ],
+                            }
+                        }
+                    ]
+                },
+            )
+        messages = body["messages"]
+        assistant = next(i for i, item in enumerate(messages) if item["role"] == "assistant")
+        if [item.get("tool_call_id") for item in messages[assistant + 1 : assistant + 3]] != [
+            "image",
+            "text",
+        ]:
+            return httpx.Response(400, json={"error": "interrupted tool replies"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "The diagram is on page one."}}
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(provider)
+
+    async def real_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return await tools.run_tool_loop(*args, **kwargs, transport=transport)
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", real_loop)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the page-one diagram and page-two text"},
+    )
+    assert response.status_code == 200, response.text
+    assert len(received) == 2
+    messages = received[1]["messages"]
+    assistant = next(i for i, item in enumerate(messages) if item["role"] == "assistant")
+    image_message = messages[assistant + 3]
+    assert image_message["role"] == "user"
+    assert "Uploaded document 7, physical page 1" in image_message["content"][0]["text"]
+    encoded = image_message["content"][1]["image_url"]["url"]
+    assert base64.b64decode(encoded.split(",", 1)[1]) == expected
+    assert [event["tool"] for event in response.json()["activity"]] == [
+        "read_document_image",
+        "read_document_page",
+    ]
 
 
 def test_failed_first_index_still_sends_actual_worksheet_text_to_provider(
