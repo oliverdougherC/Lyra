@@ -584,15 +584,15 @@ def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
 
     system = str(assembly.messages[0]["content"])
     # The shared education contract the turn runs under (the full tutor prompt).
-    assert "Answer the student's latest request at its requested depth" in system
-    assert "routine recaps" in system
-    assert "one useful first move" in system
-    assert "less abstraction" in system
+    assert "Teach the student's latest request, at the depth it asks for" in system
+    assert "an automatic recap" in system
+    assert "one concrete first move" in system
+    assert "less abstraction with the same necessary conditions" in system
     # The capability layer precedes the shared education contract.
     assert "You are Lyra's class agent" in system
     assert "the complete requested work" in system
     assert system.index("You are Lyra's class agent") < system.index(
-        "Answer the student's latest request"
+        "Teach the student's latest request"
     )
     assert "Use verified results only for the claims they actually check" in system
     # The case's retrieved context, rendered as the route renders it.
@@ -639,7 +639,7 @@ def test_the_class_chat_surface_is_tool_less_on_a_known_incompatible_endpoint(
     assert "is not available in this conversation" in system
     # The full tutor contract is still there: tool-less is a smaller surface, not a
     # different conversation.
-    assert "Answer the student's latest request at its requested depth" in system
+    assert "Teach the student's latest request, at the depth it asks for" in system
     # The question still went out, tool-less: the basic tutoring turn is never refused
     # over the cost of optional capability.
     assert assembly.messages[-1] == {"role": "user", "content": case.user}

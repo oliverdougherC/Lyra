@@ -1,11 +1,11 @@
 # Adaptive education chat: bounded production-path evaluation
 
-**Status: quality gate open.** This is exploratory evidence for PLA-574/PLA-461,
+**Status: quality gate not met.** This is exploratory evidence for PLA-574/PLA-461,
 not acceptance of the candidate. The original v3 failures, R5 outputs and R3 prompt
-probes below remain separate. R3's final-source repeated evaluation follows its source
-commit. Some conversational answers are compact and full-solution cores are sound, but
-auxiliary claims and scope still need direct reading. The owner has not reviewed these
-outputs. Historical Guide/Show evidence remains in its original files.
+experiments remain separate. The R3 candidate failed repeated direct reading and its
+prompt/source changes were reverted; the R5 source contract 4 remains in the PR. The
+owner has not reviewed these outputs. Historical Guide/Show evidence remains in its
+original files.
 
 ## Setup and retained outputs
 
@@ -156,12 +156,40 @@ dirty while variants were compared, so none is claimed as exact-commit acceptanc
 |---|---|---|
 | 1 | [answers](r3-probe-1-runs.json), [metadata](r3-probe-1-meta.json) | Shorter positive contract alone: the concept became 327 words, first-step help 229, and the attempt became a full worked solution with checks. Rejected. |
 | 2 | [answers](r3-probe-2-runs.json), [metadata](r3-probe-2-meta.json) | Added pre-tool scope decision: fewer tool calls, but the concept was 311 words and the narrow scalar reply re-listed axioms. Rejected. |
-| 3 | [answers](r3-probe-3-runs.json), [metadata](r3-probe-3-meta.json) | Stronger stopping points: concept 70 words, correct scalar codomain, and a sound core convolution derivation. The concept still compresses an axiom inventory into a paragraph; attempt and full answer still add unrequested material. Retained for final-source repeats as the least bad variant, not semantic acceptance. |
+| 3 | [answers](r3-probe-3-runs.json), [metadata](r3-probe-3-meta.json) | Stronger stopping points: concept 70 words, correct scalar codomain, and a sound core convolution derivation. The concept still compresses an axiom inventory into a paragraph; attempt and full answer still add unrequested material. Selected for exact-source repeats, then rejected on that evidence. |
 | 4 | [answers](r3-probe-4-runs.json), [metadata](r3-probe-4-meta.json) | Tighter wording shortened the attempt but the full solution printed an unusable $\max(0,\cdot)$ lower bound and optional checks. Rejected. |
 
 No word count is an acceptance rule. The problem in probe 4 is a contradictory
-displayed step despite a correct final piecewise result. Probe 3 remains a candidate
-with known scope misses pending exact-source repeated reading and independent review.
+displayed step despite a correct final piecewise result.
+
+### Exact-source repeat and disposition
+
+The probe-3 wording was committed as `c0b5edcd76ca82c7efeb3cc8ca11621f3486adbc`
+and run twice on the production `class_chat` planner/tool loop with a disposable
+synthetic class. Both [A answers](r3-final-a-runs.json) and [B answers](r3-final-b-runs.json)
+completed all nine cases. [A metadata](r3-final-a-meta.json) and
+[B metadata](r3-final-b-meta.json) confirm clean source, identical prompt/agent hashes,
+the existing configured Qwen3.8-Flash-Next endpoint and the
+[corpus 2.2.0/contract 5 candidate](r3-candidate-corpus.json). Each complete answer
+was read for scope and correctness.
+
+| Request | A / B words | Direct reading |
+|---|---:|---|
+| Conversational vector-space definition | 142 / 123 | Both still enumerate axioms and append unrequested applications. This is no durable gain over R5's 125 / 136 words. |
+| Held-out plain-English eigenvector | 145 / 132 | Correct core concept and nonzero condition, with extra examples and applications. |
+| Scalar and zero-polynomial narrow follow-ups | 131 / 82; 141 / 132 | Scalar codomain is correct, but both scalar replies re-list compatibility axioms; zero replies expand beyond the one point. |
+| Polynomial first-step help | 179 / 187 | Both list a sequence of subspace checks and partially perform the setup instead of leaving one move. |
+| Convolution attempt diagnosis | 238 / 208 | Both identify the dropped $e^{\tau}$ but add the second error and much of the solution. B again prints an unusable $\max(0,\cdot)$ lower bound. |
+| Explicit full convolution | 352 / 285 | Both derive the correct piecewise core. Optional checks and alternate routes remain; B's claim that convolution with any $L^1$ kernel cannot jump is not justified generally. |
+| Formal vector definition | 386 / 465 | The required axioms and field are present; A appends an unrelated malformed LaTeX identity. |
+| Detailed negative-eigenvalue explanation | 1,096 / 926 | The negative-eigenvalue derivation and matrix examples are sound. Tangents add false or unqualified statements, including A's claim that a one-dimensional linear map has two degrees of freedom and B's universal determinant-sign claim without a zero-eigenvalue exception. |
+
+The prompt experiment did not reliably improve the R5 behavior and introduced
+new correctness defects. Its application changes were reverted before the PR handoff;
+the exact probe and repeated transcripts remain as historical evidence. PLA-461 and
+PLA-574 remain **In Progress**. No second model pass, hard answer cap, fixture-specific
+rule or provider comparison was added. R5 A/B above are again the current-source live
+observations, with their original scope and auxiliary-correctness limits.
 
 ## Original v3 comparison
 
@@ -171,8 +199,8 @@ used [candidate-corpus-run.json](candidate-corpus-run.json); one rubric wording 
 corrected afterward, so that exact snapshot is retained. The v3 corpus was
 `scripts/eval_corpora/tutor_semantic.json` at version 2.0.0, contract 3. V3's
 recorded corpus, prompt, route-prompt and harness hashes identify that historical
-branch revision, not the current source. The R5 corpus was 2.1.0, contract 4;
-the R3 candidate corpus is 2.2.0, contract 5.
+branch revision, not the current source. The current R5 corpus is 2.1.0,
+contract 4. The rejected R3 experiment used corpus 2.2.0, contract 5.
 
 ## Direct reading against the rubric
 

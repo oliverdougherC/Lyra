@@ -67,10 +67,10 @@ def test_legacy_modes_share_one_adaptive_education_contract() -> None:
     show = build_system_prompt("show", [], [])
     assert guide == show
     prompt = _normalized(guide)
-    assert "one useful first move" in prompt
+    assert "one concrete first move" in prompt
     assert "full solution" in prompt
-    assert "first actual error" in prompt
-    assert "routine recaps" in prompt
+    assert "first genuine error" in prompt
+    assert "automatic recap" in prompt
     assert "mode: guide" not in prompt
     assert "mode: show" not in prompt
 
@@ -252,8 +252,8 @@ def test_claims_review_requires_ledger_verification_for_web_and_course_sources()
 
 def test_adaptive_contract_answers_concepts_directly_and_keeps_math_conditions() -> None:
     prompt = _normalized(build_system_prompt("guide", [], []))
-    assert "one short paragraph in ordinary language" in prompt
-    assert 'including "go over the definition,"' in prompt
+    assert "start with one plain-language paragraph" in prompt
+    assert 'word "definition" appears' in prompt
     assert "formal definition, list of axioms" in prompt
     assert "without an arbitrary length cap" in prompt
     assert "real ambiguity" in prompt
@@ -585,17 +585,17 @@ def test_writer_chat_prompt_omits_empty_blocks() -> None:
 
 def test_adaptive_contract_bounds_start_help_and_checks_actual_attempt() -> None:
     prompt = _normalized(build_system_prompt("guide", [], []))
-    assert "one useful first move" in prompt
-    assert "leave that move for the student" in prompt
-    assert "its evaluation and later errors for the student" in prompt
-    assert "first actual error" in prompt
-    assert "student's work" in prompt
-    assert "invented rule" in prompt
+    assert "one concrete first move" in prompt
+    assert "leave that move for the student to perform" in prompt
+    assert "do not evaluate the setup" in prompt
+    assert "first genuine error" in prompt
+    assert "student's transition" in prompt
+    assert "do not invent a rule" in prompt
     assert "full solution" in prompt
-    assert "keeping necessary conditions" in prompt
+    assert "same necessary conditions" in prompt
 
 
 def test_adaptive_contract_respects_explicit_no_question_requests() -> None:
     prompt = _normalized(build_system_prompt("show", [], []))
-    assert "honor an explicit request for no questions" in prompt
-    assert "routine recaps, tool narration, greetings" in prompt
+    assert "if the student asks for no questions, answer without one" in prompt
+    assert "automatic recap, greeting, closing question, follow-up" in prompt
