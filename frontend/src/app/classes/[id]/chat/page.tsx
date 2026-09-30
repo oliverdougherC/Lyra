@@ -196,11 +196,11 @@ export default function ClassWorkspacePage() {
   return (
     <WorkspaceAttachProvider classId={classId}>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-        {/* Live agent work is a band over the transcript. When much is pending it scrolls
-            within its own band rather than squeezing the conversation: the answer and the
-            composer keep their allocation in every window. */}
+        {/* Only actionable work or deliberately opened history occupies this band. The
+            history trigger lives in the existing app header, so its arrival cannot move
+            the transcript or composer. Keep the chat pane mounted across URL changes. */}
         <div className="max-h-[40svh] min-h-0 overflow-y-auto">
-          <AgentWorkSurface classId={classId} sessionId={sessionId} />
+          <AgentWorkSurface key={sessionId ?? 'draft'} classId={classId} sessionId={sessionId} />
         </div>
         <div className="min-h-0 flex-1">{chat}</div>
       </div>
