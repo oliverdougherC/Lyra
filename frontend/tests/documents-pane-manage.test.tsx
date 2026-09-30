@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -286,6 +286,104 @@ it('restores each class filter without copying the previous class query', async 
   )
   expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
   expect(sessionStorage.getItem('lyra:class:2:files-query')).toBe('syllabus')
+})
+
+it('routes a DOM drop through the existing class upload queue only once', async () => {
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 20 } as DocumentRead)
+  const { wrapper } = createWrapper()
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  await screen.findByRole('group', { name: 'Upload documents' })
+  const transfer = { items: [], files: [new File(['pdf'], 'révision one.pdf')] }
+  const target = screen.getByRole('group', { name: 'Upload documents' })
+
+  fireEvent.drop(target, { dataTransfer: transfer })
+  fireEvent.drop(target, { dataTransfer: transfer })
+
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+  expect(upload.mock.calls[0][0]).toBe(1)
+  expect(upload.mock.calls[0][1].name).toBe('révision one.pdf')
+})
+
+it('accepts a later gesture with the same filename as a separate upload', async () => {
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 20 } as DocumentRead)
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  const target = screen.getByRole('group', { name: 'Upload documents' })
+  for (const content of ['first', 'second']) {
+    fireEvent.drop(target, {
+      dataTransfer: { items: [], files: [new File([content], 'notes.pdf')] },
+    })
+  }
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(2))
+})
+
+it('uploads supported files from a mixed drop and names unsupported files', async () => {
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 20 } as DocumentRead)
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: {
+      items: [],
+      files: [new File(['pdf'], 'notes.pdf'), new File(['slides'], 'slides.pptx')],
+    },
+  })
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+  expect(upload.mock.calls[0][1].name).toBe('notes.pdf')
+  expect(screen.getByText(/slides.pptx is not a supported type/)).toBeInTheDocument()
+})
+
+it('shows the existing 50 MB server rejection for a dropped file', async () => {
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockRejectedValue(new ApiError(413, 'That file is larger than 50 MB. Upload a smaller file.'))
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: { items: [], files: [new File(['oversized fixture'], 'large.pdf')] },
+  })
+  expect(await screen.findByText(/larger than 50 MB/)).toBeInTheDocument()
+  expect(upload).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a pending folder scan with the class that accepted the drop', async () => {
+  let finishScan!: (entries: FileSystemEntry[]) => void
+  let scanCalls = 0
+  const folder = {
+    isFile: false,
+    isDirectory: true,
+    name: 'Week 1',
+    createReader: () => ({
+      readEntries: (resolve: (entries: FileSystemEntry[]) => void) => {
+        if (scanCalls++ > 0) resolve([])
+        else finishScan = resolve
+      },
+    }),
+  }
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 21 } as DocumentRead)
+  const { wrapper } = createWrapper()
+  const view = render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: { items: [{ webkitGetAsEntry: () => folder }], files: [] },
+  })
+  expect(screen.getByText(/Reading the folder/)).toBeInTheDocument()
+
+  view.rerender(<DocumentsPane classId={2} variant="manage" />)
+  finishScan([
+    {
+      isFile: true,
+      isDirectory: false,
+      name: 'notes.pdf',
+      file: (resolve: (file: File) => void) => resolve(new File(['pdf'], 'notes.pdf')),
+    } as unknown as FileSystemEntry,
+  ])
+
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+  expect(upload.mock.calls[0][0]).toBe(1)
+})
+
+it('reports a drop without readable entries instead of silently accepting it', async () => {
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: { items: [], files: [] },
+  })
+  expect(await screen.findByText(/No readable files/)).toBeInTheDocument()
 })
 
 // The six-restart storm: a request that never landed (`ApiError(0)`) after the runtime

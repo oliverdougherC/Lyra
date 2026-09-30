@@ -119,6 +119,14 @@ function ClassDocumentsPane({
   // long enough that silence reads as nothing having happened.
   const [scanning, setScanning] = useState(false)
   const [rejectedFiles, setRejectedFiles] = useState<string[] | null>(null)
+  const handledDrops = useRef(new WeakSet<DataTransfer>())
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   // The list polls itself while anything in it is mid-ingestion, so no interval is asked
   // for here. Tying it to the upload batch was the bug: the batch clears a couple of
@@ -169,7 +177,7 @@ function ClassDocumentsPane({
 
   const onFiles = (files: File[]) => {
     const { accepted, rejected } = partitionFiles(files)
-    setRejectedFiles(rejected.length > 0 ? rejected : null)
+    if (mounted.current) setRejectedFiles(rejected.length > 0 ? rejected : null)
     if (accepted.length > 0) uploads.enqueue(accepted)
   }
 
@@ -357,13 +365,26 @@ function ClassDocumentsPane({
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault()
+        const transfer = event.dataTransfer
+        if (handledDrops.current.has(transfer)) return
+        handledDrops.current.add(transfer)
         // `filesFromDrop` claims the dropped entries synchronously, so it has to be called
         // here rather than after any await: the item list is gone once this handler yields.
-        void filesFromDrop(event.dataTransfer, () => setScanning(true)).then(
+        void filesFromDrop(transfer, () => setScanning(true)).then(
           ({ files, errors }) => {
-            setScanning(false)
-            uploads.reportScanErrors(errors)
+            if (mounted.current) setScanning(false)
+            uploads.reportScanErrors(
+              files.length === 0 && errors.length === 0
+                ? ['No readable files were found in that drop.']
+                : errors,
+            )
+            // This closure owns the class that received the gesture even if a slow folder
+            // scan resolves after navigation or a new pane mounts for another class.
             onFiles(files)
+          },
+          () => {
+            if (mounted.current) setScanning(false)
+            uploads.reportScanErrors(['The dropped folder could not be scanned. Try again.'])
           },
         )
       }}
