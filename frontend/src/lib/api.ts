@@ -690,8 +690,8 @@ export const api = {
           content,
           ...(profile ? { profile } : null),
           ...(documentId != null ? { document_id: documentId } : null),
-          // The student's Guide/Show choice rides the turn and is persisted on the session,
-          // so the agent's shared mode contract follows the same toggle as the tutor.
+          // Legacy callers may still send a stored mode value. Current education chat
+          // omits it; the backend uses one teaching contract for both values.
           ...(mode ? { mode } : null),
           ...(operationId ? { operation_id: operationId } : null),
         },
@@ -704,7 +704,7 @@ export const api = {
   // Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
   // The server reuses the original message rather than appending a duplicate, and replays a
   // reply that already committed instead of running the model again. The scope body is a
-  // backstop only: the attempt's persisted scope (source and mode) wins.
+  // backstop only: the attempt's persisted source and legacy mode value win.
   retryAgentChat: (
     classId: number,
     sessionId: number,
@@ -736,7 +736,7 @@ export const api = {
   // Answer the conversation's last agent question again, replacing the reply it has (PLA-316
   // class affordance). Unlike retry, this re-runs even a completed turn and supersedes the old
   // reply on the server, so the transcript carries exactly one answer. A manual regeneration
-  // carries the CURRENT Guide/Show selection and source scope (like the tutor's); a body-less
+  // carries the current source scope (and may include a legacy mode); a body-less
   // regeneration - the just-in-time continuation after an access approval - continues the
   // turn's persisted scope.
   regenerateAgentChat: (

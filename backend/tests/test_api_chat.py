@@ -990,12 +990,10 @@ def test_an_anchored_session_pins_its_step_and_the_problem_into_the_turn(
     # The step without its question is ambiguous, and the student is looking at both.
     assert "Find the Laplace transform of a unit ramp." in system
     assert "Problem 4" in system
-    # Asking about a step is a question, not an invitation to teach the problem. Guide is
-    # built to work through one end to end, and left alone it answers the question, then
-    # asks how to do the next step, and keeps going.
-    assert "about that step and nothing else" in system
+    # A question about one step must stay there unless the student broadens the request.
+    assert "conversation starts from one step" in system
     assert "Do not move on" in system
-    assert "never offer to work through the" in system
+    assert "offer to work through the rest of the problem" in system
 
 
 def test_an_ordinary_session_pins_nothing(

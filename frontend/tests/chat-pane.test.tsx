@@ -1116,6 +1116,10 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     const user = userEvent.setup()
     renderAgentPane()
 
+    expect(screen.queryByRole('group', { name: 'Answer style' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Guide me' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show solution' })).not.toBeInTheDocument()
+
     await user.type(
       await screen.findByLabelText('Message Lyra'),
       'Read my starter code and explain how it works',
@@ -1125,16 +1129,49 @@ describe('ChatPane contextual agent (PLA-401)', () => {
 
     // One ordinary conversation surface: the turn goes to the agent endpoint, carries the
     // scoped source, and names no profile (the agent plans its own work).
-    const [classId, sessionId, content, profile, documentId] = vi.mocked(api.sendAgentChat).mock
-      .calls[0]
+    const [classId, sessionId, content, profile, documentId, mode] = vi.mocked(api.sendAgentChat)
+      .mock.calls[0]
     expect(classId).toBe(1)
     expect(sessionId).toBe(7)
     expect(content).toBe('Read my starter code and explain how it works')
     expect(profile).toBeUndefined()
     expect(documentId).toBe(5)
+    expect(mode).toBeUndefined()
 
     // The full reply lands in the conversation, in place.
     expect(await screen.findByText('Here is how the starter works.')).toBeInTheDocument()
+  })
+
+  it('continues a legacy Show session without a style selector or mode on new sends', async () => {
+    vi.mocked(api.listSessions).mockResolvedValue([
+      {
+        id: 7,
+        class_id: 1,
+        title: 'Old conversation',
+        mode: 'show',
+        artifact_part_id: null,
+        created_at: '2026-08-04T12:00:00Z',
+      },
+    ])
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    vi.mocked(api.sendAgentChat).mockResolvedValue({
+      message_id: 8,
+      content: 'A vector space is...',
+      stopped: 'complete',
+      detail: 'Complete.',
+      activity: [],
+      source_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+      profile_fact_ids: [],
+    })
+
+    renderAgentPane()
+    expect(screen.queryByRole('group', { name: 'Answer style' })).not.toBeInTheDocument()
+    await userEvent.type(await screen.findByLabelText('Message Lyra'), 'Define vector space')
+    await userEvent.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.sendAgentChat).mock.calls[0][5]).toBeUndefined()
   })
 
   it('keeps an explicit document ID when the document list has not loaded', async () => {

@@ -86,6 +86,25 @@ def test_the_corpus_covers_every_required_request_shape() -> None:
         assert case.notes, f"{case_id} needs ground truth for the grader"
 
 
+def test_adaptive_corpus_covers_concision_depth_and_followup_scope() -> None:
+    _, cases = _header_cases()
+    by_id = {case.id: case for case in cases}
+    for case_id in (
+        "vector-space-definition",
+        "vector-space-formal",
+        "vector-space-scalar-followup",
+        "vector-space-start-heldout",
+        "heldout-simple-concept",
+        "heldout-attempt-diagnosis",
+        "request-more-depth-heldout",
+        "vector-space-multiturn-narrow",
+    ):
+        assert case_id in by_id
+        assert by_id[case_id].must and by_id[case_id].must_not
+    assert len(by_id["vector-space-multiturn-narrow"].history) >= 6
+    assert by_id["vector-space-formal"].mode == "show"  # legacy compatibility fixture
+
+
 def test_explain_convolution_keeps_its_regression_contract() -> None:
     """The PLA-401 motivating failure: the case that must stay pointed at the old bug.
 
@@ -293,7 +312,7 @@ def test_grading_messages_number_the_items_and_carry_the_ground_truth() -> None:
     messages = grading_messages(case, reply)
 
     user_content = messages[1]["content"]
-    assert "The mode: guide" in user_content
+    assert "The mode:" not in user_content
     assert "The tutor's reply:\n" + reply in user_content
     assert case.notes in user_content
     # Every item appears, numbered from one.
@@ -564,10 +583,10 @@ def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
 
     system = str(assembly.messages[0]["content"])
     # The mode contract the turn runs under (the full tutor prompt, not a stub).
-    assert "Mode: Guide." in system
-    assert "omit closing questions and follow-up offers" in system
+    assert "Teach the student according to their latest request" in system
+    assert "No automatic recap" in system
     assert "one concrete first move" in system
-    assert "less abstraction, not a second full lecture" in system
+    assert "reduce abstraction" in system
     # The agent capability layer, appended on top of it.
     assert "You are Lyra's class agent" in system
     assert "The latest user request sets the answer's scope" in system
@@ -616,7 +635,7 @@ def test_the_class_chat_surface_is_tool_less_on_a_known_incompatible_endpoint(
     assert "is not available in this conversation" in system
     # The full tutor contract is still there: tool-less is a smaller surface, not a
     # different conversation.
-    assert "Mode: Guide." in system
+    assert "Teach the student according to their latest request" in system
     # The question still went out, tool-less: the basic tutoring turn is never refused
     # over the cost of optional capability.
     assert assembly.messages[-1] == {"role": "user", "content": case.user}

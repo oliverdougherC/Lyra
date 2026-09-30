@@ -51,15 +51,15 @@ from backend.rag.chunk import (
 
 ChatMode = Literal["guide", "show"]
 
-# The version of the tutor's model-facing contract: the base rules, the Guide and Show
-# semantics, and the anchored-scope rule, together. The semantic eval corpus
+# The version of the tutor's model-facing contract: base rules, adaptive teaching,
+# and anchored scope together. The semantic eval corpus
 # (`scripts/eval_corpora/tutor_semantic.json`) pins the version it was written against,
 # so a prompt change that moves the behavior a case grades shows up as a mismatch the
 # harness reports rather than as a silent drift. Version 1 encoded Guide as mandatory
 # Socratic questioning with the answer withheld until the student earned it; version 2
 # (PLA-401) encodes Guide as a teaching contract - see docs/tutor-prompt-contract.md.
 # Bump it when a mode's semantics change, not when wording is polished.
-TUTOR_PROMPT_CONTRACT_VERSION = "2"
+TUTOR_PROMPT_CONTRACT_VERSION = "3"
 
 # Said once, in one wording, in every prompt that parses its reply. It used to be written
 # out four times in four places, so a fix to one was a fix to one.
@@ -105,71 +105,43 @@ about.
    is from, where a theorem is stated, which document gives a deadline. "This is problem 4
    in section 8.2" is useful; "according to your course materials, the derivative of x
    squared is 2x" is not.
-3. When the context does not cover the question, say so plainly. Never invent course
-   material, a deadline, or a problem statement. You may then answer from general
-   knowledge as long as you say that is what you are doing.
+3. Never invent course material, a deadline, or a problem statement. If asked about
+   this class or an uploaded source and the context does not cover it, say so plainly.
+   For a general concept or self-contained exercise, answer from general knowledge
+   without an unrelated disclaimer about uploaded material.
 4. """
     + _LATEX_RULES
 )
-# Guide is a teaching contract, not a response format. Version 1 of this prompt made
-# questioning mandatory and the answer a reward: the reply that followed "Explain
-# convolution" was a Socratic setup about which values of a variable make two functions
-# nonzero, and a student who asked for the answer was told to take a hint first. That is
-# the failure PLA-401 exists to remove.
-#
-# So this block states the contract - what the mode optimizes for, and the handful of
-# request shapes a small model will not infer on its own - and stops there. It does not
-# enumerate every possible request into a rulebook: a small model given the principle and
-# a few patterns generalizes to the rest, and a longer list would recreate the same
-# failure as a different one (a tutor that follows the letter of a rule it was handed).
-_GUIDE_PROMPT = """\
-Mode: Guide.
+_EDUCATION_PROMPT = """\
+Teach the student according to their latest request and the conversation, in the shortest
+useful accurate reply. Answer immediately. For a conversational definition or simple
+concept, explain the core idea and its essential qualification in a few sentences.
+Do not list all axioms, related concepts, multiple examples, or follow-on applications
+unless asked. A request for a formal definition needs the field, operations, axioms,
+and qualifications it actually requires. Do not turn a quick question into a lecture.
 
-Guide means the student understands more after this reply than before it. Honor the latest
-request's scope.
+- "How do I start?": give one concrete first move and why; stop at a useful setup.
+  Do not perform the remaining checks or state the final verdict unless requested.
+- An attempted method or answer: check what each transformation actually does. Recognize
+  valid work, identify the first genuine error if any, explain it within the student's
+  method, and give the corrected next step. Never invent a stricter rule or claim a tool
+  checked more than it did.
+- "Explain that more simply": reduce abstraction and use a small concrete example if it
+  helps, while keeping necessary conditions true.
+- An explicit request for the answer, full solution, proof, derivation, or depth: provide
+  it completely with the reasoning needed to trust it. Do not withhold it or impose a
+  universal length limit.
 
-- "Explain X" or "What is X?": explain it; mental model first, then formalism or an
-  example. Do not ask the student to derive framing you can explain.
-- Getting started: give one concrete first move and why; stop at a useful setup, before
-  the rest of the solution or final result unless currently requested.
-- Simpler: use less abstraction, not a second full lecture. Explain the same concrete
-  mechanism in plain words, not a new analogy, and show it in one small concrete example.
-  Omit the formal definition or notation that caused difficulty. Keep necessary
-  conditions true in plain language; a simpler explanation must not turn a conditional
-  tendency into an unconditional guarantee.
-- Read and diagnose an attempt: acknowledge the valid setup or steps, then identify
-  the first invalid transition and explain exactly what changed or was lost. Before
-  naming a step wrong, check what that step actually does to the expression: name the
-  part of the student's move that is valid and the part that changes the value, and never
-  explain an error by inventing a stricter rule than the operation allows. Show the
-  corrected step in the student's method, then stop when the requested diagnosis is
-  explained; finish the remaining solution when requested.
-- "Just give me the answer": give it with a short reason.
-- If asked not to ask questions, teach directly; omit closing questions and follow-up offers.
-
-A question is a tool, not a format: never ask one merely because this is Guide, and never
-withhold an explanation or answer the student asked for outright. A quick question gets
-a quick, complete answer; before an exam, give the essentials."""
-
-_SHOW_PROMPT = """\
-Mode: Show.
-
-Give a direct, complete, worked explanation. State the result, then show every step that
-leads to it in order, naming the rule or definition each step relies on. Close with a short
-summary of the idea worth carrying forward. Do not withhold the answer and do not turn the
-reply into a quiz."""
+Follow the latest request's scope even when earlier turns asked for more or less detail.
+Ask a question only when it helps determine what to teach next. No automatic recap,
+closing question, follow-up offer, greeting, generic encouragement, or narration of
+routine tool use in the final answer. If asked not to ask questions, teach directly
+without a closing question or follow-up offer."""
 
 
 def mode_contract(mode: ChatMode) -> str:
-    """The shared Guide/Show teaching contract for every surface that rides the
-    conversation's mode.
-
-    The tutoring prompt owns this text (Workstream A, PLA-401). Surfaces such as the
-    contextual agent's system prompt call this instead of restating the mode semantics,
-    so the contract cannot drift between surfaces: when the contract changes here, every
-    surface that inherits the mode changes with it.
-    """
-    return _GUIDE_PROMPT if mode == "guide" else _SHOW_PROMPT
+    """Return the single teaching contract for either persisted legacy mode value."""
+    return _EDUCATION_PROMPT
 
 
 # --------------------------------------------------------------------------------------
@@ -814,12 +786,10 @@ _STEP_CONTEXT_HEADING = "The student is asking about one step of a solution Lyra
 # about a step, and the conversation is over when that step makes sense. Offering the
 # walkthrough unprompted takes a thirty-second question and turns it into an assignment.
 _ANCHORED_SCOPE = """\
-Scope. This overrides the mode instructions above wherever the two disagree.
-
-This conversation is about that step and nothing else. Answer what the student actually
-asked, then stop. Do not move on to the next step, do not recap the steps before it, and
-never offer to work through the rest of the problem. If the student wants that, they will
-ask, and then it is theirs to ask for rather than yours to start."""
+Scope. This conversation starts from one step of a solution. For a question about that
+step, answer exactly what the student asked and stop. Do not move on to the next step
+or recap earlier steps unless the student explicitly asks to broaden the task. Never
+offer to work through the rest of the problem; if they want it, they will ask."""
 
 
 def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
@@ -1051,14 +1021,13 @@ def build_system_prompt(
     """Build the chat system prompt for one turn.
 
     The system message carries the whole model-facing contract for the turn: the base
-    rules, the mode's semantics (contract `TUTOR_PROMPT_CONTRACT_VERSION`, documented in
+    rules, adaptive teaching (contract `TUTOR_PROMPT_CONTRACT_VERSION`, documented in
     `docs/tutor-prompt-contract.md`), and the class profile facts. The pinned step and
     the retrieved context are joined on by the caller.
 
     Args:
-        mode: `guide` for teaching toward understanding - direct explanation, worked
-            examples, scaffolding, and questions only when they help - or `show` for a
-            direct worked result.
+        mode: Persisted legacy value, accepted for API compatibility. It does not change
+            the teaching contract; the student's current request sets the answer scope.
         user_facts: Active facts about the student, already filtered by the caller.
         class_facts: Active facts about this class, already filtered by the caller.
 
@@ -1066,7 +1035,7 @@ def build_system_prompt(
         The system prompt. Fact sections are omitted entirely when their list is empty, so
         the model never sees a bare heading with nothing under it.
     """
-    parts = [_BASE_PROMPT, _GUIDE_PROMPT if mode == "guide" else _SHOW_PROMPT]
+    parts = [_BASE_PROMPT, _EDUCATION_PROMPT]
     user_block = _render_facts(user_facts, "What you know about the student:")
     if user_block:
         parts.append(user_block)
@@ -1166,7 +1135,9 @@ def format_context_block(chunks: list[dict[str, object]]) -> str:
         return ""
     entries: list[str] = []
     for index, chunk in enumerate(chunks, start=1):
-        label = [str(chunk.get("filename") or "Unknown document")]
+        # Student-controlled nicknames and uploaded filenames are citation data. JSON
+        # quoting keeps embedded newlines/quotes from masquerading as prompt structure.
+        label = [json.dumps(str(chunk.get("filename") or "Unknown document"), ensure_ascii=False)]
         page = chunk.get("page_number")
         if page is not None:
             label.append(f"page {page}")

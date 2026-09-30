@@ -2193,13 +2193,11 @@ def test_legacy_profiles_do_not_gain_the_access_request_tool(
     assert "request_workspace_access" not in captured["registry"]
 
 
-def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
+def test_legacy_sessions_share_the_adaptive_education_contract(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The agent turn rides the conversation's Guide/Show contract inherited from the
-    # shared tutoring prompt (llm_prompts.mode_contract) - not a restatement of it - so
-    # the mode toggle keeps its meaning in agent work too and the two surfaces cannot
-    # drift: the agent prompt must contain the shared contract for the session's mode.
+    # A saved Show value remains readable but cannot select a different prompt.
+    # The agent shares the tutor contract and adds only capability instructions.
     session_id = int(sessions.create_session(db, class_id)["id"])  # guide by default
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
 
@@ -2211,6 +2209,7 @@ def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("guide") in prompt
+    assert "answer general concepts and self-contained questions directly" in prompt
 
     sessions.set_session_mode(db, session_id, "show")
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
@@ -2222,8 +2221,8 @@ def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("show") in prompt
-    # Only one contract rides the turn: the guide contract does not linger in show work.
-    assert llm_prompts.mode_contract("guide") not in prompt
+    # Persisted legacy styles no longer select a different teaching policy.
+    assert llm_prompts.mode_contract("guide") in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -2279,7 +2278,7 @@ def test_the_agent_turn_builds_on_the_full_tutor_system_prompt(
 def test_the_guide_show_contract_appears_exactly_once_in_the_agent_prompt(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Guide/Show is owned by the shared tutoring prompt. The agent layer adds capability
+    # The education contract is owned by the shared tutoring prompt. The agent layer adds capability
     # wording, never a second restatement of the contract: it appears exactly once.
     session_id = int(sessions.create_session(db, class_id)["id"])
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
@@ -2292,7 +2291,7 @@ def test_the_guide_show_contract_appears_exactly_once_in_the_agent_prompt(
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
     assert prompt.count(llm_prompts.mode_contract("guide")) == 1
-    assert llm_prompts.mode_contract("show") not in prompt
+    assert llm_prompts.mode_contract("show") in prompt
 
 
 def test_a_retrieved_chunk_seeds_the_web_query_guard_before_the_network(
@@ -2511,7 +2510,7 @@ def test_a_retry_reuses_the_scope_the_turn_was_asked_under(
     assert seen_documents == [7, 7]
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("show") in prompt
-    assert llm_prompts.mode_contract("guide") not in prompt
+    assert llm_prompts.mode_contract("guide") in prompt
 
 
 def test_a_regeneration_uses_the_current_selection(
@@ -2554,7 +2553,7 @@ def test_a_regeneration_uses_the_current_selection(
     assert seen_documents == [None, 7]
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("show") in prompt
-    assert llm_prompts.mode_contract("guide") not in prompt
+    assert llm_prompts.mode_contract("guide") in prompt
     # One reply: the superseded one is removed the moment the new one commits.
     messages = sessions.list_messages(db, session_id)
     assert [message["role"] for message in messages] == ["user", "assistant"]
@@ -2792,7 +2791,7 @@ def test_a_known_tool_incompatible_endpoint_answers_basic_chat_tool_less(
     # The full tutor contract rides the plain completion: the mode contract is present,
     # and the one sentence that says the agent work is unavailable replaces the agent
     # capability layer (which describes tools this turn never sends).
-    assert "Mode: Guide." in system
+    assert "Teach the student according to their latest request" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
     assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
     # One durable attempt, completed with the reply; no tool activity of any kind.
@@ -2866,7 +2865,7 @@ def test_an_unknown_endpoints_first_tools_refusal_falls_back_and_remembers_the_v
     assert attempts[1]["assistant_message_id"] is not None
     # The tool-less continuation carried the full tutor contract, not the agent layer.
     system = str(completions[0][0]["content"])
-    assert "Mode: Guide." in system
+    assert "Teach the student according to their latest request" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
     assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
     # The verdict is remembered for the next turn and the settings screen.
@@ -3053,7 +3052,7 @@ def test_a_toolless_turn_carries_retrieval_and_facts_like_the_tool_turn(
     assert "Convolution combines two signals." in system
     assert "signals.pdf" in system
     assert "prefers visual proofs" in system
-    assert "Mode: Guide." in system
+    assert "Teach the student according to their latest request" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
 
 

@@ -395,7 +395,7 @@
       "history": [],
       "context": [],
       "must": [
-        "Explains that a nonzero vector remains on the same line under a linear transformation, scaled by a factor; negative or zero factors are allowed",
+        "Explains that a nonzero vector keeps its direction under a linear transformation, changing only by a scalar factor, with zero factor allowed",
         "Uses plain, compact language"
       ],
       "must_not": [
