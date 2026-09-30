@@ -1024,6 +1024,8 @@ def build_system_prompt(
     mode: ChatMode,
     user_facts: list[sqlite3.Row],
     class_facts: list[sqlite3.Row],
+    *,
+    include_examples: bool = True,
 ) -> str:
     """Build the chat system prompt for one turn.
 
@@ -1037,12 +1039,17 @@ def build_system_prompt(
             the teaching contract; the student's current request sets the answer scope.
         user_facts: Active facts about the student, already filtered by the caller.
         class_facts: Active facts about this class, already filtered by the caller.
+        include_examples: Keep optional response-shape examples. A selected page image
+            may omit these examples to make room for the page's text and tool replies;
+            the teaching and source-safety contract remains the same.
 
     Returns:
         The system prompt. Fact sections are omitted entirely when their list is empty, so
         the model never sees a bare heading with nothing under it.
     """
-    parts = [_BASE_PROMPT, _EDUCATION_PROMPT, _EDUCATION_SHAPES]
+    parts = [_BASE_PROMPT, _EDUCATION_PROMPT]
+    if include_examples:
+        parts.append(_EDUCATION_SHAPES)
     user_block = _render_facts(user_facts, "What you know about the student:")
     if user_block:
         parts.append(user_block)

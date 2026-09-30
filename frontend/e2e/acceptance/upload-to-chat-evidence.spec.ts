@@ -88,7 +88,7 @@ c=sqlite3.connect(sys.argv[1]); c.execute('update settings set vision_supported=
       document_id: document.id,
       mode: 'show',
     })
-    expect(answer.ok).toBe(true)
+    expect(answer.ok, await answer.text()).toBe(true)
     const requests = await getTutorRequests()
     const chat = requests.find((request) => {
       const body = request.body as { messages?: unknown[] }
@@ -183,7 +183,7 @@ pdf.save(sys.argv[1])`,
       document_id: document.id,
       mode: 'show',
     })
-    expect(answer.ok).toBe(true)
+    expect(answer.ok, await answer.text()).toBe(true)
     const calls = (await getTutorRequests()).filter(
       (request) => request.url === '/v1/chat/completions',
     )
