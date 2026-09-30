@@ -4,8 +4,8 @@
     "Legacy mode values remain in fixtures only to exercise persisted-session compatibility; the student's request and conversation set the scope.",
     "Must/must_not are semantic criteria. Independent review of retained terminal answers is required; self-grading alone does not establish acceptance."
   ],
-  "corpus_version": "2.1.0",
-  "prompt_contract_version": "4",
+  "corpus_version": "2.2.0",
+  "prompt_contract_version": "5",
   "dimensions": [
     "directness",
     "proportionality",

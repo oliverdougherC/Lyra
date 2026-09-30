@@ -1,10 +1,10 @@
 # Adaptive education chat: bounded production-path evaluation
 
-**Status: quality gate failed.** This is exploratory evidence for PLA-574/PLA-461,
-not acceptance of the candidate. The original v3 failures and the correction-pass
-outputs below are retained separately. The correction makes some conversational answers
-compact and preserves full solution branches, but final-source quality still varies
-and several answers make false or unsupported auxiliary claims. The owner has not reviewed these
+**Status: quality gate open.** This is exploratory evidence for PLA-574/PLA-461,
+not acceptance of the candidate. The original v3 failures, R5 outputs and R3 prompt
+probes below remain separate. R3's final-source repeated evaluation follows its source
+commit. Some conversational answers are compact and full-solution cores are sound, but
+auxiliary claims and scope still need direct reading. The owner has not reviewed these
 outputs. Historical Guide/Show evidence remains in its original files.
 
 ## Setup and retained outputs
@@ -40,7 +40,7 @@ PR #104 was reconciled with main `299d0da7debb22244c484cd7fd779c423866f9c3`
 after #100 merged. The first clean prompt revision was
 `2a64ab22fbb6acb3d0c990e20230025a0179038e`; its repeated first-pass matrix
 exposed a false optional numerical check in a full convolution solution and an invalid
-equality in a multi-turn polynomial proof. The final application source is
+equality in a multi-turn polynomial proof. The R5 application source was
 `d5c2b6a4e3420815e26766b205d33046827e4136`, which directs explicit full answers
 toward the shortest complete route while retaining source and tool rules. Contract 4
 and corpus 2.1.0 cover definition → example → exercise → full proof → narrow follow-up.
@@ -92,7 +92,7 @@ acceptance belong to the later integrated candidate review; none is claimed here
 
 ## Selected-page delivery correction
 
-The current application source is `d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d`.
+The R5 application source was `d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d`.
 It repairs two failures found on the reconciled PR #104 head at an 8,192-token window:
 an explicitly named text page spent context room on an unnecessary image and then
 could not carry a successful page-read tool reply (HTTP 503, `context_overflow`);
@@ -141,6 +141,28 @@ independent corrections to the earlier C/D findings; it is not owner or independ
 human acceptance. PLA-461 remains **In Progress**. The combined synthetic
 nicknamed-source live case and isolated signed-app acceptance remain separate gates.
 
+## R3 scope correction experiments
+
+The R5 A/B answers above are the current pre-R3 source evidence; the old v3 failures
+below are historical. The working hypothesis was that a long contract repeatedly
+enumerating unwanted answer shapes, together with the class agent's broad verification
+cue, encouraged extra axioms and checks. Four small production-route probes changed
+only the education wording and, from probe 2 onward, the class-agent's tool/verification
+scope wording. Each used the same configured endpoint and synthetic environment. The
+records include the exact prompt-source hashes and full answers; diagnostic source was
+dirty while variants were compared, so none is claimed as exact-commit acceptance.
+
+| Probe | Evidence | Direct reading and decision |
+|---|---|---|
+| 1 | [answers](r3-probe-1-runs.json), [metadata](r3-probe-1-meta.json) | Shorter positive contract alone: the concept became 327 words, first-step help 229, and the attempt became a full worked solution with checks. Rejected. |
+| 2 | [answers](r3-probe-2-runs.json), [metadata](r3-probe-2-meta.json) | Added pre-tool scope decision: fewer tool calls, but the concept was 311 words and the narrow scalar reply re-listed axioms. Rejected. |
+| 3 | [answers](r3-probe-3-runs.json), [metadata](r3-probe-3-meta.json) | Stronger stopping points: concept 70 words, correct scalar codomain, and a sound core convolution derivation. The concept still compresses an axiom inventory into a paragraph; attempt and full answer still add unrequested material. Retained for final-source repeats as the least bad variant, not semantic acceptance. |
+| 4 | [answers](r3-probe-4-runs.json), [metadata](r3-probe-4-meta.json) | Tighter wording shortened the attempt but the full solution printed an unusable $\max(0,\cdot)$ lower bound and optional checks. Rejected. |
+
+No word count is an acceptance rule. The problem in probe 4 is a contradictory
+displayed step despite a correct final piecewise result. Probe 3 remains a candidate
+with known scope misses pending exact-source repeated reading and independent review.
+
 ## Original v3 comparison
 
 The baseline used [baseline-corpus.json](baseline-corpus.json), a copy of the
@@ -149,7 +171,8 @@ used [candidate-corpus-run.json](candidate-corpus-run.json); one rubric wording 
 corrected afterward, so that exact snapshot is retained. The v3 corpus was
 `scripts/eval_corpora/tutor_semantic.json` at version 2.0.0, contract 3. V3's
 recorded corpus, prompt, route-prompt and harness hashes identify that historical
-branch revision, not the current source. The current corpus is 2.1.0, contract 4.
+branch revision, not the current source. The R5 corpus was 2.1.0, contract 4;
+the R3 candidate corpus is 2.2.0, contract 5.
 
 ## Direct reading against the rubric
 
