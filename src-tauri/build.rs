@@ -1,5 +1,15 @@
 const COMMANDS: &[&str] = &[
     "desktop_bootstrap",
+    "native_chat_mount",
+    "native_chat_set_frame",
+    "native_chat_set_content_height",
+    "native_chat_render",
+    "native_chat_action",
+    "native_chat_scroll_to_bottom",
+    "native_chat_set_scroll_ratio",
+    "native_chat_show",
+    "native_chat_hide",
+    "native_chat_unmount",
     "desktop_print",
     "desktop_backup_create",
     "desktop_backup_restore",
@@ -19,6 +29,28 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let out = std::env::var("OUT_DIR").expect("OUT_DIR");
+        let object = format!("{out}/native_chat.o");
+        let archive = format!("{out}/liblyra_native_chat.a");
+        assert!(Command::new("clang")
+            .args(["-fobjc-arc", "-c", "src/native_chat.m", "-o", &object])
+            .status()
+            .expect("clang")
+            .success());
+        assert!(Command::new("ar")
+            .args(["crs", &archive, &object])
+            .status()
+            .expect("ar")
+            .success());
+        println!("cargo:rustc-link-search=native={out}");
+        println!("cargo:rustc-link-lib=static=lyra_native_chat");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=WebKit");
+        println!("cargo:rerun-if-changed=src/native_chat.m");
+    }
     println!("cargo:rerun-if-changed=tauri.conf.json");
     let config: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string("tauri.conf.json").expect("Tauri config"))
