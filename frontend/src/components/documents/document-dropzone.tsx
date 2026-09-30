@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { FolderOpen, Upload } from 'lucide-react'
 
 import { Progress } from '@/components/ui/progress'
@@ -181,6 +181,7 @@ export function DocumentDropzone({
   folderInputRef,
 }: DocumentDropzoneProps) {
   const [dragOver, setDragOver] = useState(false)
+  const dragDepth = useRef(0)
 
   const uploading = Boolean(uploadingName)
   const total = uploadedCount + queueLength
@@ -195,15 +196,30 @@ export function DocumentDropzone({
       <div
         role="group"
         aria-label="Upload documents"
+        onDragEnter={(event) => {
+          event.preventDefault()
+          dragDepth.current += 1
+          setDragOver(true)
+        }}
         onDragOver={(event) => {
           event.preventDefault()
           setDragOver(true)
         }}
-        onDragLeave={() => setDragOver(false)}
+        onDragLeave={() => {
+          dragDepth.current = Math.max(0, dragDepth.current - 1)
+          if (dragDepth.current === 0) setDragOver(false)
+        }}
+        onDragEnd={() => {
+          dragDepth.current = 0
+          setDragOver(false)
+        }}
         // The drop itself is handled by the pane, which wraps this well and the list above
         // it: one drop path rather than two, so a folder dropped on the rows and a folder
         // dropped on the well are read the same way and reported the same way.
-        onDrop={() => setDragOver(false)}
+        onDrop={() => {
+          dragDepth.current = 0
+          setDragOver(false)
+        }}
         className={cn(
           'flex flex-col items-center justify-center gap-1 rounded-md border border-dashed px-3 py-3 text-center text-sm transition-colors duration-150',
           'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2',
