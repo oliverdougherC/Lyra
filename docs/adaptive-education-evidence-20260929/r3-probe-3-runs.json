@@ -1,0 +1,316 @@
+{
+  "cases": {
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right \u2014 $y(t)=\\int_{-\\infty}^{\\infty} x(\\tau)\\,h(t-\\tau)\\,d\\tau$ is the correct form, and restricting to where $x(\\tau)\\ne 0$ is the right instinct. Two things go wrong in the middle.\n\n**1. The integrand.** You wrote $h(t-\\tau)=e^{-t}$, but the decay is in the *shifted* argument:\n$$h(t-\\tau)=e^{-(t-\\tau)}u(t-\\tau)$$\nPulling $e^{-t}$ out of the $\\tau$-integral drops the $e^{\\tau}$ factor that has to be integrated. That's what turned an exponential into a $t\\,e^{-t}$.\n\n**2. The upper limit.** You used $t$, which is where $h(t-\\tau)$ starts to vanish ($\\tau>t$), but $x(\\tau)$ also vanishes for $\\tau>1$. The window is the *overlap* of $[0,1]$ (from $x$) and $[0,t]$ (from $h$), so\n$$y(t)=\\int_{0}^{\\min(t,\\,1)} e^{-(t-\\tau)}\\,d\\tau$$\nand the answer has to be written piecewise, with a break at $t=1$ \u2014 your single formula $te^{-t}$ for all $t>0$ can't be right, since $y(t)$ must decay back to $0$ after the pulse passes.\n\nFor $0<t<1$ the corrected integral gives $y(t)=1-e^{-t}$ (I checked it), which starts at $0$ with slope $1$ \u2014 much more plausible than $te^{-t}$, whose slope at $t=0^+$ is $0$.\n\nYour turn: evaluate the same integral with the upper limit $1$ for the $t>1$ branch, and check that the two pieces match at $t=1$.",
+      "generated_at": "2026-09-30T05:54:40+00:00",
+      "duration_seconds": 31.92,
+      "system_prompt_tokens": 1420,
+      "assembled_prompt_sha256": "563cf4199c9265c86e877646e2196c922f2fb03435c1bce53c8cc032d760ccd8",
+      "assembled_system_prompt_sha256": "afff82d3825df96d443895de23a7d46862bcc68389cc94d6c66161b701edd3af",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "2461df30c0c9c742727d4e4006f82d4b4c1d452a97e8e91e247a592897875fc6",
+          "agent_prompt_source": "331fcc0d7ce26f94dd6f2b8b65f3d658165dfcf4fcb196053e484d50ffb63a95",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))*1",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))*1\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(2-tau))*(u(tau)-u(tau-1)), tau, -oo, oo)",
+            "compare_to": "exp(1-2) - exp(-2)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(2-tau))*(u(tau)-u(tau-1)), tau, -oo, oo)\", \"compare_to\": \"exp(1-2) - exp(-2)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1)",
+            "compare_to": "(1 - exp(-t))*(u(t) - u(t-1)) + (exp(1-t) - exp(-t))*u(t-1)"
+          },
+          "raw_arguments": "{\"expression\": \"(1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1)\", \"compare_to\": \"(1 - exp(-t))*(u(t) - u(t-1)) + (exp(1-t) - exp(-t))*u(t-1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## Setup\n\nLet $x(t) = u(t) - u(t-1)$ (the unit pulse on $[0,1]$) and $h(t) = e^{-t}u(t)$. Then\n\n$$y(t) = (x*h)(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\,h(t-\\tau)\\,d\\tau = \\int_{0}^{1} e^{-(t-\\tau)}\\,u(t-\\tau)\\,d\\tau.$$\n\nThe pulse has already killed the $\\tau$-limits; the only thing left to watch is the step $u(t-\\tau)$, which is $1$ only when $\\tau \\le t$.\n\n## Slide the window\n\n**Case 1: $t < 0$.** Every $\\tau \\in [0,1]$ has $\\tau > t$, so $u(t-\\tau)=0$ everywhere:\n\n$$y(t) = 0.$$\n\n**Case 2: $0 \\le t < 1$.** The condition $\\tau \\le t$ chops the window down to $[0,t]$:\n\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = e^{-t}\\int_0^t e^{\\tau}\\,d\\tau = e^{-t}\\left(e^{t}-1\\right) = 1 - e^{-t}.$$\n\n**Case 3: $t \\ge 1$.** Now $t \\ge 1 \\ge \\tau$ for all $\\tau$ in the pulse, so the whole window contributes:\n\n$$y(t) = \\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{-t}\\left(e^{1}-1\\right) = e^{1-t} - e^{-t}.$$\n\n## Result\n\n$$y(t) = \\begin{cases} 0, & t<0\\\\[4pt] 1-e^{-t}, & 0\\le t<1\\\\[4pt] e^{1-t}-e^{-t}, & t\\ge 1. \\end{cases}$$\n\n## Compact step-function form\n\nThe \"ramp-up then decay\" shape is exactly a switched-on response minus a delayed copy:\n\n$$y(t) = \\left(1-e^{-t}\\right)u(t) - \\left(1-e^{-(t-1)}\\right)u(t-1).$$\n\nI verified this is algebraically identical to the piecewise form (their difference simplifies to $0$), and that the piecewise formula matches the raw integral $\\int_{-\\infty}^{\\infty} e^{-(2-\\tau)}\\big(u(\\tau)-u(\\tau-1)\\big)d\\tau$ at $t=2$, giving $e^{-1}-e^{-2}$.\n\n**Sanity checks worth doing on an exam:** at $t=1$ both branches give $1-e^{-1}\\approx 0.632$, so $y$ is continuous (expected, since both signals are integrable). The peak is at $t=1$, and for $t>1$ the decay rate is $e^{-t}$ \u2014 inherited from $h$, since once the pulse has fully entered the window the system just rings down.",
+      "generated_at": "2026-09-30T05:55:14+00:00",
+      "duration_seconds": 33.08,
+      "system_prompt_tokens": 1420,
+      "assembled_prompt_sha256": "2aa45a83606cb7ae80dd45398d4f441d0cba63e0d9e83b3ae4659e8402908868",
+      "assembled_system_prompt_sha256": "afff82d3825df96d443895de23a7d46862bcc68389cc94d6c66161b701edd3af",
+      "tool_schema_tokens": 1823,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "2461df30c0c9c742727d4e4006f82d4b4c1d452a97e8e91e247a592897875fc6",
+          "agent_prompt_source": "331fcc0d7ce26f94dd6f2b8b65f3d658165dfcf4fcb196053e484d50ffb63a95",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A vector space is a set \\(V\\) whose elements, called vectors, can be added together and multiplied by scalars from a field such as \\(\\mathbb{R}\\) or \\(\\mathbb{C}\\), in a way that behaves like ordinary vectors. The key requirements are that addition stays inside \\(V\\), has a zero vector and additive inverses, and is associative and commutative; scalar multiplication also stays inside \\(V\\), respects vector and scalar addition, and satisfies \\(1\\mathbf{v}=\\mathbf{v}\\).",
+      "generated_at": "2026-09-30T05:55:18+00:00",
+      "duration_seconds": 4.2,
+      "system_prompt_tokens": 1420,
+      "assembled_prompt_sha256": "2d25f88f93794ea978571e241602317735f100b749a8c158666f7e9d5649e992",
+      "assembled_system_prompt_sha256": "afff82d3825df96d443895de23a7d46862bcc68389cc94d6c66161b701edd3af",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "2461df30c0c9c742727d4e4006f82d4b4c1d452a97e8e91e247a592897875fc6",
+          "agent_prompt_source": "331fcc0d7ce26f94dd6f2b8b65f3d658165dfcf4fcb196053e484d50ffb63a95",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-scalar-followup": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Scalar multiplication is the second operation in the definition: a rule that takes a *scalar* (an element of the underlying field, like a real number) together with a vector and returns a vector \u2014 formally a map $\\mathbb{F}\\times V\\to V$. It's not multiplying two vectors together; it's scaling one vector, stretching or shrinking it and possibly flipping its direction, and the closure part of the definition says the result must still lie in $V$. It's tied to vector addition by the compatibility axioms: $1\\cdot v=v$, $(ab)v=a(bv)$, $a(v+w)=av+aw$, and $(a+b)v=av+bv$, which say that scaling composes the way multiplying scalars does and distributes over both vector and scalar addition.",
+      "generated_at": "2026-09-30T05:55:23+00:00",
+      "duration_seconds": 5.58,
+      "system_prompt_tokens": 1420,
+      "assembled_prompt_sha256": "3afc81a2f3e08f352e6776ba36ad668f574487327fe156c5bfc7aae490883c83",
+      "assembled_system_prompt_sha256": "afff82d3825df96d443895de23a7d46862bcc68389cc94d6c66161b701edd3af",
+      "tool_schema_tokens": 1823,
+      "user": "What does scalar multiplication mean there?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "2461df30c0c9c742727d4e4006f82d4b4c1d452a97e8e91e247a592897875fc6",
+          "agent_prompt_source": "331fcc0d7ce26f94dd6f2b8b65f3d658165dfcf4fcb196053e484d50ffb63a95",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

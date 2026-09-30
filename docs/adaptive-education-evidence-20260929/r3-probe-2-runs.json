@@ -1,0 +1,316 @@
+{
+  "cases": {
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your algebra was fine \u2014 the setup had two slips.\n\n**1. The exponent.** $h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$, not $e^{-t}$. The shift acts on the whole argument, so $e^{-t}$ can't come out of the $d\\tau$ integral; only $e^{-t}$ factors of a *constant* integrand may leave, and here $\\tau$ is in the exponent.\n\n**2. The upper limit.** $x(\\tau)=u(\\tau)-u(\\tau-1)$ is nonzero only on $0\\le\\tau\\le1$, so the overlap runs from $0$ to $\\min(t,1)$ \u2014 the pulse caps it at $1$, not at $t$. Using $t$ as the upper limit silently assumes the pulse is infinitely long, which is why you got a ramp-like $te^{-t}$.\n\nCorrected integral:\n\n$$y(t) = \\int_{0}^{\\min(t,1)} e^{-(t-\\tau)}\\,d\\tau, \\qquad t>0$$\n\nFor the first window $0<t<1$ this gives\n\n$$y(t) = e^{-t}\\int_0^t e^{\\tau}d\\tau = 1 - e^{-t}$$\n\nwhich rises toward $1$ instead of peaking and decaying like $te^{-t}$ does. For $t>1$ the limits become $0$ to $1$ (the pulse is fully overlapped), and for $t<0$ there's no overlap so $y(t)=0$. Work out the middle-to-late transition and you'll have the piecewise answer.",
+      "generated_at": "2026-09-30T05:50:51+00:00",
+      "duration_seconds": 25.99,
+      "system_prompt_tokens": 1401,
+      "assembled_prompt_sha256": "4e42f3b97997b9fb129828422a0a1cad8c2d2a052ddb4b375202fb922f9f7532",
+      "assembled_system_prompt_sha256": "e800b51fe86cf6db24a84ad0bf4f0b0b4651cabbba4207c35fb1ddd15e6c8bd3",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "ecde65223e281957a1fddb909c867e2f6ea0907915e9639e2d9daa5803d2f291",
+          "agent_prompt_source": "697d43de1aa46af5fee6384a3dbada2ef2f87344e47749b652aa2957ace9b504",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1 - exp(-t)) - (1 - exp(-(t-1)))",
+            "compare_to": "exp(-(t-1)) - exp(-t)"
+          },
+          "raw_arguments": "{\"expression\": \"(1 - exp(-t)) - (1 - exp(-(t-1)))\", \"compare_to\": \"exp(-(t-1)) - exp(-t)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "limit(1 - exp(-t), t, 1)",
+            "compare_to": "limit(exp(-(t-1)) - exp(-t), t, 1)"
+          },
+          "raw_arguments": "{\"expression\": \"limit(1 - exp(-t), t, 1)\", \"compare_to\": \"limit(exp(-(t-1)) - exp(-t), t, 1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## Setup\n\nLet the unit pulse be $x(t)=u(t)-u(t-1)$ (height 1 on $[0,1]$, zero elsewhere) and $h(t)=e^{-t}u(t)$. By definition\n\n$$y(t)=(x*h)(t)=\\int_{-\\infty}^{\\infty}x(\\tau)\\,h(t-\\tau)\\,d\\tau .$$\n\nBecause $x(\\tau)$ is nonzero only for $0\\le\\tau\\le1$, and $h(t-\\tau)=e^{-(t-\\tau)}u(t-\\tau)$ is nonzero only for $\\tau\\le t$, the integrand survives on the overlap\n\n$$0\\le\\tau\\le1\\quad\\text{and}\\quad \\tau\\le t .$$\n\nThat overlap is what you track as $t$ slides.\n\n## Step 1: $t<0$ \u2014 no overlap\n\nThe window $[0,1]$ lies entirely to the right of $t$, so\n\n$$y(t)=0,\\qquad t<0.$$\n\n## Step 2: $0\\le t<1$ \u2014 partial overlap (window enters)\n\nNow $\\tau$ runs from $0$ up to $t$:\n\n$$y(t)=\\int_0^t e^{-(t-\\tau)}\\,d\\tau .$$\n\nPull out the $t$-dependent factor that is constant in $\\tau$:\n\n$$y(t)=e^{-t}\\int_0^t e^{\\tau}\\,d\\tau=e^{-t}\\left(e^{t}-1\\right)=1-e^{-t}.$$\n\n(Check the start: $y(0)=0$, as it must, since the overlap has zero width there.)\n\n## Step 3: $t\\ge1$ \u2014 full overlap (window leaves)\n\nNow $t\\ge1$, so the constraint $\\tau\\le t$ no longer bites: the whole pulse is inside the kernel's support, and $\\tau$ runs $0$ to $1$:\n\n$$y(t)=\\int_0^1 e^{-(t-\\tau)}\\,d\\tau=e^{-t}\\int_0^1 e^{\\tau}\\,d\\tau=e^{-t}(e-1)=e^{-(t-1)}-e^{-t}.$$\n\nNote the shape: this is a difference of two decaying exponentials, so it decays as $t\\to\\infty$ \u2014 expected, since $x$ has finite area and $h$ is stable.\n\n## Result\n\n$$\ny(t)=\n\\begin{cases}\n0, & t<0\\\\[4pt]\n1-e^{-t}, & 0\\le t<1\\\\[4pt]\ne^{-(t-1)}-e^{-t}=\\left(1-e^{-1}\\right)e^{-(t-1)}, & t\\ge1\n\\end{cases}\n$$\n\nEquivalently, in one line using steps:\n\n$$y(t)=\\left(1-e^{-t}\\right)u(t)-\\left(1-e^{-(t-1)}\\right)u(t-1).$$\n\n## Two checks worth doing\n\n**Continuity at $t=1$.** Both branches give $1-e^{-1}$ there (I verified the two limits agree exactly), so no jump \u2014 right, since both $x$ and $h$ are ordinary functions.\n\n**The ODE.** $h$ is the impulse response of $y'+y=x$, so the convolution output must satisfy $y'+y=x(t)-x(t-1)$. On $0<t<1$: $y'=e^{-t}$, so $y'+y=e^{-t}+1-e^{-t}=1$ \u2713. On $t>1$: $y'=-e^{-(t-1)}+e^{-t}$, so $y'+y=0$ \u2713. Both match the pulse train on those intervals.\n\nThe peak is at $t=1$, where the pulse has just fully entered: $y_{\\max}=1-e^{-1}\\approx0.632$.",
+      "generated_at": "2026-09-30T05:51:23+00:00",
+      "duration_seconds": 31.81,
+      "system_prompt_tokens": 1401,
+      "assembled_prompt_sha256": "afe627cb7b585d9aea8a75a50a9fa96b1acfc3899c4fe2bc0971fd319ab41df1",
+      "assembled_system_prompt_sha256": "e800b51fe86cf6db24a84ad0bf4f0b0b4651cabbba4207c35fb1ddd15e6c8bd3",
+      "tool_schema_tokens": 1823,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "ecde65223e281957a1fddb909c867e2f6ea0907915e9639e2d9daa5803d2f291",
+          "agent_prompt_source": "697d43de1aa46af5fee6384a3dbada2ef2f87344e47749b652aa2957ace9b504",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A vector space is a set of objects you can add together and stretch by scalars, in a way that behaves like arrows in the plane. Concretely, you need three ingredients:\n\n- a set $V$ whose elements are called **vectors**,\n- a field of **scalars** (in this course almost always $\\mathbb{R}$),\n- two operations, vector addition $+$ and scalar multiplication $\\cdot$, that obey the usual vector-space laws.\n\nThe laws come in four families, and that grouping is the easiest way to remember them:\n\n1. **Closure** \u2014 $\\mathbf{u}+\\mathbf{v}$ and $c\\mathbf{v}$ stay inside $V$. This is the one people forget, and it's the first thing to check when someone claims a subset is a subspace.\n2. **How addition behaves** \u2014 addition is commutative and associative, there is a zero vector $\\mathbf{0}$ with $\\mathbf{v}+\\mathbf{0}=\\mathbf{v}$, and every $\\mathbf{v}$ has an additive inverse $-\\mathbf{v}$. (Equivalently: $(V,+)$ is an abelian group.)\n3. **How scalar multiplication behaves** \u2014 stretching adds up the way you'd expect: $(c+d)\\mathbf{v}=c\\mathbf{v}+d\\mathbf{v}$ and $c(\\mathbf{u}+\\mathbf{v})=c\\mathbf{u}+c\\mathbf{v}$, and scaling is associative, $c(d\\mathbf{v})=(cd)\\mathbf{v}$.\n4. **The identity scalar** \u2014 $1\\mathbf{v}=\\mathbf{v}$.\n\nThe key point is that \"vector\" doesn't mean \"arrow.\" Anything is a vector as long as the two operations on it satisfy those laws, which is why $\\mathbb{R}^n$, the polynomials of degree $\\le 2$, the $2\\times 2$ matrices, and even the set of solutions to a homogeneous linear system $A\\mathbf{x}=\\mathbf{0}$ are all vector spaces. What makes a set *fail* to be one is almost always closure or the zero vector: e.g. the vectors with exactly one nonzero entry aren't closed under addition, and the set with $\\mathbf{0}$ removed has no additive identity.\n\nA **subspace** is then just a nonempty subset $W \\subseteq V$ that is itself a vector space under the same operations \u2014 and because most of the laws are inherited from $V$, you only have to check that $\\mathbf{0}\\in W$ and that $W$ is closed under $c\\mathbf{u}+d\\mathbf{v}$.",
+      "generated_at": "2026-09-30T05:51:34+00:00",
+      "duration_seconds": 11.4,
+      "system_prompt_tokens": 1401,
+      "assembled_prompt_sha256": "5460d63907874acb02e2e1c601201575f9269e95b70ceb48a6118ec44f69762d",
+      "assembled_system_prompt_sha256": "e800b51fe86cf6db24a84ad0bf4f0b0b4651cabbba4207c35fb1ddd15e6c8bd3",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "ecde65223e281957a1fddb909c867e2f6ea0907915e9639e2d9daa5803d2f291",
+          "agent_prompt_source": "697d43de1aa46af5fee6384a3dbada2ef2f87344e47749b652aa2957ace9b504",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-scalar-followup": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Scalar multiplication is the second operation in the pair that makes up a vector space. It takes one scalar (an element of the field, like a real number) and one vector, and returns a vector:\n\n$$F \\times V \\to V, \\qquad (\\alpha, v) \\mapsto \\alpha v$$\n\nSo it's scaling a vector, not multiplying two vectors together \u2014 there's no requirement that $V$ have any way to multiply vectors at all.\n\nThe axioms it has to satisfy, for scalars $\\alpha,\\beta$ and vectors $u,v$:\n\n- $\\alpha(u+v) = \\alpha u + \\alpha v$ and $(\\alpha+\\beta)v = \\alpha v + \\beta v$ \u2014 distributes over both operations\n- $(\\alpha\\beta)v = \\alpha(\\beta v)$ \u2014 compatible with multiplication in the field\n- $1v = v$ \u2014 the field's multiplicative identity acts trivially\n\nConcretely, in $\\mathbb{R}^3$ over $\\mathbb{R}$ it's just $2(1,-1,4) = (2,-2,8)$. But the same idea covers $2\\sin t$ in a space of functions, or scaling a polynomial's coefficients \u2014 which is why the definition is stated abstractly rather than as \"stretching an arrow.\"",
+      "generated_at": "2026-09-30T05:51:41+00:00",
+      "duration_seconds": 6.67,
+      "system_prompt_tokens": 1401,
+      "assembled_prompt_sha256": "1fe6e91c0b46e463ae77dc7dd89d1eaadec7e18eda2cb2dcd77ef8d1574b5680",
+      "assembled_system_prompt_sha256": "e800b51fe86cf6db24a84ad0bf4f0b0b4651cabbba4207c35fb1ddd15e6c8bd3",
+      "tool_schema_tokens": 1823,
+      "user": "What does scalar multiplication mean there?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "1a84038a565ed05a4993cc445a40c52efcb21b31",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "efea08eaedac9cc24eb1d8e5ef164107beb9fcb0cad41cafa374c0472a9c04bc",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "ecde65223e281957a1fddb909c867e2f6ea0907915e9639e2d9daa5803d2f291",
+          "agent_prompt_source": "697d43de1aa46af5fee6384a3dbada2ef2f87344e47749b652aa2957ace9b504",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 """Semantic evaluation of tutor reply quality, against a versioned corpus.
 
-The backend test suite proves the contract the prompt asks for: the mode says explain
-directly, it says do not withhold, it says a question is a tool. Only a run against a real
+The backend test suite proves the contract the prompt asks for: answer directly,
+scope help to the request, and honor explicit depth. Only a run against a real
 model can tell you whether the model that answers with that prompt actually behaves that
 way - whether "Explain convolution" gets the mental model or an interrogation, whether a
 directly requested answer is delivered or deferred behind a hint. That gap is the whole
@@ -21,8 +21,7 @@ model-facing contract it was written against. When the contract version moves, t
 needs a re-read: a case written against the Socratic contract grades the teaching contract
 with the wrong ruler.
 
-**Run it against more than one model.** The point of the prompt work is that it holds up
-on a small local model, and a number from one model tells you nothing about that.
+One configured endpoint gives bounded evidence for that endpoint only.
 
 **Two surfaces, one ruler.** `--surface class_chat` (the default) sends each case the way
 the product's class conversation sends it: the production planner, and then the production
@@ -446,8 +445,11 @@ def _transcript(case: Case) -> str:
 
 _GRADER_PROMPT = """\
 You are grading one reply from a study tutor against the case it was written for. You are
-given the mode the reply ran in, the conversation so far, the student's request, the
+given the conversation so far, the student's request, the
 tutor's reply, and the case's ground-truth notes.
+
+Stored guide/show values are compatibility data, not response policies. Grade according
+to the student's latest request, not a stored value.
 
 Grade the reply's behavior, never its wording. Paraphrases, LaTeX where plain text was
 expected, and different valid orderings all count the same. A different valid formalism,
@@ -549,7 +551,6 @@ def grading_messages(case: Case, reply: str) -> list[dict[str, object]]:
     must_lines = "\n".join(f"{index}. {text}" for index, text in enumerate(case.must, 1))
     must_not_lines = "\n".join(f"{index}. {text}" for index, text in enumerate(case.must_not, 1))
     user_content = (
-        f"The mode: {case.mode}\n\n"
         f"The conversation so far:\n{_transcript(case)}\n\n"
         f"The tutor's reply:\n{reply}\n\n"
         f"Ground-truth notes:\n{case.notes}\n\n"

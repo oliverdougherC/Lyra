@@ -129,23 +129,119 @@ def test_native_matrix_layout_is_sent_as_page_image_when_text_is_insufficient(
     db.execute("update documents set stored_path = ?, pages_total = 1 where id = 7", (str(pdf),))
     db.execute("insert into document_pages (document_id, page_number, state) values (7, 1, 'text')")
     db.execute(
+        "insert into document_read_pages (document_id, page_number, generation, content) "
+        "values (7, 1, 'synthetic', 'Matrix A has entries 2, 7, 5, 11.')"
+    )
+    db.execute(
+        "insert into document_read_pages (document_id, page_number, generation, content) "
+        "values (3, 1, 'synthetic', 'Matrix B has unrelated entries.')"
+    )
+    db.execute(
         "insert into document_figures (document_id, page_number, figure_index, bbox) "
         "values (7, 1, 0, '[0.1, 0.1, 0.6, 0.4]')"
     )
-    db.execute("update settings set vision_supported = 1 where id = 1")
+    db.execute("update settings set vision_supported = 1, context_window = 8192 where id = 1")
     db.commit()
     session_id = int(sessions.create_session(db, class_id)["id"])
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Layout preserved."))
 
     response = client.post(
         f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
-        json={"content": "Explain this matrix", "document_id": 7},
+        json={"content": "Explain this matrix on page 1", "document_id": 7},
     )
     assert response.status_code == 200, response.text
+    system = str(captured["messages"][0]["content"])
+    assert "Matrix A has entries 2, 7, 5, 11." in system
+    assert "Matrix B" not in system
+    assert llm_prompts.mode_contract("guide") in system
+    assert "Examples of response scope" not in system
     user_parts = captured["messages"][-1]["content"]
     assert isinstance(user_parts, list)
     assert any(part.get("type") == "image_url" for part in user_parts)
     assert any("page 1" in str(part.get("text")) for part in user_parts)
+
+
+def test_named_text_page_reaches_first_request_and_selected_tool_continuation(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute("update documents set pages_total = 10 where id = 7")
+    db.execute("update documents set pages_total = 10 where id = 3")
+    for document_id, text in (
+        (7, "Problem 9(b): use 37 volts across a 12 ohm resistor."),
+        (3, "Other course: use 90 volts across a 2 ohm resistor."),
+    ):
+        db.execute(
+            "insert into document_pages (document_id, page_number, state) values (?, 10, 'text')",
+            (document_id,),
+        )
+        db.execute(
+            "insert into document_read_pages (document_id, page_number, generation, content) "
+            "values (?, 10, 'synthetic', ?)",
+            (document_id, text),
+        )
+    db.execute("update settings set vision_supported = 1, context_window = 8192 where id = 1")
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    requests: list[list[dict[str, object]]] = []
+    native_inventory = document_access.inventory
+
+    def renamed_inventory(*args: object, **kwargs: object) -> dict[str, object]:
+        result = native_inventory(*args, **kwargs)
+        if args[2] == 7:
+            result["documents"][0]["filename"] = 'Resistor notes "A"'
+        return result
+
+    monkeypatch.setattr(document_access, "inventory", renamed_inventory)
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        messages: list[dict[str, object]],
+        _schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        requests.append(messages)
+        if len(requests) == 1:
+            system = str(messages[0]["content"])
+            assert "37 volts across a 12 ohm resistor" in system
+            assert "90 volts" not in system
+            assert 'Resistor notes \\"A\\"' in system
+            assert "signals.pdf" not in system
+            assert isinstance(messages[-1]["content"], str)  # text page needs no image
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "page", "read_document_page", '{"document_id":7,"page_number":10}'
+                    ),
+                ),
+            )
+        result = json.loads(str(messages[-1]["content"]))
+        assert result["document_id"] == 7
+        assert result["sources"][0]["page_number"] == 10
+        assert "37 volts across a 12 ohm resistor" in result["sources"][0]["text"]
+        return routes_agent_chat.llm_client.AssistantMessage("Use 37 V and 12 ohms.")
+
+    async def scoped_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        denied = registry["read_document_page"].handler(document_id=3, page_number=10)
+        assert not denied.ok
+        assert "selected document" in str(denied.as_payload())
+        return await tools.run_tool_loop(*args, **kwargs)
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", scoped_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "What about problem 9 part b on page 10?", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["content"] == "Use 37 V and 12 ohms."
+    assert len(requests) == 2
 
 
 def test_classwide_late_page_image_reaches_the_next_provider_round(
@@ -2257,13 +2353,11 @@ def test_legacy_profiles_do_not_gain_the_access_request_tool(
     assert "request_workspace_access" not in captured["registry"]
 
 
-def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
+def test_legacy_sessions_share_the_adaptive_education_contract(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The agent turn rides the conversation's Guide/Show contract inherited from the
-    # shared tutoring prompt (llm_prompts.mode_contract) - not a restatement of it - so
-    # the mode toggle keeps its meaning in agent work too and the two surfaces cannot
-    # drift: the agent prompt must contain the shared contract for the session's mode.
+    # A saved Show value remains readable but cannot select a different prompt.
+    # The agent shares the tutor contract and adds only capability instructions.
     session_id = int(sessions.create_session(db, class_id)["id"])  # guide by default
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
 
@@ -2275,6 +2369,7 @@ def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("guide") in prompt
+    assert "General concepts need no upload search" in prompt
 
     sessions.set_session_mode(db, session_id, "show")
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
@@ -2286,8 +2381,8 @@ def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("show") in prompt
-    # Only one contract rides the turn: the guide contract does not linger in show work.
-    assert llm_prompts.mode_contract("guide") not in prompt
+    # Persisted legacy styles no longer select a different teaching policy.
+    assert llm_prompts.mode_contract("guide") in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -2343,7 +2438,7 @@ def test_the_agent_turn_builds_on_the_full_tutor_system_prompt(
 def test_the_guide_show_contract_appears_exactly_once_in_the_agent_prompt(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Guide/Show is owned by the shared tutoring prompt. The agent layer adds capability
+    # The education contract is owned by the shared tutoring prompt. The agent layer adds capability
     # wording, never a second restatement of the contract: it appears exactly once.
     session_id = int(sessions.create_session(db, class_id)["id"])
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
@@ -2356,7 +2451,7 @@ def test_the_guide_show_contract_appears_exactly_once_in_the_agent_prompt(
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
     assert prompt.count(llm_prompts.mode_contract("guide")) == 1
-    assert llm_prompts.mode_contract("show") not in prompt
+    assert llm_prompts.mode_contract("show") in prompt
 
 
 def test_a_retrieved_chunk_seeds_the_web_query_guard_before_the_network(
@@ -2575,7 +2670,7 @@ def test_a_retry_reuses_the_scope_the_turn_was_asked_under(
     assert seen_documents == [7, 7]
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("show") in prompt
-    assert llm_prompts.mode_contract("guide") not in prompt
+    assert llm_prompts.mode_contract("guide") in prompt
 
 
 def test_a_regeneration_uses_the_current_selection(
@@ -2618,7 +2713,7 @@ def test_a_regeneration_uses_the_current_selection(
     assert seen_documents == [None, 7]
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("show") in prompt
-    assert llm_prompts.mode_contract("guide") not in prompt
+    assert llm_prompts.mode_contract("guide") in prompt
     # One reply: the superseded one is removed the moment the new one commits.
     messages = sessions.list_messages(db, session_id)
     assert [message["role"] for message in messages] == ["user", "assistant"]
@@ -2856,7 +2951,7 @@ def test_a_known_tool_incompatible_endpoint_answers_basic_chat_tool_less(
     # The full tutor contract rides the plain completion: the mode contract is present,
     # and the one sentence that says the agent work is unavailable replaces the agent
     # capability layer (which describes tools this turn never sends).
-    assert "Mode: Guide." in system
+    assert "Teach the student's latest request, at the depth it asks for" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
     assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
     # One durable attempt, completed with the reply; no tool activity of any kind.
@@ -2930,7 +3025,7 @@ def test_an_unknown_endpoints_first_tools_refusal_falls_back_and_remembers_the_v
     assert attempts[1]["assistant_message_id"] is not None
     # The tool-less continuation carried the full tutor contract, not the agent layer.
     system = str(completions[0][0]["content"])
-    assert "Mode: Guide." in system
+    assert "Teach the student's latest request, at the depth it asks for" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
     assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
     # The verdict is remembered for the next turn and the settings screen.
@@ -3117,7 +3212,7 @@ def test_a_toolless_turn_carries_retrieval_and_facts_like_the_tool_turn(
     assert "Convolution combines two signals." in system
     assert "signals.pdf" in system
     assert "prefers visual proofs" in system
-    assert "Mode: Guide." in system
+    assert "Teach the student's latest request, at the depth it asks for" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
 
 

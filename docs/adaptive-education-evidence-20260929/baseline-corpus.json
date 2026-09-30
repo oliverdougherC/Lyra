@@ -4,8 +4,8 @@
     "Legacy mode values remain in fixtures only to exercise persisted-session compatibility; the student's request and conversation set the scope.",
     "Must/must_not are semantic criteria. Independent review of retained terminal answers is required; self-grading alone does not establish acceptance."
   ],
-  "corpus_version": "2.1.0",
-  "prompt_contract_version": "4",
+  "corpus_version": "2.0.0",
+  "prompt_contract_version": "2",
   "dimensions": [
     "directness",
     "proportionality",
@@ -326,7 +326,7 @@
       "may": [
         "Uses one small example if it makes the definition clearer"
       ],
-      "notes": "A vector space V over a field F has addition V×V→V and scalar multiplication F×V→V satisfying additive abelian-group axioms and distributive, associative, and identity scalar laws. A conversational explanation may group axioms rather than list all eight."
+      "notes": "A vector space V over a field F has addition V\u00d7V\u2192V and scalar multiplication F\u00d7V\u2192V satisfying additive abelian-group axioms and distributive, associative, and identity scalar laws. A conversational explanation may group axioms rather than list all eight."
     },
     {
       "id": "vector-space-formal",
@@ -343,7 +343,7 @@
         "Asks the student to derive the definition"
       ],
       "may": [],
-      "notes": "The eight usual axioms over a field F with operations V×V→V and F×V→V are required; notation is useful here."
+      "notes": "The eight usual axioms over a field F with operations V\u00d7V\u2192V and F\u00d7V\u2192V are required; notation is useful here."
     },
     {
       "id": "vector-space-scalar-followup",
@@ -369,7 +369,7 @@
         "Treats the old reply length as a requirement"
       ],
       "may": [],
-      "notes": "Scalar multiplication is F×V→V; e.g. 2(x,y)=(2x,2y) in R²."
+      "notes": "Scalar multiplication is F\u00d7V\u2192V; e.g. 2(x,y)=(2x,2y) in R\u00b2."
     },
     {
       "id": "vector-space-start-heldout",
@@ -386,7 +386,7 @@
         "Ends with a generic follow-up offer"
       ],
       "may": [],
-      "notes": "Start by identifying R as the field and usual operations, then verify closure for sums/scalar multiples of ax²+bx+c, or note this is a subspace of all real polynomials and start the subspace test."
+      "notes": "Start by identifying R as the field and usual operations, then verify closure for sums/scalar multiples of ax\u00b2+bx+c, or note this is a subspace of all real polynomials and start the subspace test."
     },
     {
       "id": "heldout-simple-concept",
@@ -395,7 +395,7 @@
       "history": [],
       "context": [],
       "must": [
-        "Explains that a nonzero vector remains on the same line under a linear transformation, scaled by a factor; negative or zero factors are allowed",
+        "Explains that a nonzero vector keeps its direction under a linear transformation, changing only by a scalar factor, with zero factor allowed",
         "Uses plain, compact language"
       ],
       "must_not": [
@@ -403,133 +403,7 @@
         "Launches into characteristic polynomials or a derivation"
       ],
       "may": [],
-      "notes": "Av=λv for a nonzero v; λ may be zero. Strictly a negative eigenvalue reverses orientation, so saying same line is safer than same direction."
-    },
-    {
-      "id": "vector-space-multiturn-full",
-      "mode": "guide",
-      "user": "Now give the full proof that the real polynomials of degree at most 2 form a vector space.",
-      "history": [
-        {
-          "role": "user",
-          "content": "Can we go over the definition of a vector space?"
-        },
-        {
-          "role": "assistant",
-          "content": "A vector space over a field has addition and scalar multiplication that satisfy the vector-space axioms."
-        },
-        {
-          "role": "user",
-          "content": "Can you give an example?"
-        },
-        {
-          "role": "assistant",
-          "content": "The real plane with coordinate-wise addition and scaling is one example."
-        },
-        {
-          "role": "user",
-          "content": "How do I check that polynomials of degree at most 2 form one?"
-        },
-        {
-          "role": "assistant",
-          "content": "Start by checking whether ordinary addition keeps two such polynomials in the set."
-        }
-      ],
-      "context": [],
-      "must": [
-        "Gives a complete proof using the ambient real polynomial vector space: the zero polynomial is included, sums stay degree at most 2, and real scalar multiples stay degree at most 2; inherited axioms then hold",
-        "Honors the latest full-proof request even after an earlier first-step turn"
-      ],
-      "must_not": [
-        "Withholds the proof and offers only another hint",
-        "Claims polynomials must have degree exactly 2 or excludes the zero polynomial"
-      ],
-      "may": [],
-      "notes": "P₂(R) is a subspace of R[x]. Closure includes cancellation of leading coefficients; the zero polynomial belongs by definition."
-    },
-    {
-      "id": "vector-space-multiturn-narrow",
-      "mode": "show",
-      "user": "Why did you check that the zero polynomial is included? Answer just that point.",
-      "history": [
-        {
-          "role": "user",
-          "content": "Can we go over the definition of a vector space?"
-        },
-        {
-          "role": "assistant",
-          "content": "A vector space over a field has addition and scalar multiplication that satisfy the vector-space axioms."
-        },
-        {
-          "role": "user",
-          "content": "Can you give an example?"
-        },
-        {
-          "role": "assistant",
-          "content": "The real plane with coordinate-wise addition and scaling is one example."
-        },
-        {
-          "role": "user",
-          "content": "How do I check that polynomials of degree at most 2 form one?"
-        },
-        {
-          "role": "assistant",
-          "content": "Start by checking closure under usual addition and real scalar multiplication."
-        },
-        {
-          "role": "user",
-          "content": "Now give the full proof."
-        },
-        {
-          "role": "assistant",
-          "content": "These polynomials form a subspace of the real polynomial space: zero is included, and sums and scalar multiples retain degree at most 2. The inherited axioms hold."
-        }
-      ],
-      "context": [],
-      "must": [
-        "Answers only why zero polynomial inclusion matters for the additive identity or subspace test",
-        "Uses the latest narrow request despite the earlier full-proof turn and legacy show value"
-      ],
-      "must_not": [
-        "Repeats the full proof or all axioms",
-        "Offers another problem or automatic follow-up"
-      ],
-      "may": [],
-      "notes": "The zero polynomial is the additive identity and must belong to any vector space/subspace; its degree is conventionally undefined or negative infinity, but it is included in P₂ by definition."
-    },
-    {
-      "id": "request-more-depth-heldout",
-      "mode": "guide",
-      "user": "Explain why a negative eigenvalue reverses a vector, with a derivation and geometric example. Go into detail.",
-      "history": [],
-      "context": [],
-      "must": [
-        "Provides a substantive derivation from Av=λv with λ<0 and a concrete geometric example",
-        "Distinguishes reversing orientation along the same line from changing to an unrelated direction"
-      ],
-      "must_not": [
-        "Truncates at one brief sentence merely for concision",
-        "Claims a negative eigenvalue rotates the vector to a different eigenspace"
-      ],
-      "may": [],
-      "notes": "For eigenvector v≠0, Av=λv. If λ<0, the result lies on the same line with opposite orientation and magnitude |λ| times |v| for Euclidean norm. Example diag(-2,1)(1,0)=(-2,0)."
-    },
-    {
-      "id": "heldout-attempt-diagnosis",
-      "mode": "guide",
-      "user": "I solved 2(x-3)=8 by dividing both sides by 2, then wrote x-3=8, so x=11. Where did I slip?",
-      "history": [],
-      "context": [],
-      "must": [
-        "Acknowledges dividing both sides by 2 is valid",
-        "Identifies the actual slip: right side becomes 4, so x-3=4 and x=7"
-      ],
-      "must_not": [
-        "Claims dividing by 2 was invalid",
-        "Gives a generic algebra lecture instead of diagnosing the written step"
-      ],
-      "may": [],
-      "notes": "2(x-3)=8 => x-3=4 => x=7. Dividing both sides by 2 is valid; the student failed to divide the right side."
+      "notes": "Av=\u03bbv for a nonzero v; \u03bb may be zero. Strictly a negative eigenvalue reverses orientation, so saying same line is safer than same direction."
     }
   ]
 }
