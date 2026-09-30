@@ -19,11 +19,11 @@ import { LyraMark } from '@/components/chat/lyra-mark'
 import { Asterism } from '@/components/ui/asterism'
 import { HeaderActions } from '@/components/layout/page-chrome'
 import { MessageRow, type ChatMessage } from '@/components/chat/message-bubble'
+import { useNativeChatHost } from '@/components/chat/native-chat-host'
 import { startsTimeGapBetween, type SettledHandoff } from '@/components/chat/settled-transcript'
 import { isProcessingStage, type ProcessingStage } from '@/components/chat/thinking-indicator'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   ApiError,
@@ -35,6 +35,8 @@ import {
   streamWriterChatRetry,
 } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
+import { openExternalUrl } from '@/lib/external-links'
+import { type NativeChatRow } from '@/lib/native-chat'
 import {
   beginChatDraftSend,
   clearChatDraftIfRevision,
@@ -143,6 +145,8 @@ type ChatPaneProps = {
   scrollViewportRef?: React.RefObject<HTMLDivElement | null>
   /** Called whenever the active conversation changes, so the URL can track it. */
   onSessionIdChange?: (sessionId: number | null) => void
+  /** Route navigation from the native-scrolled transcript back to this window. */
+  onNavigate?: (href: string) => void
   /** Rendered at the end of the pane header; the workspace owns the documents column. */
   headerActions?: React.ReactNode
   /**
@@ -201,6 +205,7 @@ export function ChatPane({
   layout = 'pane',
   scrollViewportRef,
   onSessionIdChange,
+  onNavigate,
   headerActions,
   emptyState,
   sourceControl,
@@ -278,6 +283,13 @@ export function ChatPane({
    */
   const revealGenRef = useRef('g0')
   const [revealGen, setRevealGen] = useState('g0')
+  const nativeReadyRef = useRef(false)
+  const nativeSelectionRef = useRef<{
+    generation?: string
+    rowKey: string
+    anchor: number
+    focus: number
+  } | null>(null)
   /**
    * The pane has been pointed at a different conversation than the turn in flight.
    *
@@ -514,6 +526,7 @@ export function ChatPane({
 
   const bumpRevealGeneration = useCallback(() => {
     revealGenRef.current = `g${Number(revealGenRef.current.slice(1)) + 1}`
+    nativeSelectionRef.current = null
     setRevealGen(revealGenRef.current)
   }, [])
 
@@ -682,6 +695,7 @@ export function ChatPane({
   )
 
   const clearOptimisticTurn = useCallback(() => {
+    nativeSelectionRef.current = null
     // Nothing on screen belongs to a particular conversation any more, so leaving one is
     // no longer something that puts anything away.
     turnSessionRef.current = null
@@ -914,25 +928,38 @@ export function ChatPane({
         // holds inside it can be carried across the static swap as text offsets. A
         // replacement changed the text, and the selection no longer names anything.
         if (streamTextRef.current === data[answerIndex].content) {
-          const rows = viewportRef.current?.querySelectorAll('.assistant-content') ?? []
-          const root = rows.length > 0 ? (rows[rows.length - 1] as HTMLElement) : undefined
-          const selection = window.getSelection()
-          if (root && selection && selection.rangeCount > 0) {
-            const range = selection.getRangeAt(0)
-            if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
-              const offsetOf = (node: Node, offset: number): number | null => {
-                let total = 0
-                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-                for (let step = walker.nextNode(); step; step = walker.nextNode()) {
-                  if (step === node) return total + offset
-                  total += step.textContent?.length ?? 0
-                }
-                return null
+          const nativeSelection = nativeSelectionRef.current
+          if (nativeReadyRef.current) {
+            if (
+              nativeSelection?.generation === revealGenRef.current &&
+              nativeSelection.rowKey === `opt-${owner}`
+            ) {
+              handoff.selection = {
+                anchor: nativeSelection.anchor,
+                focus: nativeSelection.focus,
               }
-              const anchor = offsetOf(range.startContainer, range.startOffset)
-              const focus = offsetOf(range.endContainer, range.endOffset)
-              if (anchor !== null && focus !== null) {
-                handoff.selection = { anchor, focus }
+            }
+          } else {
+            const rows = viewportRef.current?.querySelectorAll('.assistant-content') ?? []
+            const root = rows.length > 0 ? (rows[rows.length - 1] as HTMLElement) : undefined
+            const selection = window.getSelection()
+            if (root && selection && selection.rangeCount > 0) {
+              const range = selection.getRangeAt(0)
+              if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
+                const offsetOf = (node: Node, offset: number): number | null => {
+                  let total = 0
+                  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+                  for (let step = walker.nextNode(); step; step = walker.nextNode()) {
+                    if (step === node) return total + offset
+                    total += step.textContent?.length ?? 0
+                  }
+                  return null
+                }
+                const anchor = offsetOf(range.startContainer, range.startOffset)
+                const focus = offsetOf(range.endContainer, range.endOffset)
+                if (anchor !== null && focus !== null) {
+                  handoff.selection = { anchor, focus }
+                }
               }
             }
           }
@@ -1980,6 +2007,206 @@ export function ChatPane({
     regenerate,
   ])
 
+  const nativeSettledRows = useMemo<NativeChatRow[]>(() => {
+    const lastAssistant = settledRows.reduce(
+      (found, message, index) => (message.role === 'assistant' ? index : found),
+      -1,
+    )
+    const lastUser = settledRows.reduce(
+      (found, message, index) => (message.role === 'user' ? index : found),
+      -1,
+    )
+    const interactive = !historyError && !messagesPending && !optimisticTurn
+    return settledRows.map((message, index) => {
+      const handoff = handoffIndex.get(message.id) ?? null
+      let key = String(message.id)
+      if (handoff !== null) {
+        if (message.id === handoff.assistantId) key = handoff.assistantKey
+        else if (handoff.userId !== undefined) key = handoff.userKey as string
+      }
+      const failedUser =
+        index === lastUser &&
+        (message.agent_attempt?.state === 'failed' ||
+          message.agent_attempt?.state === 'stopped' ||
+          message.tutor_attempt?.state === 'failed' ||
+          message.tutor_attempt?.state === 'stopped')
+      return {
+        key,
+        message,
+        className: cn(!inline && index > 0 && (message.role === 'user' ? 'mt-11' : 'mt-5')),
+        startsTimeGap: startsTimeGapBetween(
+          message,
+          index > 0 ? settledRows[index - 1] : null,
+          timestampOf,
+        ),
+        selectionRestore: handoff?.selection ?? null,
+        retryAction: interactive
+          ? message.role === 'assistant' && index === lastAssistant
+            ? ('regenerate' as const)
+            : failedUser
+              ? ('tutor-retry' as const)
+              : undefined
+          : undefined,
+      }
+    })
+  }, [
+    settledRows,
+    handoffIndex,
+    historyError,
+    messagesPending,
+    optimisticTurn,
+    inline,
+    timestampOf,
+  ])
+
+  const nativeLiveRows = useMemo<NativeChatRow[]>(
+    () =>
+      liveRows.map((message, index) => {
+        const isReply = message.id === -2
+        const previous =
+          index === 0 ? (settledRows[settledRows.length - 1] ?? null) : liveRows[index - 1]
+        const key =
+          activeTurnId === null
+            ? String(message.id)
+            : message.id === -1
+              ? `optu-${activeTurnId}`
+              : `opt-${activeTurnId}`
+        return {
+          key,
+          message,
+          className: cn(
+            !inline &&
+              settledRows.length + index > 0 &&
+              (message.role === 'user' ? 'mt-11' : 'mt-5'),
+          ),
+          startsTimeGap: startsTimeGapBetween(message, previous, timestampOf),
+          streaming: isReply,
+          activity: isReply ? streamActivity : undefined,
+          processingStage: isReply ? processingStage : null,
+          turnStartedAt: isReply ? turnStartedAt : null,
+          turnEnded: isReply ? turnOutcome === 'completed' || turnOutcome === 'stopped' : undefined,
+          generation: isReply ? revealGen : undefined,
+        }
+      }),
+    [
+      liveRows,
+      settledRows,
+      activeTurnId,
+      inline,
+      timestampOf,
+      streamActivity,
+      processingStage,
+      turnStartedAt,
+      turnOutcome,
+      revealGen,
+    ],
+  )
+
+  const nativeSnapshot = useMemo(
+    () => ({
+      scope: `${classId}:${activeSessionId ?? 'new'}`,
+      rows: [...nativeSettledRows, ...nativeLiveRows],
+      agent,
+      liveGeneration: nativeLiveRows.some((row) => row.streaming) ? revealGen : undefined,
+    }),
+    [classId, activeSessionId, nativeSettledRows, nativeLiveRows, agent, revealGen],
+  )
+  const nativeEnabled =
+    layout === 'pane' && agent && !writer && rowCount > 0 && !historyError && !messagesPending
+  const ownViewportRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [following, setFollowing] = useState(true)
+  const followingRef = useRef(true)
+  const userScrollAtRef = useRef(Number.NEGATIVE_INFINITY)
+  const nativeScrollRatioRef = useRef(1)
+  const [nativeOccluded, setNativeOccluded] = useState(false)
+
+  // Portals belong to the main WebView. AppKit's transcript sits above it, so
+  // show the ordinary transcript while an interactive portal overlaps chat.
+  useEffect(() => {
+    if (!nativeEnabled) return
+    const update = () => {
+      setNativeOccluded(
+        Boolean(
+          document.querySelector(
+            '[role="dialog"]:not([data-state="closed"]), [role="menu"]:not([data-state="closed"]), [role="listbox"]:not([data-state="closed"])',
+          ),
+        ),
+      )
+    }
+    const observer = new MutationObserver(update)
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-state', 'role'],
+    })
+    update()
+    return () => {
+      observer.disconnect()
+      setNativeOccluded(false)
+    }
+  }, [nativeEnabled])
+  const {
+    hostRef: nativeHostRef,
+    active: nativeActive,
+    scrollToBottom: scrollNativeToBottom,
+  } = useNativeChatHost(
+    nativeEnabled,
+    nativeSnapshot,
+    {
+      onRetry: (action) => {
+        if (action === 'regenerate') regenerate()
+        else retryTutorTurn()
+      },
+      onRevealComplete: handleRevealComplete,
+      onReasoningOpenChange: handleReasoningOpenChange,
+      onNavigate: (href) => {
+        const direct = href.startsWith('/#/')
+          ? href.slice(2)
+          : href.startsWith('#/')
+            ? href.slice(1)
+            : href
+        if (direct.startsWith('/')) {
+          if (onNavigate) onNavigate(direct)
+          return
+        }
+        try {
+          const url = new URL(href, window.location.href)
+          if (url.origin === window.location.origin && url.hash.startsWith('#/')) {
+            if (onNavigate) onNavigate(url.hash.slice(1))
+            return
+          }
+        } catch {
+          return
+        }
+        void openExternalUrl(href).catch(() => toast.error('This link could not be opened.'))
+      },
+      onSelection: (anchor, focus, generation, rowKey) => {
+        nativeSelectionRef.current =
+          anchor === null || focus === null || !rowKey
+            ? null
+            : { anchor, focus, generation, rowKey }
+      },
+      onScrollState: (atBottom, ratio) => {
+        if (typeof ratio === 'number') nativeScrollRatioRef.current = ratio
+        if (followingRef.current === atBottom) return
+        followingRef.current = atBottom
+        setFollowing(atBottom)
+      },
+    },
+    nativeReadyRef,
+    nativeOccluded,
+    () => {
+      const node = ownViewportRef.current
+      if (!node) return null
+      const distance = node.scrollHeight - node.clientHeight
+      return distance > 0 ? node.scrollTop / distance : 1
+    },
+  )
+  const showingNative = nativeActive && nativeEnabled
+
   // A conversation opens at its latest message, and follows the stream while the reader
   // is already at the tail. Scrolling up to re-read detaches the follow, and the jump
   // button is the way back.
@@ -1988,19 +2215,25 @@ export function ChatPane({
   // so the follow, the jump button, and the re-pin work the same either way. One real ref
   // resolved once per render rather than a ternary at each use: a conditional ref is not
   // one the compiler can see through, and half of this file depends on it being stable.
-  const ownViewportRef = useRef<HTMLDivElement>(null)
-  const viewportRef = useRef<HTMLDivElement | null>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const [following, setFollowing] = useState(true)
-  const followingRef = useRef(true)
-  const userScrollAtRef = useRef(0)
-
   useEffect(() => {
-    viewportRef.current = inline ? (scrollViewportRef?.current ?? null) : ownViewportRef.current
-  })
+    viewportRef.current = inline
+      ? (scrollViewportRef?.current ?? null)
+      : nativeReadyRef.current
+        ? null
+        : ownViewportRef.current
+  }, [inline, scrollViewportRef, showingNative])
+
+  useLayoutEffect(() => {
+    if (inline || showingNative) return
+    const node = ownViewportRef.current
+    if (!node) return
+    const distance = Math.max(0, node.scrollHeight - node.clientHeight)
+    node.scrollTop = followingRef.current ? distance : nativeScrollRatioRef.current * distance
+  }, [inline, showingNative])
 
   /** How far the tail of the conversation sits below the bottom of the viewport. */
   const distanceBelowFold = useCallback((): number => {
+    if (nativeReadyRef.current) return followingRef.current ? 0 : STICK_THRESHOLD_PX + 1
     const node = viewportRef.current
     if (!node) return 0
     // Inline, the tail is the end of this thread, not the end of the pane: the pane
@@ -2015,6 +2248,10 @@ export function ChatPane({
 
   const scrollToBottom = useCallback(
     (behavior: ScrollBehavior) => {
+      if (nativeReadyRef.current) {
+        void scrollNativeToBottom().catch(() => undefined)
+        return
+      }
       const node = viewportRef.current
       if (!node) return
       const distance = distanceBelowFold()
@@ -2026,7 +2263,7 @@ export function ChatPane({
       if (distance <= 0) return
       node.scrollTo({ top: Math.max(0, node.scrollTop + distance), behavior })
     },
-    [distanceBelowFold],
+    [distanceBelowFold, scrollNativeToBottom],
   )
 
   // Only the reader can stop the conversation following its own tail. Content that grows
@@ -2036,18 +2273,26 @@ export function ChatPane({
   useEffect(() => {
     const node = viewportRef.current
     if (!node) return
+    let scrollFrame: number | null = null
 
     const noteUserScroll = () => {
       userScrollAtRef.current = performance.now()
     }
-    const onScroll = () => {
+    const updateFollowing = () => {
+      scrollFrame = null
       const atBottom = distanceBelowFold() <= STICK_THRESHOLD_PX
       // Arriving at the bottom always resumes following, however it happened. Leaving it
       // only counts when the reader drove it.
       const byUser = performance.now() - userScrollAtRef.current < USER_SCROLL_WINDOW_MS
       if (!atBottom && !byUser) return
+      if (followingRef.current === atBottom) return
       followingRef.current = atBottom
       setFollowing(atBottom)
+    }
+    // Native scrolling can deliver several events between WebKit's JS callbacks. The
+    // distance read may require layout, so do it once after those events have settled.
+    const onScroll = () => {
+      if (scrollFrame === null) scrollFrame = requestAnimationFrame(updateFollowing)
     }
 
     node.addEventListener('scroll', onScroll, { passive: true })
@@ -2055,12 +2300,13 @@ export function ChatPane({
     node.addEventListener('touchmove', noteUserScroll, { passive: true })
     node.addEventListener('keydown', noteUserScroll)
     return () => {
+      if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
       node.removeEventListener('scroll', onScroll)
       node.removeEventListener('wheel', noteUserScroll)
       node.removeEventListener('touchmove', noteUserScroll)
       node.removeEventListener('keydown', noteUserScroll)
     }
-  }, [distanceBelowFold])
+  }, [distanceBelowFold, showingNative])
 
   // Opening a conversation jumps straight to the end, with no visible travel through
   // history the reader did not ask to see. Not inline: the reader opened this thread from
@@ -2138,7 +2384,7 @@ export function ChatPane({
     })
     observer.observe(node)
     return () => observer.disconnect()
-  }, [followTailSoon])
+  }, [followTailSoon, showingNative])
 
   const conversation = (
     <div
@@ -2283,11 +2529,21 @@ export function ChatPane({
       )}
 
       <div className="relative min-h-0 flex-1">
-        <ScrollArea viewportRef={ownViewportRef} className="h-full">
-          {conversation}
-        </ScrollArea>
+        <div ref={nativeHostRef} className="pointer-events-none absolute inset-0" aria-hidden />
+        {!showingNative ? (
+          // Browser and inline fallbacks keep the same accessible scroll surface.
+          <div
+            ref={ownViewportRef}
+            className="h-full overflow-y-auto"
+            role="region"
+            aria-label="Conversation"
+            tabIndex={0}
+          >
+            {conversation}
+          </div>
+        ) : null}
 
-        {!following && rowCount > 0 ? (
+        {!showingNative && !following && rowCount > 0 ? (
           <Button
             variant="outline"
             size="sm"
@@ -2299,6 +2555,15 @@ export function ChatPane({
           </Button>
         ) : null}
       </div>
+
+      {showingNative && !following && rowCount > 0 ? (
+        <div className="flex shrink-0 justify-center py-1">
+          <Button variant="outline" size="sm" onClick={() => scrollToBottom('instant')}>
+            <ArrowDown className="size-3.5" />
+            Jump to latest
+          </Button>
+        </div>
+      ) : null}
 
       {/* No rule above the well: the composer is a raised object standing on the pane, and
           it carries its own edge. What separates them is a scrim instead — the conversation

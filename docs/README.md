@@ -36,6 +36,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Distribution notices and license review](distribution-notices.md) | Maintained |
 | [Local writer quality — September 8, 2026](local-writer-quality-20260908.md) | Candidate evidence; length warning and unresolved semantic quality |
 | [Optimization evidence — September 8, 2026](optimization-evidence-20260908.md) | Candidate evidence; operation counts and explicit native limits |
+| [Native chat scroll follow-up — September 29, 2026](review-evidence/daily-study-20260929/native-scroll-followup.md) | Candidate evidence; isolated presentation samples, physical input pending |
 | [Draft autosave concurrency (PLA-289)](draft-autosave-concurrency.md) | Maintained |
 | [Ex Libris: The Lyra Design System (Approved Brief)](exlibris-design-system.md) | Historical record |
 | [Ex Libris Migration: Component Inventory and Transition Plan](exlibris-migration.md) | Historical record |
