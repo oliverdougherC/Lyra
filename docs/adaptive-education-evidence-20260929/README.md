@@ -3,8 +3,8 @@
 **Status: quality gate failed.** This is exploratory evidence for PLA-574/PLA-461,
 not acceptance of the candidate. The original v3 failures and the correction-pass
 outputs below are retained separately. The correction makes some conversational answers
-compact and preserves full solutions, but final-source quality still varies and one
-held-out answer makes a false mathematical claim. The owner has not reviewed these
+compact and preserves full solution branches, but final-source quality still varies
+and several answers make false or unsupported auxiliary claims. The owner has not reviewed these
 outputs. Historical Guide/Show evidence remains in its original files.
 
 ## Setup and retained outputs
@@ -72,9 +72,9 @@ not a response cap or automatic pass rule.
 |---|---:|---|
 | Conversational vector-space definition | 62 / 151 | C is compact and correct; D is correct but re-lists axioms and adds an unasked consequence. Proportionality varies. |
 | Formal vector-space definition | 306 / 388 | Complete and mathematically sound in both observations; some extra remarks. |
-| Polynomial “how do I start?” | 184 / 109 | Both give a useful generic setup but name addition and scalar closure; C adds a wider survey. The one-move burden criterion remains unmet. |
+| Polynomial “how do I start?” | 184 / 109 | Both give a useful generic setup but name addition and scalar closure; C adds a wider survey. D also says zero and inverses are simply inherited by a subset, although their membership still needs to be established. The one-move burden criterion remains unmet. |
 | Convolution attempt diagnosis | 160 / 170 | Both identify the lost $\tau$ and use valid bounds or restricted ranges. Both evaluate a branch and mention a second issue beyond the first-error request. |
-| Explicit full convolution solution | 311 / 252 | Both derive the correct piecewise result. C includes several unrequested but correct checks; D is sound on direct review. |
+| Explicit full convolution solution | 311 / 252 | Both derive the correct piecewise result. C includes several unrequested checks. D adds a false general claim that convolution of any two $L^1$ functions with compact/decaying support cannot jump; the particular pulse/exponential result is continuous, but that broad assertion is unjustified. Core derivation passes; the D final answer is not wholly correct. |
 | Brine-tank start help | 114 / 138 | Both give a usable opening move; D adds the next balance context. |
 | Multi-turn full polynomial proof | 423 / 344 | Complete and correct on direct reading, with surplus axiom-by-axiom work and closing tangents. The prior A run's invalid equality is preserved separately. |
 | Scalar-multiplication / narrow zero follow-ups | 148 / 103 (C only) | Correct core points, but both add axioms or nonemptiness discussion beyond the narrow question. |
@@ -83,8 +83,10 @@ not a response cap or automatic pass rule.
 The other C held-out cases (plain-English eigenvector, algebra-attempt diagnosis,
 answer checking, simpler convolution explanation) answered their core questions
 without a found critical mathematical error, though several carry avoidable prose.
-This is the implementer's direct review, not owner or independent human acceptance.
-The false continuous-time claim and repeated scope misses keep PLA-461 **In Progress**.
+Independent reading of the D outputs identified the additional continuity and
+subset-membership mistakes above after the implementer's first rubric pass. The
+false continuous-time claim, these auxiliary mathematical errors, and repeated scope
+misses keep PLA-461 **In Progress**. This is not owner or independent human acceptance.
 The synthetic nicknamed-source case, final combined signed-app behavior and native
 acceptance belong to the later integrated candidate review; none is claimed here.
 
