@@ -1,6 +1,7 @@
 mod backup;
 mod bounded_process;
 mod external_navigation;
+mod native_chat;
 mod update_archive;
 mod update_recovery;
 mod updater;
@@ -734,6 +735,7 @@ pub fn run() {
                 .build(),
         )
         .manage(updater::UpdateState::default())
+        .manage(native_chat::NativeChatState::default())
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -749,6 +751,16 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             desktop_bootstrap,
+            native_chat::native_chat_mount,
+            native_chat::native_chat_set_frame,
+            native_chat::native_chat_set_content_height,
+            native_chat::native_chat_render,
+            native_chat::native_chat_action,
+            native_chat::native_chat_scroll_to_bottom,
+            native_chat::native_chat_set_scroll_ratio,
+            native_chat::native_chat_show,
+            native_chat::native_chat_hide,
+            native_chat::native_chat_unmount,
             desktop_print,
             retry_backend,
             open_external_url,

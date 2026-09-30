@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-chat-mount"
+description = "Enables the native_chat_mount command without any pre-configured scope."
+commands.allow = ["native_chat_mount"]
+
+[[permission]]
+identifier = "deny-native-chat-mount"
+description = "Denies the native_chat_mount command without any pre-configured scope."
+commands.deny = ["native_chat_mount"]

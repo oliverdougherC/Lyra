@@ -185,6 +185,7 @@ export default function ClassWorkspacePage() {
       sourceControl={sourceControl}
       workspaceControl={<WorkspaceContextChip />}
       onSessionIdChange={handleSessionIdChange}
+      onNavigate={(href) => router.push(href)}
     />
   )
 

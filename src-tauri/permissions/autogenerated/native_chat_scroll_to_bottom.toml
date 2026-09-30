@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-chat-scroll-to-bottom"
+description = "Enables the native_chat_scroll_to_bottom command without any pre-configured scope."
+commands.allow = ["native_chat_scroll_to_bottom"]
+
+[[permission]]
+identifier = "deny-native-chat-scroll-to-bottom"
+description = "Denies the native_chat_scroll_to_bottom command without any pre-configured scope."
+commands.deny = ["native_chat_scroll_to_bottom"]
