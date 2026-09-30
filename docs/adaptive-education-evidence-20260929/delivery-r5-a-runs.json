@@ -1,0 +1,979 @@
+{
+  "cases": {
+    "no-idea-how-to-start": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start by writing the balance law for the salt amount $S(t)$ (in kg):\n\n$$\\frac{dS}{dt} = (\\text{rate salt enters}) - (\\text{rate salt leaves})$$\n\nThat's the whole first move \u2014 just get this skeleton on paper. It helps because every number in the problem describes one of those two rates, so once the skeleton is there you only have to fill in blanks instead of figuring out what kind of equation to write.\n\nTo fill the first blank, use the fact that a flow carries salt at (concentration) \u00d7 (flow rate). The incoming brine is $0.1$ kg/L at $3$ L/min, so the rate in is a single multiplication.",
+      "generated_at": "2026-09-30T02:56:45+00:00",
+      "duration_seconds": 11.76,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "f9051661b983678061ef514ab6a4bd618b2482162064baeda6e46b3965c9b3c4",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "I have no idea how to start.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Your setup is right \u2014 folding $x(\\tau)h(t-\\tau)$ is exactly the correct move. The slip is in the substitution.\n\n**First error: $h(t-\\tau)$ became $e^{-t}$.** You evaluated the exponential at $t$ instead of at $t-\\tau$. Since $h(s) = e^{-s}u(s)$, replacing $s$ by $t-\\tau$ gives\n\n$$h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau),$$\n\nand $u(t-\\tau)$ is what restricts $\\tau \\le t$. Writing $e^{-t}$ treats the integrand as constant in $\\tau$, so it can be pulled outside the integral \u2014 which is precisely why your answer came out as $t$ times something. That $\\tau$ in the exponent is the whole reason the convolution isn't trivial.\n\n**Rewritten step** (with $x(\\tau) = 1$ on $0 \\le \\tau \\le 1$ and $0$ elsewhere):\n\n$$y(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\,e^{-(t-\\tau)}u(t-\\tau)\\,d\\tau .$$\n\n**Next thing to fix, before you integrate:** the limits $0$ to $t$ only hold while the pulse is still being swept. The integrand survives where $x(\\tau) \\ne 0$ *and* $\\tau \\le t$, i.e. $\\tau \\in [0,\\min(t,1)]$ \u2014 so once $t$ passes $1$, the upper limit stops growing. Split at that point, then evaluate each window.",
+      "generated_at": "2026-09-30T02:57:45+00:00",
+      "duration_seconds": 60.04,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "398dc77b2cd0bc2407a381d2bdb8d6036afbbab889ea4d3e856258c7a65e4de4",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))*exp(0)",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))*exp(0)\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1 - exp(-t)) - (1 - exp(-(t-1)))",
+            "compare_to": "exp(1-t) - exp(-t)"
+          },
+          "raw_arguments": "{\"expression\": \"(1 - exp(-t)) - (1 - exp(-(t-1)))\", \"compare_to\": \"exp(1-t) - exp(-t)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## Setup\n\nLet $p(t)=u(t)-u(t-1)$ (the unit pulse on $[0,1]$) and $h(t)=e^{-t}u(t)$. By definition\n\n$$y(t)=(p*h)(t)=\\int_{-\\infty}^{\\infty}p(\\tau)\\,h(t-\\tau)\\,d\\tau .$$\n\n**Step 1 \u2014 kill the zero parts of the integrand.** Since $p(\\tau)=1$ only for $0\\le\\tau\\le1$ and is $0$ elsewhere,\n\n$$y(t)=\\int_{0}^{1}e^{-(t-\\tau)}u(t-\\tau)\\,d\\tau .$$\n\n**Step 2 \u2014 use the remaining step function.** Inside the integral $\\tau\\in[0,1]$, so $u(t-\\tau)=1$ exactly when $\\tau\\le t$. That means the upper limit is not $1$ but $\\min(t,1)$, and if $t<0$ there is no overlap at all:\n\n$$y(t)=\\int_{0}^{\\min(t,1)}e^{-(t-\\tau)}\\,d\\tau,\\qquad t>0 .$$\n\nThis one line is the whole problem \u2014 everything else is evaluating it in the regimes where $\\min$ changes.\n\n## The three regimes\n\n**Case $t<0$** (pulse hasn't reached the kernel yet): overlap length is zero, so $y(t)=0$.\n\n**Case $0\\le t\\le 1$** (window cut off by $t$, since $t<1$):\n\n$$y(t)=\\int_{0}^{t}e^{-(t-\\tau)}d\\tau=e^{-t}\\int_{0}^{t}e^{\\tau}d\\tau=e^{-t}\\left(e^{t}-1\\right)=1-e^{-t}.$$\n\n**Case $t>1$** (kernel's tail fully covers the pulse, window is the whole pulse):\n\n$$y(t)=\\int_{0}^{1}e^{-(t-\\tau)}d\\tau=e^{-t}\\left(e^{1}-1\\right)=e^{1-t}-e^{-t}.$$\n\n## Result\n\n$$\\boxed{\\;(p*h)(t)=\\begin{cases}0, & t<0\\\\[4pt] 1-e^{-t}, & 0\\le t\\le 1\\\\[4pt] e^{1-t}-e^{-t}, & t>1\\end{cases}\\;}$$\n\n## Checks worth doing\n\n- **Continuity at $t=1$:** $1-e^{-1}$ from the left, $e^{0}-e^{-1}=1-e^{-1}$ from the right. \u2713 (Convolution of two bounded, compactly-supported-ish functions can't jump.)\n- **Continuity at $t=0$:** both sides give $0$. \u2713\n- **Decay:** as $t\\to\\infty$, $y(t)\\to0$ like $e^{1-t}$, which is right \u2014 the pulse has finite area $1$, so the tail must look like $1\\cdot e^{-t}$ shifted, i.e. $e^{-(t-1)}$.\n- **Cross-check by linearity:** write $p=u(\\cdot)-u(\\cdot-1)$, so $y=s(t)-s(t-1)$ with $s=(h*u)(t)=(1-e^{-t})u(t)$. For $t>1$ that gives $(1-e^{-t})-(1-e^{-(t-1)})=e^{1-t}-e^{-t}$, matching the direct integral (verified symbolically: the difference simplifies to $0$).\n\nThe general habit to take away: with a finite-duration signal convolved against a causal kernel, the number of cases is (number of edges of the pulse) $+1$, and each case is just \"what interval does the step function actually leave me?\"",
+      "generated_at": "2026-09-30T02:58:52+00:00",
+      "duration_seconds": 66.3,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "4e48ed125b5e195b05806394198c1ed6189e0098276ea18ace998773441f8c30",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A vector space is a set $V$ whose elements you can add together and scale by numbers from a field $F$ (usually $\\mathbb{R}$) and still stay inside $V$. Concretely, you need two operations \u2014 vector addition $u+v$ and scalar multiplication $c\\,v$ \u2014 that are closed, and they have to behave the way arithmetic does: addition is commutative and associative, there is a zero vector acting as an additive identity, and every vector has an additive inverse; scalar multiplication respects the field's own arithmetic, meaning $c(u+v)=cu+cv$, $(c+d)v=cv+dv$, $(cd)v=c(dv)$, and $1v=v$. The point of listing those conditions is that they're exactly what you're allowed to assume when proving things \u2014 so anything satisfying them (arrows, functions, polynomials, matrices) inherits every theorem you prove for \"vectors\" in general.",
+      "generated_at": "2026-09-30T02:59:06+00:00",
+      "duration_seconds": 13.93,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "cba238d6c098c9a695ebe42b2e275703eaf9fafb5a2f322e10b4950eb1fa9ad4",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-formal": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "## Vector space\n\nLet $\\mathbb{F}$ be a field (its elements are called *scalars*; usually $\\mathbb{F}=\\mathbb{R}$ or $\\mathbb{C}$). A **vector space over $\\mathbb{F}$** is a set $V$ together with two operations\n\n$$+ : V \\times V \\to V, \\qquad \\cdot : \\mathbb{F} \\times V \\to V,$$\n\ncalled vector addition and scalar multiplication, such that the axioms below hold for every $\\mathbf{u},\\mathbf{v},\\mathbf{w}\\in V$ and every $a,b\\in\\mathbb{F}$.\n\n**Axioms for addition** \u2014 these say $(V,+)$ is an abelian group:\n\n| | Axiom | Name |\n|---|---|---|\n| (V1) | $\\mathbf{u}+\\mathbf{v}\\in V$ | closure under addition |\n| (V2) | $\\mathbf{u}+\\mathbf{v}=\\mathbf{v}+\\mathbf{u}$ | commutativity |\n| (V3) | $(\\mathbf{u}+\\mathbf{v})+\\mathbf{w}=\\mathbf{u}+(\\mathbf{v}+\\mathbf{w})$ | associativity |\n| (V4) | $\\exists\\,\\mathbf{0}\\in V$ with $\\mathbf{u}+\\mathbf{0}=\\mathbf{u}$ | zero vector |\n| (V5) | $\\forall\\,\\mathbf{u}\\;\\exists\\,(-\\mathbf{u})\\in V$ with $\\mathbf{u}+(-\\mathbf{u})=\\mathbf{0}$ | additive inverse |\n\n**Axioms for scalar multiplication** \u2014 closure $a\\mathbf{v}\\in V$ is part of saying $\\cdot$ is a map $\\mathbb{F}\\times V\\to V$:\n\n| | Axiom | Name |\n|---|---|---|\n| (V6) | $1\\cdot\\mathbf{u}=\\mathbf{u}$, where $1$ is the identity of $\\mathbb{F}$ | unit |\n| (V7) | $a\\,(b\\,\\mathbf{u})=(ab)\\,\\mathbf{u}$ | compatibility with field multiplication |\n\n**Axioms linking the two operations** \u2014 distributivity:\n\n| | Axiom | Name |\n|---|---|---|\n| (V8) | $a\\,(\\mathbf{u}+\\mathbf{v})=a\\mathbf{u}+a\\mathbf{v}$ | scalar distributes over vector sum |\n| (V9) | $(a+b)\\,\\mathbf{u}=a\\mathbf{u}+b\\mathbf{u}$ | field addition distributes over scalar mult. |\n\nTwo remarks on what the definition is actually demanding:\n\n- The $\\mathbf{0}$ in (V4) is the *zero of $V$*, not the number $0$ of $\\mathbb{F}$; the two are distinguished only by context. Likewise $0\\mathbf{u}$ (scalar times vector) and $a\\mathbf{0}$ (scalar times zero vector) are different expressions that both turn out to equal $\\mathbf{0}$.\n- Nothing in the axioms mentions coordinates or arrows. $\\mathbf{u}$ could be a polynomial, a matrix, or a function, and $+$ could be any operation satisfying (V1)\u2013(V5); that is why the same theorems apply to all of them at once.\n\nThe axioms are also what fails in practice: a subset $W\\subseteq V$ inherits (V2), (V3), (V6)\u2013(V9) automatically, so to check it is a subspace you only need (V1), (V4) and (V5) \u2014 closure under addition and scalar multiplication, and containing $\\mathbf{0}$.",
+      "generated_at": "2026-09-30T02:59:36+00:00",
+      "duration_seconds": 30.37,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "31211218609786c3b6069ae218c1b1401d6ad0b7b681ca530bc2799fdab231de",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "Give me the formal definition of a vector space, including the axioms.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-scalar-followup": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Scalar multiplication is the operation that takes a scalar (an element of the field, usually $\\mathbb{R}$ or $\\mathbb{C}$) together with a vector and returns another vector \u2014 formally a map $\\mathbb{F}\\times V\\to\\mathbb{F}$\u2026 that is, $\\mathbb{F}\\times V\\to V$, written $a\\,v$. It's what lets you stretch, shrink, or reverse a vector without leaving the space. For it to belong in a vector space it has to play nicely with the field and with addition: $1\\cdot v=v$, $(ab)v=a(bv)$, it distributes over vector addition as $a(u+v)=au+av$, and over scalar addition as $(a+b)v=av+bv$.",
+      "generated_at": "2026-09-30T02:59:44+00:00",
+      "duration_seconds": 8.1,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "5bc6fc008705a4c41240b118e64daf3f7af012330f922010251cdabc1708c45e",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "What does scalar multiplication mean there?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-start-heldout": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start by writing two completely general elements, $p(x)=a_2x^2+a_1x+a_0$ and $q(x)=b_2x^2+b_1x+b_0$ with real coefficients, together with a scalar $c\\in\\mathbb{R}$, and form $p+q$ and $c\\,p$ using the usual polynomial operations.\n\nThis is the right first move because with the standard operations the eight algebraic rules (associativity, commutativity, distributivity, and so on) are inherited for free from $\\mathbb{R}$; the only thing that can actually fail is whether the set stays inside itself. Keeping the coefficients as symbols rather than picking examples is what lets you see whether the \"$\\le 2$\" degree bound survives both operations \u2014 and whether the zero element belongs to the set at all.",
+      "generated_at": "2026-09-30T02:59:58+00:00",
+      "duration_seconds": 13.8,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "cff15a7f4be0c261d17dd2df879414bb300c120e1046c98ed60656f7efc093e2",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "For the set of real polynomials with degree at most 2, how should I start checking whether it is a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "heldout-simple-concept": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "An eigenvector is a direction that a linear transformation leaves pointing along the same line. When a square matrix $A$ acts on most vectors, it swings them off to some new direction; an eigenvector $v$ is one of the special nonzero vectors that comes back parallel to itself, only stretched or shrunk (and possibly flipped in sign). Formally, $v \\neq 0$ is an eigenvector of $A$ if there is a scalar $\\lambda$ with\n\n$$Av = \\lambda v$$\n\nand that scalar $\\lambda$ is the eigenvalue \u2014 the factor by which the transformation scales things along that direction. The zero vector is deliberately excluded, since $A\\mathbf{0} = \\lambda\\mathbf{0}$ holds for every $\\lambda$ and would make the idea meaningless.",
+      "generated_at": "2026-09-30T03:00:08+00:00",
+      "duration_seconds": 10.17,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "e7beba251957bc3654c6f0d91335e81fb07692ce8a38d9e51471a65ab53c64de",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "What is an eigenvector, in plain English?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-multiturn-full": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "c*((a0+b0)+(a1+b1)*x+(a2+b2)*x**2) - ((c*a0+c*b0)+(c*a1+c*b1)*x+(c*a2+c*b2)*x**2)"
+          },
+          "raw_arguments": "{\"expression\": \"c*((a0+b0)+(a1+b1)*x+(a2+b2)*x**2) - ((c*a0+c*b0)+(c*a1+c*b1)*x+(c*a2+c*b2)*x**2)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "0"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "((c+d)*(a0+a1*x+a2*x**2)) - ((c*a0+d*a0)+(c*a1+d*a1)*x+(c*a2+d*a2)*x**2)"
+          },
+          "raw_arguments": "{\"expression\": \"((c+d)*(a0+a1*x+a2*x**2)) - ((c*a0+d*a0)+(c*a1+d*a1)*x+(c*a2+d*a2)*x**2)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "0"
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## The claim\n\nLet $P_2(\\mathbb{R})$ be the set of all real polynomials of degree at most $2$,\n\n$$P_2(\\mathbb{R})=\\{a_0+a_1x+a_2x^2 : a_0,a_1,a_2\\in\\mathbb{R}\\},$$\n\nwith addition and scalar multiplication defined **the usual way for polynomials**:\n\n$$(a_0+a_1x+a_2x^2)+(b_0+b_1x+b_2x^2)=(a_0+b_0)+(a_1+b_1)x+(a_2+b_2)x^2,$$\n$$\\lambda(a_0+a_1x+a_2x^2)=(\\lambda a_0)+(\\lambda a_1)x+(\\lambda a_2)x^2.$$\n\nThen $P_2(\\mathbb{R})$ is a vector space over $\\mathbb{R}$.\n\n## The one idea that does most of the work\n\nTwo polynomials are equal **if and only if their corresponding coefficients are equal**. So every axiom below, which is an identity between polynomials, reduces to the same identity between the real numbers $a_i,b_i,c_i,\\lambda,\\mu$ \u2014 and those hold because $\\mathbb{R}$ itself is a field. I will spell out the reduction each time rather than re-proving the real-number fact.\n\nWrite $p=a_0+a_1x+a_2x^2$, $q=b_0+b_1x+b_2x^2$, $r=c_0+c_1x+c_2x^2$, and $\\lambda,\\mu\\in\\mathbb{R}$.\n\n## Closure\n\n$p+q$ has coefficients $a_i+b_i\\in\\mathbb{R}$, so $p+q\\in P_2(\\mathbb{R})$. Likewise $\\lambda p$ has coefficients $\\lambda a_i\\in\\mathbb{R}$, so $\\lambda p\\in P_2(\\mathbb{R})$.\n\nNote the \"at most\" is what makes this work: the highest-degree terms can cancel (e.g. $x^2+(-x^2)=0$), but the degree can never *exceed* $2$. The set of polynomials of degree **exactly** $2$ is not closed under addition and so is not a vector space.\n\n## The eight axioms\n\n**1. Commutativity of addition.**\n$$p+q=(a_0+b_0)+(a_1+b_1)x+(a_2+b_2)x^2=(b_0+a_0)+(b_1+a_1)x+(b_2+a_2)x^2=q+p,$$\nsince $a_i+b_i=b_i+a_i$ in $\\mathbb{R}$.\n\n**2. Associativity of addition.**\n$$(p+q)+r=\\big((a_i+b_i)+c_i\\big)_{i=0}^{2}\\ \\text{coefficients}=\\big(a_i+(b_i+c_i)\\big)_{i=0}^{2}\\ \\text{coefficients}=p+(q+r),$$\nby associativity of addition in $\\mathbb{R}$.\n\n**3. Zero vector.**\nTake $\\mathbf{0}=0+0x+0x^2$, which is in $P_2(\\mathbb{R})$. Then\n$$p+\\mathbf{0}=(a_0+0)+(a_1+0)x+(a_2+0)x^2=a_0+a_1x+a_2x^2=p.$$\n\n**4. Additive inverses.**\nFor each $p$, define $-p=(-a_0)+(-a_1)x+(-a_2)x^2\\in P_2(\\mathbb{R})$. Then\n$$p+(-p)=(a_0-a_0)+(a_1-a_1)x+(a_2-a_2)x^2=\\mathbf{0}.$$\n\n**5. Scalar identity.**\n$$1\\cdot p=(1a_0)+(1a_1)x+(1a_2)x^2=a_0+a_1x+a_2x^2=p,$$\nsince $1$ is the multiplicative identity in $\\mathbb{R}$.\n\n**6. Distributivity of scalar multiplication over vector addition.**\n$$\\lambda(p+q)=\\big(\\lambda(a_0+b_0)\\big)+\\big(\\lambda(a_1+b_1)\\big)x+\\big(\\lambda(a_2+b_2)\\big)x^2$$\n$$=(\\lambda a_0+\\lambda b_0)+(\\lambda a_1+\\lambda b_1)x+(\\lambda a_2+\\lambda b_2)x^2=\\lambda p+\\lambda q,$$\nby distributivity in $\\mathbb{R}$. I verified this identity symbolically for generic coefficients; the difference of the two sides simplifies to $0$.\n\n**7. Distributivity over scalar addition.**\n$$(\\lambda+\\mu)p=\\big((\\lambda+\\mu)a_0\\big)+\\big((\\lambda+\\mu)a_1\\big)x+\\big((\\lambda+\\mu)a_2\\big)x^2$$\n$$=(\\lambda a_0+\\mu a_0)+(\\lambda a_1+\\mu a_1)x+(\\lambda a_2+\\mu a_2)x^2=\\lambda p+\\mu p.$$\nThis one was also checked symbolically; the two sides agree coefficientwise.\n\n**8. Compatibility of scalar multiplication.**\n$$\\lambda(\\mu p)=\\lambda\\big((\\mu a_0)+(\\mu a_1)x+(\\mu a_2)x^2\\big)=(\\lambda\\mu a_0)+(\\lambda\\mu a_1)x+(\\lambda\\mu a_2)x^2=(\\lambda\\mu)p,$$\nby associativity of multiplication in $\\mathbb{R}$.\n\n## Conclusion\n\nAll closure requirements and all eight axioms hold, so $P_2(\\mathbb{R})$ with these operations is a vector space over $\\mathbb{R}$.\n\n**Faster route once you have the machinery.** The coefficient map $a_0+a_1x+a_2x^2\\mapsto(a_0,a_1,a_2)$ is a bijection $P_2(\\mathbb{R})\\to\\mathbb{R}^3$ that preserves both operations, so $P_2(\\mathbb{R})$ inherits the vector space structure of $\\mathbb{R}^3$; equivalently, $P_2(\\mathbb{R})$ is a subspace of the polynomial ring $\\mathbb{R}[x]$, and a subspace check needs only closure under addition and scalar multiplication plus containing $\\mathbf{0}$.",
+      "generated_at": "2026-09-30T03:01:12+00:00",
+      "duration_seconds": 63.7,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "0f06299c2d78bdbc50e07f6839afb69e8edd39e44d6d8ca817fd39e68fc750de",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "Now give the full proof that the real polynomials of degree at most 2 form a vector space.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-multiturn-narrow": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Because closure alone doesn't guarantee the set is nonempty or that it contains an additive identity \u2014 the empty set is vacuously closed under both operations, yet it isn't a vector space. Verifying $\\mathbf{0} \\in S$ (here, that $0x^2+0x+0$ has degree $\\le 2$) pins down the one element every vector space must have: the additive identity is unique, so a subset can only inherit the ambient $\\mathbf{0}$, never supply its own. It's also the cheapest nonemptiness test \u2014 one check that simultaneously rules out the empty set and confirms the identity axiom, which is why the subspace test uses it instead of listing all eight axioms.",
+      "generated_at": "2026-09-30T03:01:21+00:00",
+      "duration_seconds": 9.0,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "43612c8f98ed0337be09efa566765983b58ef1e789bb422e65d68030777394eb",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "Why did you check that the zero polynomial is included? Answer just that point.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "request-more-depth-heldout": {
+      "tool_calls": [
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "operation": "eigenvalues",
+            "matrix": [
+              [
+                "1",
+                "2"
+              ],
+              [
+                "2",
+                "1"
+              ]
+            ]
+          },
+          "raw_arguments": "{\"operation\": \"eigenvalues\", \"matrix\": [[\"1\", \"2\"], [\"2\", \"1\"]]}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": {
+              "3": 1,
+              "-1": 1
+            }
+          }
+        },
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "operation": "eigenvalues",
+            "matrix": [
+              [
+                "0.5",
+                "2.5"
+              ],
+              [
+                "2.5",
+                "0.5"
+              ]
+            ]
+          },
+          "raw_arguments": "{\"operation\": \"eigenvalues\", \"matrix\": [[\"0.5\", \"2.5\"], [\"2.5\", \"0.5\"]]}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": {
+              "-2.00000000000000": 1,
+              "3.00000000000000": 1
+            }
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "Matrix([[1,2],[2,1]])*Matrix([1,-1])"
+          },
+          "raw_arguments": "{\"expression\": \"Matrix([[1,2],[2,1]])*Matrix([1,-1])\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "simplify((v.dot(lam*v))/(norm(v)*norm(lam*v)))"
+          },
+          "raw_arguments": "{\"expression\": \"simplify((v.dot(lam*v))/(norm(v)*norm(lam*v)))\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Could not read the expression: AttributeError"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "factor((1-x)*(1-x) - 4)"
+          },
+          "raw_arguments": "{\"expression\": \"factor((1-x)*(1-x) - 4)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(x - 3)*(x + 1)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "factor((0.5-x)*(0.5-x) - 2.5**2)"
+          },
+          "raw_arguments": "{\"expression\": \"factor((0.5-x)*(0.5-x) - 2.5**2)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "1.0*x**2 - 1.0*x - 6.0"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "expand((a-x)*(a-x) - b**2)"
+          },
+          "raw_arguments": "{\"expression\": \"expand((a-x)*(a-x) - b**2)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "a**2 - 2*a*x - b**2 + x**2"
+          }
+        },
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "matrix": [
+              [
+                "0",
+                "1"
+              ],
+              [
+                "1",
+                "0"
+              ]
+            ],
+            "operation": "eigenvalues"
+          },
+          "raw_arguments": "{\"matrix\": [[\"0\", \"1\"], [\"1\", \"0\"]], \"operation\": \"eigenvalues\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": {
+              "-1": 1,
+              "1": 1
+            }
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "((0)*(1) + (1)*(-1), (1)*(1) + (0)*(-1))"
+          },
+          "raw_arguments": "{\"expression\": \"((0)*(1) + (1)*(-1), (1)*(1) + (0)*(-1))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(-1, 1)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(-4)/(sqrt(2)*sqrt(8))"
+          },
+          "raw_arguments": "{\"expression\": \"(-4)/(sqrt(2)*sqrt(8))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "-1"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "((1)*(-1) + (-1)*(1))/(sqrt(1+1)*sqrt(1+1))"
+          },
+          "raw_arguments": "{\"expression\": \"((1)*(-1) + (-1)*(1))/(sqrt(1+1)*sqrt(1+1))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "-1"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(a - b)*(1) + (b - a)*(-1)"
+          },
+          "raw_arguments": "{\"expression\": \"(a - b)*(1) + (b - a)*(-1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "2*a - 2*b"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "exp(I*pi)"
+          },
+          "raw_arguments": "{\"expression\": \"exp(I*pi)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "-1"
+          }
+        },
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "matrix": [
+              [
+                "0",
+                "-1"
+              ],
+              [
+                "1",
+                "0"
+              ]
+            ],
+            "operation": "eigenvalues"
+          },
+          "raw_arguments": "{\"matrix\": [[\"0\", \"-1\"], [\"1\", \"0\"]], \"operation\": \"eigenvalues\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": {
+              "-I": 1,
+              "I": 1
+            }
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "((1)*1 + (2)*1, (2)*1 + (1)*1)"
+          },
+          "raw_arguments": "{\"expression\": \"((1)*1 + (2)*1, (2)*1 + (1)*1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(3, 3)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(3*(1) - 1*(1), 3*(1) - 1*(-1))"
+          },
+          "raw_arguments": "{\"expression\": \"(3*(1) - 1*(1), 3*(1) - 1*(-1))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(2, 4)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1*3 + 2*1, 2*3 + 1*1)"
+          },
+          "raw_arguments": "{\"expression\": \"(1*3 + 2*1, 2*3 + 1*1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(5, 7)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "((1)*3 + (1)*3)/(sqrt(2)*sqrt(18))"
+          },
+          "raw_arguments": "{\"expression\": \"((1)*3 + (1)*3)/(sqrt(2)*sqrt(18))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "1"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "1*1 - 2*2"
+          },
+          "raw_arguments": "{\"expression\": \"1*1 - 2*2\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "-3"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(0.5*1 + 2.5*(-1), 2.5*1 + 0.5*(-1))"
+          },
+          "raw_arguments": "{\"expression\": \"(0.5*1 + 2.5*(-1), 2.5*1 + 0.5*(-1))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(-2.0, 2.0)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(0.5*1 + 2.5*1, 2.5*1 + 0.5*1)"
+          },
+          "raw_arguments": "{\"expression\": \"(0.5*1 + 2.5*1, 2.5*1 + 0.5*1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(3.0, 3.0)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "lam*v - v*lam"
+          },
+          "raw_arguments": "{\"expression\": \"lam*v - v*lam\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "0"
+          }
+        }
+      ],
+      "rounds": 9,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## The short version\n\nAn eigenvector is a direction the matrix cannot rotate \u2014 it can only stretch, shrink, or flip it. The eigenvalue is *how much* it does that, with a sign. A negative eigenvalue means the output lands on the **opposite ray** of the same line: same eigenline, opposite direction.\n\n---\n\n## 1. Where the \"reversal\" comes from: the eigenvalue equation\n\nThe definition is\n\n$$A v = \\lambda v, \\qquad v \\neq 0 .$$\n\nRead it as a constraint. For a general vector, $Ax$ can point anywhere. For an eigenvector, the equation *forces* $Av$ to be a scalar multiple of $v$ \u2014 so $Av$ must lie on the line $\\operatorname{span}\\{v\\}$. The only freedom left is the scalar $\\lambda$, and a scalar on a line has exactly three possibilities:\n\n| $\\lambda$ | Effect on $v$ |\n|---|---|\n| $\\lambda > 0$ | stays on the same ray (stretches/shrinks) |\n| $\\lambda = 0$ | collapses to $\\mathbf 0$ (direction destroyed) |\n| $\\lambda < 0$ | lands on the **opposite ray** \u2014 reversed |\n\nSo \"reversal\" is not an extra property of negative eigenvalues; it is what a negative multiplier *means* geometrically.\n\n### Proving the angle is exactly $180^\\circ$\n\nTake the angle $\\theta$ between $v$ and $Av$, using the dot product. Assume $A$ and $v$ are real and $\\lambda \\neq 0$:\n\n$$\\cos\\theta=\\frac{v\\cdot(A v)}{\\lVert v\\rVert\\,\\lVert A v\\rVert}\n=\\frac{v\\cdot(\\lambda v)}{\\lVert v\\rVert\\,\\lVert \\lambda v\\rVert}\n=\\frac{\\lambda\\,\\lVert v\\rVert^{2}}{\\lvert\\lambda\\rvert\\,\\lVert v\\rVert^{2}}\n=\\frac{\\lambda}{\\lvert\\lambda\\rvert}.$$\n\nTherefore\n\n$$\\cos\\theta=\\begin{cases}+1 & \\lambda>0 \\;\\Rightarrow\\; \\theta=0^\\circ\\\\[2pt] -1 & \\lambda<0 \\;\\Rightarrow\\; \\theta=180^\\circ.\\end{cases}$$\n\n$\\cos\\theta=-1$ is precisely \"antiparallel\": $Av$ points exactly backwards along $v$. Note that $\\lVert Av\\rVert = |\\lambda|\\,\\lVert v\\rVert$, so the *amount* of reversal is carried by $|\\lambda|$ and the *direction* by the sign \u2014 the two roles are cleanly separated.\n\nOne subtlety worth stating: eigenvectors are only defined up to sign ($v$ and $-v$ are the same eigenvector), so \"reversal\" must be phrased as *antiparallel to its input*, which is well-defined, rather than as a specific arrow.\n\n---\n\n## 2. A geometric example: $A=\\begin{pmatrix}1&2\\\\2&1\\end{pmatrix}$\n\n**Eigenvalues.** $\\det(A-\\lambda I)=(1-\\lambda)^2-4=\\lambda^2-2\\lambda-3=(\\lambda-3)(\\lambda+1)$, so\n\n$$\\lambda_1=3,\\qquad \\lambda_2=-1 .$$\n\n**Eigenvectors.** $\\lambda_1=3 \\Rightarrow v_1=\\binom{1}{1}$ (the line $y=x$); $\\lambda_2=-1 \\Rightarrow v_2=\\binom{1}{-1}$ (the line $y=-x$).\n\n**Check both by hand:**\n\n$$A\\binom{1}{1}=\\binom{1\\cdot1+2\\cdot1}{2\\cdot1+1\\cdot1}=\\binom{3}{3}=3\\binom{1}{1},$$\n\n$$A\\binom{1}{-1}=\\binom{1-2}{2-1}=\\binom{-1}{1}=-1\\binom{1}{-1}.$$\n\nGeometrically: the line $y=x$ is stretched by 3 with no turn. The line $y=-x$ is invariant as a *set* \u2014 every vector on it stays on it \u2014 but each vector jumps to the other side of the origin. $(1,-1)$ (pointing down-right) becomes $(-1,1)$ (pointing up-left). Same line, opposite ray.\n\n**What happens to a vector that is *not* an eigenvector** \u2014 this is where students often over-generalize. Take $x=\\binom{1}{2}$. Decompose it in the eigenbasis:\n\n$$\\binom{1}{2}=\\tfrac32\\binom{1}{1}-\\tfrac12\\binom{1}{-1}.$$\n\nApply $A$ componentwise, each piece scaled by *its own* eigenvalue:\n\n$$A\\binom{1}{2}=\\tfrac32(3)\\binom{1}{1}-\\tfrac12(-1)\\binom{1}{-1}\n=\\tfrac92\\binom{1}{1}+\\tfrac12\\binom{1}{-1}=\\binom{5}{7}.$$\n\nDirect multiplication gives $A\\binom{1}{2}=\\binom{1+4}{2+2}=\\binom{5}{7}$ \u2713. Notice the mechanism: the $v_1$-coefficient grew $\\tfrac32\\to\\tfrac92$, while the $v_2$-coefficient **changed sign**, $-\\tfrac12\\to+\\tfrac12$. That sign change is the negative eigenvalue doing its work. The output $\\binom{5}{7}$ is not reversed relative to $\\binom{1}{2}$ \u2014 a negative eigenvalue reverses only *its own* direction, not the whole plane.\n\n**Why the determinant tells you something here.** $\\det A = 1\\cdot1-2\\cdot2=-3=\\lambda_1\\lambda_2$. A negative determinant for a real $2\\times2$ means an odd number of negative eigenvalues, i.e. the map is orientation-reversing. The flip in one eigen-direction is exactly what flips orientation.\n\n---\n\n## 3. Two illuminating special cases\n\n**Pure reflection.** $R=\\begin{pmatrix}0&1\\\\1&0\\end{pmatrix}$ (reflect across $y=x$) has eigenvalues $+1$ and $-1$. The $+1$ eigenspace is the mirror line itself (fixed pointwise); the $-1$ eigenspace is the direction that gets reversed: $R\\binom{1}{-1}=\\binom{-1}{1}$. So a reflection *is* \"a negative eigenvalue acting on one direction.\" In general, a reflection across a hyperplane has eigenvalue $-1$ on the normal direction.\n\n**Rotation has none.** $\\begin{pmatrix}0&-1\\\\1&0\\end{pmatrix}$ (rotate $90^\\circ$) has eigenvalues $\\pm i$. No real eigenvalues means no real direction is merely scaled \u2014 every real direction genuinely turns. That is the honest boundary of the phrase \"reverses a vector\": it applies to **real** negative eigenvalues. (And $e^{i\\pi}=-1$ is the complex analogue: multiplying by $-1$ *is* a rotation by $\\pi$.)\n\n**A stronger flip.** $B=\\begin{pmatrix}0.5&2.5\\\\2.5&0.5\\end{pmatrix}$ has eigenvalues $3$ and $-2$: $B\\binom{1}{-1}=\\binom{-2}{2}=-2\\binom{1}{-1}$. Here the reversal comes with a doubling of length \u2014 $|\\lambda|=2$ stretches, $\\lambda<0$ flips.\n\n---\n\n## 4. Why this matters dynamically\n\n**Discrete iteration** $x_{n+1}=Ax_n$. Along an eigendirection, $A^nv=\\lambda^nv$. With $\\lambda<0$,\n\n$$\\lambda^n = (-1)^n|\\lambda|^n \\;\\Rightarrow\\; v,\\;\\lambda v,\\;\\lambda^2v,\\dots = v,\\; -|\\lambda|v,\\; |\\lambda|^2v,\\dots$$\n\nThe state **oscillates** across the origin every step (a flip-flop), growing if $|\\lambda|>1$ and decaying if $|\\lambda|<1$. Positive eigenvalues give monotone motion; negative ones give alternating motion. This is the origin of oscillatory/overshooting behavior in discrete linear systems, and of negative eigenvalues of a Jacobian marking a \"flip\" (period-doubling) direction.\n\n**Continuous flow** $\\dot x = Ax$: the mode is $e^{\\lambda t}v$. A negative real $\\lambda$ gives $e^{\\lambda t}\\to0$ \u2014 pure decay along that direction, with **no** sign alternation, because $e^{\\lambda t}>0$ always. So \"negative eigenvalue $=$ reversal\" is a statement about the *map* $A$ itself (and about $x\\mapsto Ax$), not about the continuous-time flow it generates.\n\n**Symmetric matrices.** If $A$ is symmetric, eigenvectors for distinct eigenvalues are orthogonal, so the decomposition $x=\\sum_i c_iv_i$ in \u00a72 is an orthogonal one, and $A$ is literally \"stretch by $\\lambda_i$ along mutually perpendicular axes.\" Negative $\\lambda_i$ flips that axis. If *all* eigenvalues are negative ($A$ negative definite), then $x^TAx<0$ for every $x\\neq0$: every direction's component is reversed, which is why $-A$ is positive definite and $A$ has a maximum rather than a minimum at a critical point.\n\n---\n\n### The one-line summary\n\n$Av=\\lambda v$ pins $Av$ to the line through $v$; the sign of $\\lambda$ picks which ray of that line it lands on. $\\lambda<0$ picks the opposite ray, and $\\cos\\theta=\\lambda/|\\lambda|=-1$ makes \"opposite ray\" mean a $180^\\circ$ reversal \u2014 while $|\\lambda|$ independently sets the change in length.",
+      "generated_at": "2026-09-30T03:06:31+00:00",
+      "duration_seconds": 309.94,
+      "system_prompt_tokens": 1556,
+      "assembled_prompt_sha256": "961482f998a852e8bc6b50565f7f748ea310dbf3905d6c6240e7f6a662ccf0c8",
+      "assembled_system_prompt_sha256": "9e82a1f6cc89f38eb0d4bb95c04cb666265cc8bed5e673f6dd5fb76bc7176dd1",
+      "tool_schema_tokens": 1823,
+      "user": "Explain why a negative eigenvalue reverses a vector, with a derivation and geometric example. Go into detail.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+          "agent_prompt_source": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

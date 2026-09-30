@@ -90,6 +90,57 @@ misses keep PLA-461 **In Progress**. This is not owner or independent human acce
 The synthetic nicknamed-source case, final combined signed-app behavior and native
 acceptance belong to the later integrated candidate review; none is claimed here.
 
+## Selected-page delivery correction
+
+The current application source is `d3eae5b3a1fa5dde3f733a9b4a0f67dbe6691a0d`.
+It repairs two failures found on the reconciled PR #104 head at an 8,192-token window:
+an explicitly named text page spent context room on an unnecessary image and then
+could not carry a successful page-read tool reply (HTTP 503, `context_overflow`);
+a requested matrix image reached the model while its short native text was absent
+from the system context. Instrumented baseline planning charged 1,823 tool-schema
+tokens, 1,640 system tokens and an attached image, leaving zero retrieval room.
+The correction retains images for scans, figures and layout requests, omits only
+optional response-shape examples and condenses unavailable-capability labels on
+attached-image turns, reads an explicitly named physical text page when its indexed
+chunk starts on another page, and reserves up to 1,024 tokens for a text-page tool
+continuation. The selected document ID still bounds both direct text and tool reads.
+An inventory-provided display label supplies the page citation, so an effective
+nickname can be used after PLA-576 integration.
+
+Local exact-source checks: 3,930 backend tests passed / one skipped; the five focused
+upload-to-chat browser acceptance cases passed, including both formerly failing
+cases; TypeScript, targeted ESLint, Ruff, docs links and active-reference checks
+passed. Hosted PR #104 full-stack acceptance passed on
+[run 36662208691](https://github.com/oliverdougherC/Lyra/actions/runs/36662208691).
+Its Rust tests passed, but the audit-tool installation job failed while the hosted
+runner could not resolve `index.crates.io`; this is a separate CI infrastructure
+failure, not semantic acceptance or native-app verification.
+
+Two clean production `class_chat` reruns on that application source retained all
+16 terminal answers, tools and stop reasons:
+[A answers](delivery-r5-a-runs.json), [A metadata](delivery-r5-a-meta.json),
+[B answers](delivery-r5-b-runs.json), [B metadata](delivery-r5-b-meta.json).
+They used the same configured Qwen3.8-Flash-Next endpoint and settings as C/D.
+For no-document cases, the assembled system and full first-request hashes match
+the prior C/D runs despite route-source changes; these are fresh observations,
+not reused v2 or v3 outputs. All cases stopped `completed`.
+
+| Request | A / B words | Direct reading of final answers |
+|---|---:|---|
+| Conversational vector-space definition | 125 / 136 | Correct core definition, but both enumerate the axioms and related examples after a conversational question; brevity still varies. |
+| Polynomial first move | 104 / 99 | B gives one useful addition-closure move; A also asks for scalar multiplication, beyond one move. |
+| Convolution attempt | 171 / 186 | Both identify the actual lost $\tau$ and valid overlap. Both add the second limit error and more explanation than requested. |
+| Explicit full convolution | 281 / 225 | Both derive the correct piecewise answer. A appends an overgeneralized “number of cases = pulse edges + 1” rule; B's continuity aside omits the integrability conditions behind its claim. Core solution is sound, auxiliary advice is not a general rule. |
+| Held-out detailed negative eigenvalue | 936 / 768 | Both distinguish the discrete sign flip from continuous $e^{\lambda t}v$ decay, repairing the previous C error. Both add substantial unrequested applications; B's determinant-sign claim omits the zero-eigenvalue exception. The requested derivation and geometric example are correct on direct reading. |
+| Formal vector definition / scalar follow-up | 349 / 88 (A only) | Formal answer covers the axioms. The scalar follow-up prints the wrong codomain $F\times V\to F$ before correcting itself to $F\times V\to V$, an avoidable mathematical error in a narrow answer. |
+| Multi-turn full proof / narrow zero follow-up | 399 / 106 (A only) | The full polynomial proof is correct but uses a long axiom-by-axiom route; the narrow follow-up explains the identity correctly with more context than requested. |
+
+These reruns show the page-evidence delivery repair did not solve the remaining
+response-quality variance. The rubric is direct implementer review with subsequent
+independent corrections to the earlier C/D findings; it is not owner or independent
+human acceptance. PLA-461 remains **In Progress**. The combined synthetic
+nicknamed-source live case and isolated signed-app acceptance remain separate gates.
+
 ## Original v3 comparison
 
 The baseline used [baseline-corpus.json](baseline-corpus.json), a copy of the
