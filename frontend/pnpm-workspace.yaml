@@ -2,13 +2,14 @@
 # resolve a nested 0.16.x whose emitted classes mismatch the 0.18.x stylesheet we import.
 overrides:
   katex: 0.18.1
-  # fast-uri <3.1.7 carries high-severity SSRF / host-confusion advisories
+  # fast-uri <3.1.8 carries SSRF / host-confusion and host-normalization advisories
   # (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf,
-  # GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, GHSA-58mr-gqgx-xq4g). It is pulled
+  # GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, GHSA-58mr-gqgx-xq4g,
+  # GHSA-hrr3-gc8f-f4qj). It is pulled
   # in via @hookform/resolvers -> ajv 8.20.0 (fast-uri: ^3.0.1), which pnpm
-  # resolves to a locked 3.1.5; pin the patched 3.x line without touching the
+  # previously resolved to a vulnerable 3.x; pin the patched line without touching the
   # declared ajv range.
-  'fast-uri@': 3.1.7
+  'fast-uri@': 3.1.8
 
 allowBuilds:
   # These reviewed packages install platform-specific binaries used by the
@@ -19,4 +20,4 @@ allowBuilds:
   unrs-resolver: true
 
 minimumReleaseAgeExclude:
-  - fast-uri@3.1.7
+  - fast-uri@3.1.8
