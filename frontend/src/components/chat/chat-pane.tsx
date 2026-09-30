@@ -25,7 +25,6 @@ import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   ApiError,
   api,
@@ -61,26 +60,13 @@ import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
-import type { AgentChatActivity, ChatEvent, ChatMode, MessageRead, WriterActivity } from '@/types'
+import type { AgentChatActivity, ChatEvent, MessageRead, WriterActivity } from '@/types'
 
 let nextAgentObservationOwner = 0
 
-const MODES: { value: ChatMode; label: string; hint: string }[] = [
-  {
-    value: 'guide',
-    label: 'Guide me',
-    hint: 'Lyra works toward your understanding - explaining, scaffolding, checking in - at a pace you can follow.',
-  },
-  {
-    value: 'show',
-    label: 'Show solution',
-    hint: 'Lyra works through the full answer, start to finish.',
-  },
-]
-
 /**
  * The pane in the draft workspace's rail: same conversation surface, a different
- * answerer. No Guide/Show - there is one writer - and turns go to the writer endpoint,
+ * answerer. Writer turns go to the writer endpoint,
  * which narrates its tool calls as activity frames and reports landed side effects.
  */
 type WriterVariant = {
@@ -241,7 +227,6 @@ export function ChatPane({
     : 'Lyra needs a tutor endpoint before it can answer. Everything else already works offline.'
 
   const sessionId = sessionIdProp
-  const [mode, setMode] = useState<ChatMode>('guide')
   const [draft, setDraft] = useState(initialAsk ?? '')
   const [draftStorageWarning, setDraftStorageWarning] = useState(false)
   const [draftSettlementWarning, setDraftSettlementWarning] = useState(false)
@@ -360,11 +345,8 @@ export function ChatPane({
     () => getChatDraftSettlementVersion(currentDraftScope),
     () => 0,
   )
-  const newestMode = newestSession?.mode
-  const activeMode =
-    sessionId === null && !isDraft && !writer && newestMode !== 'writer'
-      ? (newestMode ?? mode)
-      : mode
+  // The tutor API still requires a legacy mode field; both values share one contract.
+  const activeMode = 'guide' as const
 
   const {
     data: persisted,
@@ -436,7 +418,6 @@ export function ChatPane({
           scopeVersion: draftScopeVersionRef.current,
         }
         if (mountedRef.current) onSessionIdChange?.(session.id)
-        if (session.mode !== 'writer') setMode(session.mode)
         return session.id
       } catch {
         toast.error(
@@ -1247,9 +1228,9 @@ export function ChatPane({
                   ? await api.regenerateAgentChat(
                       classId,
                       turnSessionId,
-                      // A manual regeneration uses the CURRENT selection, like the tutor's;
-                      // a body-less one (the just-in-time continuation) keeps the stored scope.
-                      { mode: activeMode, documentId: agentDocumentId },
+                      // A manual regeneration uses the current source selection; the
+                      // retired style field is omitted.
+                      { documentId: agentDocumentId },
                       controller.signal,
                       onAgentEvent,
                     )
@@ -1259,7 +1240,7 @@ export function ChatPane({
                       content,
                       undefined,
                       agentDocumentId,
-                      activeMode,
+                      undefined,
                       // PLA-313: one operation ID per logical Send. It is minted by `send`
                       // and retained across ambiguous failures so a resubmit reconciles
                       // instead of duplicating.
@@ -2159,54 +2140,6 @@ export function ChatPane({
     return () => observer.disconnect()
   }, [followTailSoon])
 
-  // A segmented control rather than underlined tabs. These do not navigate anywhere - they
-  // change how the next answer is written. In the header bar there is no pane rule for an
-  // underline to sit on, so the honest idiom is a switch with a travelling thumb.
-  // The writer has no pedagogy modes - there is one writer. The contextual agent keeps
-  // them: the mode still governs how the work is presented, and the shared mode contract
-  // inherits it (the agent plans tools, it does not own the pedagogy).
-  const modeToggle = writer ? null : (
-    <div
-      className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
-      role="group"
-      aria-label="Answer style"
-    >
-      {MODES.map((option) => (
-        <Tooltip key={option.value}>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-pressed={activeMode === option.value}
-              className={cn(
-                'h-7 rounded-full px-3 text-xs transition-colors duration-150',
-                activeMode === option.value
-                  ? 'bg-card text-foreground hover:bg-card shadow-sm'
-                  : 'text-text-secondary hover:bg-transparent hover:text-foreground',
-              )}
-              onClick={() => {
-                if (!inline && sessionId === null && activeSessionId !== null) {
-                  onSessionIdChange?.(activeSessionId)
-                }
-                setMode(option.value)
-              }}
-            >
-              {option.label}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{option.hint}</TooltipContent>
-        </Tooltip>
-      ))}
-    </div>
-  )
-
-  const paneControls = (
-    <div className="flex items-center gap-1.5">
-      {modeToggle}
-      {headerActions}
-    </div>
-  )
-
   const conversation = (
     <div
       ref={contentRef}
@@ -2323,17 +2256,12 @@ export function ChatPane({
 
   if (inline) {
     // No scroll container of its own and no header rule: this is a passage of the page it
-    // was opened inside, not a panel sitting on top of one. The writer variant usually
-    // has neither a toggle nor actions, and an empty control row would be a blank gap.
+    // was opened inside, not a panel sitting on top of one. An empty control row
+    // would be a blank gap.
     return (
       <div className="flex flex-col gap-4">
-        {modeToggle || headerActions ? (
-          <div className="flex items-center gap-2">
-            {modeToggle}
-            {headerActions ? (
-              <div className="ml-auto flex shrink-0 items-center gap-1">{headerActions}</div>
-            ) : null}
-          </div>
+        {headerActions ? (
+          <div className="ml-auto flex shrink-0 items-center gap-1">{headerActions}</div>
         ) : null}
         {conversation}
         {composer}
@@ -2348,10 +2276,10 @@ export function ChatPane({
           a word the breadcrumb above it and the composer below it both already imply.
           Narrow, that header is already holding a breadcrumb, Profile, and the endpoint
           badge in 375px, so the controls stay in the pane instead of crushing it. */}
-      {layout === 'assistant' ? null : wide ? (
-        <HeaderActions>{paneControls}</HeaderActions>
+      {layout === 'assistant' || !headerActions ? null : wide ? (
+        <HeaderActions>{headerActions}</HeaderActions>
       ) : (
-        <div className="flex shrink-0 items-center gap-2 px-4 pt-3">{paneControls}</div>
+        <div className="flex shrink-0 items-center gap-2 px-4 pt-3">{headerActions}</div>
       )}
 
       <div className="relative min-h-0 flex-1">

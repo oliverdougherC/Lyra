@@ -1,0 +1,637 @@
+{
+  "cases": {
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1 - exp(-t)) - (1 - exp(-(t-1)))",
+            "compare_to": "exp(1-t) - exp(-t)"
+          },
+          "raw_arguments": "{\"expression\": \"(1 - exp(-t)) - (1 - exp(-(t-1)))\", \"compare_to\": \"exp(1-t) - exp(-t)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right; two things go wrong inside the integral, and they're independent of each other.\n\n## The integrand error (the big one)\n\n$$h(t-\\tau) = e^{-(t-\\tau)}\\,u(t-\\tau)$$\n\nThe $\\tau$ is **inside** the exponential. You wrote $e^{-t}$, which drops the $e^{\\tau}$ factor \u2014 that's what turned a $1-e^{-t}$ into a $t e^{-t}$. Once $\\tau$ is gone from the integrand, integrating over $\\tau$ just multiplies by the interval length, which is exactly the $t$ out front in your answer.\n\nCorrected step, keeping your method:\n\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = e^{-t}\\int_0^t e^{\\tau}\\,d\\tau = e^{-t}\\left(e^{t}-1\\right) = 1-e^{-t}, \\qquad 0<t<1$$\n\nNote the difference: $e^{-t}$ *can* come out of the integral, but only because you leave $e^{\\tau}$ behind. $t e^{-t}$ vs. $1-e^{-t}$ at $t=1$: $0.368$ vs. $0.632$.\n\n## The limits error\n\nThe limits aren't $0$ to $t$ for all $t>0$. Two constraints multiply:\n\n- $x(\\tau) \\ne 0$ only for $0 \\le \\tau \\le 1$\n- $u(t-\\tau) \\ne 0$ only for $\\tau \\le t$\n\nSo the overlap is $0 \\le \\tau \\le \\min(t,1)$, and the upper limit **saturates at 1** once $t>1$. Your $0 \\to t$ happens to be correct on $0<t<1$, which is why the range looks fine there.\n\n## Result\n\n$$y(t) = \\begin{cases} 0, & t < 0 \\\\[4pt] 1 - e^{-t}, & 0 \\le t < 1 \\\\[4pt] \\displaystyle\\int_0^1 e^{-(t-\\tau)}d\\tau = e^{1-t} - e^{-t} = (e-1)e^{-t}, & t \\ge 1 \\end{cases}$$\n\nSanity checks: at $t=1$ both branches give $1 - e^{-1} \\approx 0.632$, so $y$ is continuous (as it must be, since both $x$ and $h$ are bounded with finite area). And $y$ rises on $[0,1]$ then decays like $e^{-t}$ \u2014 the pulse has fully entered the system and the exponential is just ringing down.",
+      "generated_at": "2026-09-30T00:20:19+00:00",
+      "duration_seconds": 47.38,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "f77d581f7508e30448c8043b200d772f7fba0b4ee4ea144997b64fa8726790d5",
+      "assembled_system_prompt_sha256": "9c545cf933b0523ed92f07580d096b510b6a67e0ff428c9039ae5c4379af111b",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c52ac698c62f10cfaf70face1aba3305bb8240ae",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "5a12f5fcb5d8a61ee808afde2fc4826a4eb1481771a0d8488063233094552731",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a4087ec510e55d09ff03e4c920ad653b274841e5adce477efb55d8d688b18a95",
+          "agent_prompt_source": "68b46f8947bc4a4985a955b49a69c3d87a334a73e7c462b5668957a16c67b28d",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(t-tau))*u(t-tau), tau, 0, 1)",
+            "compare_to": "(1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(t-tau))*u(t-tau), tau, 0, 1)\", \"compare_to\": \"(1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "diff((1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1), t) + (1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1)",
+            "compare_to": "u(t) - u(t-1)"
+          },
+          "raw_arguments": "{\"expression\": \"diff((1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1), t) + (1 - exp(-t))*u(t) - (1 - exp(-(t-1)))*u(t-1)\", \"compare_to\": \"u(t) - u(t-1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": false,
+            "difference": "exp(1 - t)*DiracDelta(t - 1) + DiracDelta(t) - DiracDelta(t - 1) - exp(-t)*DiracDelta(t)",
+            "certain": false,
+            "note": "Not settled either way: the difference did not reduce to zero, and could not be shown to be nonzero either. This is not a disagreement, and the two expressions may well be equal.",
+            "comparison_status": "unresolved",
+            "interpretation": "The computation ran, but equality of the submitted expressions is unresolved. This establishes neither agreement nor disagreement. Do not claim verification from this result."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "diff(1 - exp(-t), t) + (1 - exp(-t))"
+          },
+          "raw_arguments": "{\"expression\": \"diff(1 - exp(-t), t) + (1 - exp(-t))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "1"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "diff(exp(1-t) - exp(-t), t) + (exp(1-t) - exp(-t))"
+          },
+          "raw_arguments": "{\"expression\": \"diff(exp(1-t) - exp(-t), t) + (exp(1-t) - exp(-t))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "0"
+          }
+        },
+        {
+          "name": "search_documents",
+          "arguments": {
+            "query": "convolution"
+          },
+          "raw_arguments": "{\"query\": \"convolution\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        }
+      ],
+      "rounds": 5,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## Result first\n\nWith $x(t)=u(t)-u(t-1)$ (the unit pulse on $[0,1]$) and $h(t)=e^{-t}u(t)$,\n\n$$\ny(t)=(x*h)(t)=\n\\begin{cases}\n0, & t<0\\\\[4pt]\n1-e^{-t}, & 0\\le t<1\\\\[4pt]\ne^{\\,1-t}-e^{-t}=(e-1)e^{-t}, & t\\ge 1\n\\end{cases}\n\\qquad=\\qquad\n\\bigl(1-e^{-t}\\bigr)u(t)-\\bigl(1-e^{-(t-1)}\\bigr)u(t-1).\n$$\n\nHere is how to get there.\n\n---\n\n## Step 1 \u2014 Write the definition with the pulse made explicit\n\n$$\ny(t)=\\int_{-\\infty}^{\\infty}x(\\tau)\\,h(t-\\tau)\\,d\\tau\n=\\int_{-\\infty}^{\\infty}\\bigl[u(\\tau)-u(\\tau-1)\\bigr]\\,e^{-(t-\\tau)}u(t-\\tau)\\,d\\tau .\n$$\n\nThe factor $u(\\tau)-u(\\tau-1)$ is $1$ on $0\\le\\tau\\le1$ and $0$ elsewhere, so it kills the limits of integration:\n\n$$\ny(t)=\\int_{0}^{1} e^{-(t-\\tau)}\\,u(t-\\tau)\\,d\\tau .\n$$\n\n**Rule used:** the convolution integral, plus the sifting effect of multiplying by an indicator function.\n\n## Step 2 \u2014 Find where the integrand survives\n\nThe remaining step factor $u(t-\\tau)$ is $1$ exactly when $t-\\tau\\ge0$, i.e. $\\tau\\le t$. So the integrand is nonzero only on the overlap\n\n$$\n0\\le\\tau\\le1 \\quad\\text{and}\\quad \\tau\\le t\n\\qquad\\Longrightarrow\\qquad\n\\tau\\in[\\,0,\\ \\min(t,1)\\,],\n$$\n\nwhich is **empty when $t<0$**. This is the whole problem in one line: the upper limit is $\\min(t,1)$, and it changes formula at $t=0$ and $t=1$.\n\n*Graphical version of the same statement:* flip $h$ to get $h(-\\tau)=e^{\\tau}u(-\\tau)$, slide it by $t$, and ask how much of the sliding exponential overlaps the fixed window $[0,1]$. No overlap for $t<0$, partial overlap for $0<t<1$, full overlap for $t>1$.\n\n## Step 3 \u2014 Integrate on each window\n\n**Case $t<0$.** Empty overlap, so $y(t)=0$.\n\n**Case $0\\le t<1$.** Overlap is $[0,t]$:\n\n$$\ny(t)=\\int_{0}^{t}e^{-(t-\\tau)}d\\tau\n=e^{-t}\\int_{0}^{t}e^{\\tau}d\\tau\n=e^{-t}\\bigl(e^{t}-1\\bigr)=1-e^{-t}.\n$$\n\n**Case $t\\ge1$.** Overlap is all of $[0,1]$:\n\n$$\ny(t)=\\int_{0}^{1}e^{-(t-\\tau)}d\\tau\n=e^{-t}\\int_{0}^{1}e^{\\tau}d\\tau\n=e^{-t}(e-1)=e^{\\,1-t}-e^{-t}.\n$$\n\nI evaluated both definite integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau=1-e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau=e^{1-t}-e^{-t}$.\n\n## Step 4 \u2014 Compress into step functions\n\nEach piece \"switches on\" at its own start time and must be cancelled by a shifted copy of the same shape one unit later:\n\n$$\ny(t)=\\bigl(1-e^{-t}\\bigr)u(t)-\\bigl(1-e^{-(t-1)}\\bigr)u(t-1).\n$$\n\nCheck that this reproduces the piecewise form: for $0<t<1$ only the first term is active; for $t>1$ both are, giving\n\n$$\n\\bigl(1-e^{-t}\\bigr)-\\bigl(1-e^{-(t-1)}\\bigr)=e^{1-t}-e^{-t}. \\checkmark\n$$\n\nI verified symbolically that this step-function form equals $\\int_0^1 e^{-(t-\\tau)}u(t-\\tau)\\,d\\tau$ exactly (difference $=0$).\n\n## Step 5 \u2014 Sanity checks\n\n**Continuity at $t=1$.** $1-e^{-1}\\approx0.6321$ from the left, and $(e-1)e^{-1}=1-e^{-1}\\approx0.6321$ from the right. $\\checkmark$ Convolution of a bounded pulse with an integrable kernel must be continuous, so a jump here would signal a wrong limit.\n\n**The ODE that $h$ encodes.** Since $h$ is the impulse response of $y'+y=x$, the output must satisfy $y'+y=u(t)-u(t-1)$:\n\n- $0<t<1$: $\\dfrac{d}{dt}(1-e^{-t})+(1-e^{-t})=e^{-t}+1-e^{-t}=1.$ $\\checkmark$\n- $t>1$: $\\dfrac{d}{dt}\\bigl(e^{1-t}-e^{-t}\\bigr)+\\bigl(e^{1-t}-e^{-t}\\bigr)=-e^{1-t}+e^{-t}+e^{1-t}-e^{-t}=0.$ $\\checkmark$\n\n**Laplace cross-check.** $X(s)=\\dfrac{1-e^{-s}}{s}$, $H(s)=\\dfrac{1}{s+1}$, so $Y(s)=\\dfrac{1-e^{-s}}{s(s+1)}=\\dfrac{1}{s}-\\dfrac{1}{s+1}-e^{-s}\\!\\left(\\dfrac{1}{s}-\\dfrac{1}{s+1}\\right)$, whose inverse is exactly the step-function form in Step 4.\n\n**Shape.** Rises from $0$ with slope $1$ at the origin, reaches $y(0.5)=1-e^{-0.5}\\approx0.3935$, peaks at $1-e^{-1}\\approx0.6321$ at $t=1$ (the pulse ends before the response saturates at $1$), then decays as $(e-1)e^{-t}$, e.g. $y(2)\\approx0.2325$.\n\n---\n\n## The idea to carry forward\n\nConvolution with a finite pulse is a **sliding-window integral**, so the answer is always built from $\\min$/$\\max$ bookkeeping of the overlap interval, not from clever integration. Three habits make this bulletproof:\n\n1. Write the pulse as $u(t)-u(t-1)$ so the integration limits become $[0,1]$ immediately.\n2. Let the *other* step function set the moving limit; the breakpoints are where limits collide ($t=0$ and $t=1$ here).\n3. Reassemble with shifted step functions, then check continuity at each breakpoint and check $y'+y=x$ \u2014 two cheap tests that catch nearly every sign or limit error.\n\nOne note: I tried to pull a matching worked example from your uploads to anchor the notation, but the search didn't return, so the above is the standard method rather than something quoted from your course material. If you point me at the specific problem, I'll redo it in that problem's notation.",
+      "generated_at": "2026-09-30T00:21:37+00:00",
+      "duration_seconds": 78.03,
+      "system_prompt_tokens": 1012,
+      "assembled_prompt_sha256": "d67ff01322d6e1e3004602b714e3acb4340d45afe080b107402a621d9b3641c1",
+      "assembled_system_prompt_sha256": "33a2bfb20a9f9d663625543ace672d8c48bb5d2010f163c904434d2b7ba648fc",
+      "tool_schema_tokens": 1823,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c52ac698c62f10cfaf70face1aba3305bb8240ae",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "5a12f5fcb5d8a61ee808afde2fc4826a4eb1481771a0d8488063233094552731",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a4087ec510e55d09ff03e4c920ad653b274841e5adce477efb55d8d688b18a95",
+          "agent_prompt_source": "68b46f8947bc4a4985a955b49a69c3d87a334a73e7c462b5668957a16c67b28d",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [
+        {
+          "name": "list_documents",
+          "arguments": {},
+          "raw_arguments": "{}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        },
+        {
+          "name": "search_documents",
+          "arguments": {
+            "query": "vector space definition axioms"
+          },
+          "raw_arguments": "{\"query\": \"vector space definition axioms\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "I couldn't reach your uploaded material this time, so this is the standard definition from general linear algebra \u2014 if your textbook phrases the axioms differently (some list 8, some 10), tell me and I'll match theirs.\n\n## The mental model first\n\nA vector space is **a set of objects together with two operations \u2014 addition and scaling by numbers \u2014 that never take you outside the set and behave the way you expect arrows to behave.**\n\nThat's the whole idea. The \"objects\" don't have to be arrows: they can be polynomials, matrices, functions, or anything else, as long as you can add them and stretch them by numbers sensibly.\n\n## The formal definition\n\nA **vector space over** $\\mathbb{R}$ is a set $V$ equipped with two operations, $+$ (adding two elements of $V$) and scalar multiplication (multiplying an element of $V$ by a real number), satisfying these axioms for all $\\mathbf{u}, \\mathbf{v}, \\mathbf{w} \\in V$ and all $a, b \\in \\mathbb{R}$:\n\n**Addition behaves well**\n\n| Axiom | Statement |\n|---|---|\n| Closure under addition | $\\mathbf{u} + \\mathbf{v} \\in V$ |\n| Commutativity | $\\mathbf{u} + \\mathbf{v} = \\mathbf{v} + \\mathbf{u}$ |\n| Associativity | $(\\mathbf{u} + \\mathbf{v}) + \\mathbf{w} = \\mathbf{u} + (\\mathbf{v} + \\mathbf{w})$ |\n| Zero vector | There is $\\mathbf{0} \\in V$ with $\\mathbf{v} + \\mathbf{0} = \\mathbf{v}$ |\n| Additive inverse | Every $\\mathbf{v}$ has $-\\mathbf{v} \\in V$ with $\\mathbf{v} + (-\\mathbf{v}) = \\mathbf{0}$ |\n\n**Scalar multiplication behaves well**\n\n| Axiom | Statement |\n|---|---|\n| Closure under scaling | $a\\mathbf{v} \\in V$ |\n| Distributivity over vector addition | $a(\\mathbf{u} + \\mathbf{v}) = a\\mathbf{u} + a\\mathbf{v}$ |\n| Distributivity over scalar addition | $(a + b)\\mathbf{v} = a\\mathbf{v} + b\\mathbf{v}$ |\n| Associativity of scaling | $a(b\\mathbf{v}) = (ab)\\mathbf{v}$ |\n| Identity | $1 \\cdot \\mathbf{v} = \\mathbf{v}$ |\n\nNothing here says what a \"vector\" *is* \u2014 only what you're allowed to do with it. That's why the definition is so widely useful: any theorem proved from these axioms alone applies to every example at once.\n\n## Examples worth knowing\n\n- $\\mathbb{R}^n$, with componentwise addition and scaling \u2014 the model everything else is compared to.\n- $P_n$: all polynomials of degree $\\le n$. Add two quadratics, you get a quadratic; scale one, still a quadratic.\n- $M_{m \\times n}$: all $m \\times n$ matrices.\n- $C^0(\\mathbb{R})$: all continuous functions $\\mathbb{R} \\to \\mathbb{R}$, with $(f+g)(x) = f(x) + g(x)$ and $(af)(x) = a f(x)$. Note that differentiation is *linear* here, which is exactly the structure the axioms are describing.\n\n## Where things break (the useful part)\n\n- **Positive reals** $(0, \\infty)$ under ordinary addition: no zero, no additive inverses. Fails.\n- **$\\mathbb{Z}^2$** under the usual operations: closed under addition, but $\\tfrac{1}{2}(1,1) \\notin \\mathbb{Z}^2$. Fails closure under scaling \u2014 this is why \"over $\\mathbb{R}$\" matters.\n- **Exactly one thing fails most often in homework:** closure. When asked \"is this subset a subspace?\", you're checking whether the operations inherited from the big space keep you inside the subset.\n\n## The shortcut you'll actually use\n\nTo show a nonempty subset $W \\subseteq V$ is a **subspace**, you don't re-check all ten axioms \u2014 most are inherited automatically. You check only three things:\n\n$$\\mathbf{0} \\in W, \\qquad \\mathbf{u}+\\mathbf{v} \\in W, \\qquad a\\mathbf{u} \\in W \\quad \\text{for all } \\mathbf{u},\\mathbf{v} \\in W,\\ a \\in \\mathbb{R}.$$\n\nThe reason this works is worth holding onto: commutativity and associativity are true in $V$, so they're true in $W$ for free. The axioms that *can* fail are the ones about staying inside the set.",
+      "generated_at": "2026-09-30T00:22:00+00:00",
+      "duration_seconds": 22.85,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "e11c5e8e1fc61bc682fc080f3c428af098356b498c4b94c5d74e4866e8003a2e",
+      "assembled_system_prompt_sha256": "9c545cf933b0523ed92f07580d096b510b6a67e0ff428c9039ae5c4379af111b",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c52ac698c62f10cfaf70face1aba3305bb8240ae",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "5a12f5fcb5d8a61ee808afde2fc4826a4eb1481771a0d8488063233094552731",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a4087ec510e55d09ff03e4c920ad653b274841e5adce477efb55d8d688b18a95",
+          "agent_prompt_source": "68b46f8947bc4a4985a955b49a69c3d87a334a73e7c462b5668957a16c67b28d",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-formal": {
+      "tool_calls": [
+        {
+          "name": "list_documents",
+          "arguments": {},
+          "raw_arguments": "{}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        },
+        {
+          "name": "search_documents",
+          "arguments": {
+            "query": "vector space axioms definition"
+          },
+          "raw_arguments": "{\"query\": \"vector space axioms definition\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "I couldn't reach your uploaded course material for this one \u2014 the document tools returned an error \u2014 so the following is the **standard definition from general knowledge**, not a quote from your class notes. If your textbook orders or numbers the axioms differently, follow the book's version for exams.\n\n## Setup\n\nLet $\\mathbb{F}$ be a field (in this course almost always $\\mathbb{R}$, sometimes $\\mathbb{C}$). A **vector space over $\\mathbb{F}$** is a nonempty set $V$ together with two operations\n\n$$\n+ : V \\times V \\to V, \\qquad \\cdot : \\mathbb{F} \\times V \\to V,\n$$\n\ncalled **vector addition** and **scalar multiplication**, such that the eight axioms below hold for all $\\mathbf{u}, \\mathbf{v}, \\mathbf{w} \\in V$ and all scalars $a, b \\in \\mathbb{F}$.\n\nThe two displayed maps already build in **closure**: $\\mathbf{u}+\\mathbf{v} \\in V$ and $a\\mathbf{u} \\in V$ always. Some books list these as axioms (V1) and (V2) and then have ten items total; the content is the same either way.\n\n## Axioms for addition\n\n**A1 \u2014 Associativity.**\n$$\n(\\mathbf{u}+\\mathbf{v})+\\mathbf{w} = \\mathbf{u}+(\\mathbf{v}+\\mathbf{w})\n$$\n\n**A2 \u2014 Commutativity.**\n$$\n\\mathbf{u}+\\mathbf{v} = \\mathbf{v}+\\mathbf{u}\n$$\n\n**A3 \u2014 Zero vector (additive identity).** There exists an element $\\mathbf{0} \\in V$ with\n$$\n\\mathbf{v} + \\mathbf{0} = \\mathbf{v}\n$$\n\n**A4 \u2014 Additive inverses.** For every $\\mathbf{v} \\in V$ there exists $-\\mathbf{v} \\in V$ with\n$$\n\\mathbf{v} + (-\\mathbf{v}) = \\mathbf{0}\n$$\n\nSo $(V, +)$ is an **abelian group**.\n\n## Axioms for scalar multiplication\n\n**A5 \u2014 Compatibility with field multiplication (associativity of scaling).**\n$$\na\\,(b\\,\\mathbf{v}) = (ab)\\,\\mathbf{v}\n$$\n\n**A6 \u2014 Scalar identity.** With $1$ the multiplicative identity of $\\mathbb{F}$,\n$$\n1\\,\\mathbf{v} = \\mathbf{v}\n$$\n\n**A7 \u2014 Distributivity over vector addition** (one scalar, two vectors).\n$$\na\\,(\\mathbf{u}+\\mathbf{v}) = a\\mathbf{u} + a\\mathbf{v}\n$$\n\n**A8 \u2014 Distributivity over scalar addition** (two scalars, one vector).\n$$\n(a+b)\\,\\mathbf{v} = a\\mathbf{v} + b\\mathbf{v}\n$$\n\nAxioms A5\u2013A8 say exactly that $V$ is a **module over the field $\\mathbb{F}$**, i.e. the field acts on $V$ by linear maps.\n\n## Two easy consequences worth knowing\n\nThese are *not* axioms \u2014 they follow from them, and proofs are common exam questions.\n\n**$\\;0\\,\\mathbf{v} = \\mathbf{0}$.** Using A8 and the field fact $0+0=0$:\n$$\n0\\mathbf{v} + 0\\mathbf{v} = (0+0)\\mathbf{v} = 0\\mathbf{v} = 0\\mathbf{v} + \\mathbf{0}.\n$$\nAdd $-(0\\mathbf{v})$ to both sides and apply A1, A4, A3 to get $0\\mathbf{v} = \\mathbf{0}$.\n\n**$\\;(-1)\\mathbf{v} = -\\mathbf{v}$.** Using A7/A8, A6 and the previous result:\n$$\n(-1)\\mathbf{v} + \\mathbf{v} = (-1)\\mathbf{v} + 1\\mathbf{v} = (-1+1)\\mathbf{v} = 0\\mathbf{v} = \\mathbf{0},\n$$\nso $(-1)\\mathbf{v}$ is *an* additive inverse of $\\mathbf{v}$, and inverses are unique (A1, A4).\n\n## How to use the definition\n\nTo prove a set is a vector space, check all eight axioms against the *given* operations \u2014 the same symbol \"$+$\" can behave badly (e.g. $\\mathbf{u}+\\mathbf{v} = \\max(u_i, v_i)$ componentwise fails A4). To prove something is **not** a vector space, one failing axiom is enough; the usual suspects to test first are the zero vector (A3) and closure.\n\n**The idea to carry forward:** a vector space is nothing more than an abelian group $(V,+)$ plus a compatible action of a field, where \"compatible\" means A5\u2013A8. Everything in linear algebra \u2014 span, independence, basis, dimension, linear maps \u2014 is built on those eight lines and nothing else.",
+      "generated_at": "2026-09-30T00:22:25+00:00",
+      "duration_seconds": 24.77,
+      "system_prompt_tokens": 1012,
+      "assembled_prompt_sha256": "caab5250633c9c5bb9aa927a73b10779f49c6609bbbc8550a68a8f9ce71138c3",
+      "assembled_system_prompt_sha256": "33a2bfb20a9f9d663625543ace672d8c48bb5d2010f163c904434d2b7ba648fc",
+      "tool_schema_tokens": 1823,
+      "user": "Give me the formal definition of a vector space, including the axioms.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c52ac698c62f10cfaf70face1aba3305bb8240ae",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "5a12f5fcb5d8a61ee808afde2fc4826a4eb1481771a0d8488063233094552731",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a4087ec510e55d09ff03e4c920ad653b274841e5adce477efb55d8d688b18a95",
+          "agent_prompt_source": "68b46f8947bc4a4985a955b49a69c3d87a334a73e7c462b5668957a16c67b28d",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-start-heldout": {
+      "tool_calls": [
+        {
+          "name": "search_documents",
+          "arguments": {
+            "query": "vector space polynomials degree at most 2 axioms"
+          },
+          "raw_arguments": "{\"query\": \"vector space polynomials degree at most 2 axioms\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        },
+        {
+          "name": "list_documents",
+          "arguments": {},
+          "raw_arguments": "{}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Standard linear algebra answer \u2014 I couldn't pull up the specific problem statement from your uploads, so tell me if your course phrases the axioms differently.\n\n## The first move: write down the three things you're actually testing\n\nBefore checking any axiom, pin these down, because \"is it a vector space\" is meaningless without them:\n\n1. **The set:** $V = \\{p(t) = a_2 t^2 + a_1 t + a_0 : a_0, a_1, a_2 \\in \\mathbb{R}\\}$\n2. **The operations:** the *usual* polynomial addition and scalar multiplication (add/multiply coefficients). This is the part people skip, and it's exactly where a \"gotcha\" version of the problem hides \u2014 if the problem defines some twisted addition like $p \\oplus q = p + q + 1$, everything changes.\n3. **The candidate zero vector:** the zero polynomial $0(t) = 0$. Note it's in $V$, since \"degree **at most** 2\" includes it.\n\n## Why that framing saves you work\n\nHere's the key structural insight: $V$ is a *subset* of the vector space of all real-valued functions on $\\mathbb{R}$, and the operations are inherited from it. Any axiom that just says \"the operation behaves the way it already does for functions\" \u2014 associativity, commutativity, distributivity, $\\alpha(\\beta p) = (\\alpha\\beta)p$, $1\\cdot p = p$ \u2014 is **inherited for free**. You don't re-prove those.\n\nSo instead of ten axioms you run the **subspace test**, three checks:\n\n- $V$ is nonempty (or: contains the zero vector)\n- closed under addition\n- closed under scalar multiplication\n\n## Do the first check concretely\n\nTake two general elements and add them:\n\n$$p(t) + q(t) = (a_2 + b_2)t^2 + (a_1 + b_1)t + (a_0 + b_0)$$\n\nThe result is still of the form \"constant + linear + quadratic,\" because the sums $a_i + b_i$ are real numbers. So it's in $V$. Same shape of argument for $\\alpha p(t) = (\\alpha a_2)t^2 + (\\alpha a_1)t + (\\alpha a_0)$.\n\nNotice what made this work: the quadratic coefficients *could* cancel ($a_2 + b_2 = 0$), but that only drops the degree to 1 or 0, which is still \"at most 2.\" That's the whole reason the bound is an upper bound.\n\n## The trap to be aware of\n\nIf the problem had said degree **exactly** 2, it would fail immediately, and you'd want to say so with a specific witness rather than in the abstract:\n\n- No zero vector: the zero polynomial isn't degree 2.\n- Not closed under addition: $t^2 + (-t^2) = 0$.\n- Not closed under scalar multiplication: $0 \\cdot t^2 = 0$.\n\nSo: state set, operations, and zero; argue inheritance; then verify the three closure-type checks. If your assignment explicitly demands all ten axioms one at a time, the additive inverse $-p(t) = -a_2t^2 - a_1t - a_0$ and the additive identity step are the only two extra lines you need to write out.",
+      "generated_at": "2026-09-30T00:22:52+00:00",
+      "duration_seconds": 27.66,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "d45de21624c8de07fb9e9bc8fb27a7a4e55571c9443fadb52a6f21e8c29e4a7b",
+      "assembled_system_prompt_sha256": "9c545cf933b0523ed92f07580d096b510b6a67e0ff428c9039ae5c4379af111b",
+      "tool_schema_tokens": 1823,
+      "user": "For the set of real polynomials with degree at most 2, how should I start checking whether it is a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c52ac698c62f10cfaf70face1aba3305bb8240ae",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "5a12f5fcb5d8a61ee808afde2fc4826a4eb1481771a0d8488063233094552731",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a4087ec510e55d09ff03e4c920ad653b274841e5adce477efb55d8d688b18a95",
+          "agent_prompt_source": "68b46f8947bc4a4985a955b49a69c3d87a334a73e7c462b5668957a16c67b28d",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "heldout-simple-concept": {
+      "tool_calls": [
+        {
+          "name": "search_documents",
+          "arguments": {
+            "query": "eigenvector eigenvalue"
+          },
+          "raw_arguments": "{\"query\": \"eigenvector eigenvalue\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        },
+        {
+          "name": "list_documents",
+          "arguments": {},
+          "raw_arguments": "{}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Course material may not be sent to this tutor endpoint."
+          }
+        },
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "operation": "eigenvalues",
+            "matrix": [
+              "2",
+              "1",
+              "1",
+              "2"
+            ]
+          },
+          "raw_arguments": "{\"operation\": \"eigenvalues\", \"matrix\": [\"2\", \"1\", \"1\", \"2\"]}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Each matrix row must be a non-empty list."
+          }
+        },
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "matrix": [
+              [
+                "2",
+                "1"
+              ],
+              [
+                "1",
+                "2"
+              ]
+            ],
+            "operation": "eigenvalues"
+          },
+          "raw_arguments": "{\"matrix\": [[\"2\", \"1\"], [\"1\", \"2\"]], \"operation\": \"eigenvalues\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": {
+              "3": 1,
+              "1": 1
+            }
+          }
+        },
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "matrix": [
+              [
+                "-1",
+                "1"
+              ],
+              [
+                "1",
+                "-1"
+              ]
+            ],
+            "operation": "solve",
+            "vector": [
+              "0",
+              "0"
+            ]
+          },
+          "raw_arguments": "{\"matrix\": [[\"-1\", \"1\"], [\"1\", \"-1\"]], \"operation\": \"solve\", \"vector\": [\"0\", \"0\"]}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Matrix det == 0; not invertible."
+          }
+        }
+      ],
+      "rounds": 5,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "**Plain English:** An eigenvector is a direction that a transformation doesn't tilt. Apply the matrix, and every vector points somewhere new \u2014 except these. An eigenvector stays on its own line through the origin; the matrix can only stretch it, shrink it, or flip it. That stretch factor is the **eigenvalue**.\n\nSo the pair answers two separate questions:\n\n- **Eigenvector** = *which* direction survives unchanged\n- **Eigenvalue** $\\lambda$ = *how much* it gets scaled along the way\n\nThe defining equation is just that sentence written symbolically:\n\n$$A\\mathbf{v} = \\lambda\\mathbf{v}$$\n\nLeft side: \"do the transformation to $\\mathbf{v}$.\" Right side: \"which turns out to be the same as just rescaling $\\mathbf{v}$.\" Nothing about the direction changed \u2014 only the length.\n\n**One concrete example.** Take\n\n$$A = \\begin{pmatrix} 2 & 1 \\\\ 1 & 2 \\end{pmatrix}$$\n\nMost vectors get rotated when this hits them, but try $\\mathbf{v} = (1,1)$:\n\n$$A\\begin{pmatrix}1\\\\1\\end{pmatrix} = \\begin{pmatrix}3\\\\3\\end{pmatrix} = 3\\begin{pmatrix}1\\\\1\\end{pmatrix}$$\n\nSame direction, three times as long \u2014 so $(1,1)$ is an eigenvector with eigenvalue $3$. Now try $\\mathbf{v} = (1,-1)$:\n\n$$A\\begin{pmatrix}1\\\\-1\\end{pmatrix} = \\begin{pmatrix}1\\\\-1\\end{pmatrix} = 1\\begin{pmatrix}1\\\\-1\\end{pmatrix}$$\n\nThat one isn't stretched at all, so its eigenvalue is $1$. (These are the two eigenvalues of this matrix: $3$ and $1$.) Notice the eigenvectors aren't unique \u2014 $(5,5)$ works just as well as $(1,1)$, since only the *direction* matters, not the length.\n\n**Two things worth pinning down:**\n\n1. **$\\lambda$ can be negative or zero.** Negative means the vector flips to point the opposite way \u2014 still on the same line, so still an eigenvector. Zero means the whole direction gets crushed to nothing (this happens exactly when $A$ is singular).\n2. **Eigenvectors are never the zero vector.** $\\mathbf{0}$ technically satisfies $A\\mathbf{0} = \\lambda\\mathbf{0}$ for every $\\lambda$, which makes it useless for talking about a direction, so it's excluded by definition.\n\n**Why anyone cares:** if you can describe what a matrix does using its eigenvector directions instead of the usual $x$/$y$ axes, the matrix becomes diagonal \u2014 a pile of independent scalings with no mixing between coordinates. That's why eigenvectors show up wherever you need to untangle coupled behavior: principal components in data, normal modes in vibrations, the long-run state of a Markov chain, stability of an equilibrium.",
+      "generated_at": "2026-09-30T00:23:17+00:00",
+      "duration_seconds": 25.25,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "9cab07727b37e41ee86a06ff8cca6cf7cc4aa124ab14f84cffc3e0c9cbd69853",
+      "assembled_system_prompt_sha256": "9c545cf933b0523ed92f07580d096b510b6a67e0ff428c9039ae5c4379af111b",
+      "tool_schema_tokens": 1823,
+      "user": "What is an eigenvector, in plain English?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c52ac698c62f10cfaf70face1aba3305bb8240ae",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "5a12f5fcb5d8a61ee808afde2fc4826a4eb1481771a0d8488063233094552731",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "a4087ec510e55d09ff03e4c920ad653b274841e5adce477efb55d8d688b18a95",
+          "agent_prompt_source": "68b46f8947bc4a4985a955b49a69c3d87a334a73e7c462b5668957a16c67b28d",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

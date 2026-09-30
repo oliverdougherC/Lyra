@@ -17,6 +17,7 @@ export type FactKind = 'deadline' | 'topic' | 'grading' | 'professor' | 'prerequ
 
 export type Confidence = 'high' | 'low'
 
+/** Persisted compatibility values. Both use the same education contract. */
 export type ChatMode = 'guide' | 'show'
 
 export type MessageRole = 'user' | 'assistant'
@@ -105,8 +106,7 @@ export interface DocumentStatus {
 }
 
 /**
- * What a session can be, which is one more thing than a tutor turn can request: writer
- * sessions belong to a draft's rail and never take Guide/Show turns.
+ * Writer sessions belong to a draft's rail; education sessions retain legacy mode values.
  */
 export type SessionMode = ChatMode | 'writer'
 
