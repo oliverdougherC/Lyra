@@ -1,26 +1,29 @@
 # Tutor prompt contract
 
-**Active contract version: 3** (`backend.llm.prompts.TUTOR_PROMPT_CONTRACT_VERSION`).
+**Active contract version: 4** (`backend.llm.prompts.TUTOR_PROMPT_CONTRACT_VERSION`).
 The class agent and tutor/anchored chat share one adaptive education contract. The student's
 latest request and the conversation determine scope. Stored `guide`/`show` values remain
 readable for compatibility, but neither selects a different teaching policy. The education
 chat has no answer-style control.
 
-A definition or simple concept gets a direct, compact, accurate answer. A formal definition
-keeps necessary field, operation, and axiom conditions. A request for help getting started
-gets one useful first move and reason. Attempt feedback checks the student's actual method
-and names the first genuine error. An explicit full answer, proof, derivation, or request
-for depth is completed without an arbitrary length cap. Follow-up requests narrow or
-broaden the response based on the latest question. Routine tool use, recaps, closing
-questions, and offers are not automatic.
+A conversational definition gets its meaning and essential conditions in a compact
+explanation; the word “definition” alone does not call for the full axiom list. A request
+for help getting started gets one useful move and reason, leaving its execution to the
+student. Attempt feedback names the first genuine error in the student's actual method
+and gives the next corrected step. An explicitly formal definition includes the needed
+field, operations, and axioms. Full answers, proofs, derivations, and requests for depth
+receive the complete relevant work without an arbitrary length cap. A narrow follow-up
+stays narrow even after a long turn. Routine tool use, internal checks, recaps, closing
+questions, and offers are not automatic final-answer content.
 
 The base prompt still governs course grounding, citations, missing context, and LaTeX.
 Anchored chat stays on its step unless the student explicitly broadens the request.
-The agent layer adds capability and trust-boundary instructions; a tool-less turn uses
-this same teaching contract. Writer, structured solver, and study-generation prompts
+The agent layer adds capability and trust-boundary instructions before the shared teaching
+contract; tool results needed for the answer remain visible in the final reply. A tool-less
+turn uses this same teaching contract. Writer, structured solver, and study-generation prompts
 are separate.
 
-`scripts/eval_corpora/tutor_semantic.json` version 2.0.0 pins this contract. Its legacy
+`scripts/eval_corpora/tutor_semantic.json` version 2.1.0 pins this contract. Its legacy
 mode values test compatibility, not distinct response styles. `scripts/eval_tutor.py
 run --surface class_chat` exercises the production planner/tool loop. Retained terminal
 answers need independent semantic review; model self-grading and output length alone do
@@ -28,8 +31,8 @@ not establish quality. [PLA-461](https://linear.app/platinum-labs/issue/PLA-461)
 the bounded live evaluation and its limits.
 
 The [September 29 production-path evidence](adaptive-education-evidence-20260929/README.md)
-retains baseline and three candidate runs. The critical concise-definition and first-step
-criteria still fail; the contract is implemented, but live quality acceptance remains open.
+retains baseline, earlier candidates, and the correction-pass observations. Live quality
+acceptance remains subject to independent review of those exact final answers.
 
 ## Historical records
 

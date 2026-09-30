@@ -4,8 +4,8 @@
     "Legacy mode values remain in fixtures only to exercise persisted-session compatibility; the student's request and conversation set the scope.",
     "Must/must_not are semantic criteria. Independent review of retained terminal answers is required; self-grading alone does not establish acceptance."
   ],
-  "corpus_version": "2.0.0",
-  "prompt_contract_version": "3",
+  "corpus_version": "2.1.0",
+  "prompt_contract_version": "4",
   "dimensions": [
     "directness",
     "proportionality",
@@ -406,6 +406,48 @@
       "notes": "Av=λv for a nonzero v; λ may be zero. Strictly a negative eigenvalue reverses orientation, so saying same line is safer than same direction."
     },
     {
+      "id": "vector-space-multiturn-full",
+      "mode": "guide",
+      "user": "Now give the full proof that the real polynomials of degree at most 2 form a vector space.",
+      "history": [
+        {
+          "role": "user",
+          "content": "Can we go over the definition of a vector space?"
+        },
+        {
+          "role": "assistant",
+          "content": "A vector space over a field has addition and scalar multiplication that satisfy the vector-space axioms."
+        },
+        {
+          "role": "user",
+          "content": "Can you give an example?"
+        },
+        {
+          "role": "assistant",
+          "content": "The real plane with coordinate-wise addition and scaling is one example."
+        },
+        {
+          "role": "user",
+          "content": "How do I check that polynomials of degree at most 2 form one?"
+        },
+        {
+          "role": "assistant",
+          "content": "Start by checking whether ordinary addition keeps two such polynomials in the set."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Gives a complete proof using the ambient real polynomial vector space: the zero polynomial is included, sums stay degree at most 2, and real scalar multiples stay degree at most 2; inherited axioms then hold",
+        "Honors the latest full-proof request even after an earlier first-step turn"
+      ],
+      "must_not": [
+        "Withholds the proof and offers only another hint",
+        "Claims polynomials must have degree exactly 2 or excludes the zero polynomial"
+      ],
+      "may": [],
+      "notes": "P₂(R) is a subspace of R[x]. Closure includes cancellation of leading coefficients; the zero polynomial belongs by definition."
+    },
+    {
       "id": "vector-space-multiturn-narrow",
       "mode": "show",
       "user": "Why did you check that the zero polynomial is included? Answer just that point.",
@@ -417,6 +459,14 @@
         {
           "role": "assistant",
           "content": "A vector space over a field has addition and scalar multiplication that satisfy the vector-space axioms."
+        },
+        {
+          "role": "user",
+          "content": "Can you give an example?"
+        },
+        {
+          "role": "assistant",
+          "content": "The real plane with coordinate-wise addition and scaling is one example."
         },
         {
           "role": "user",

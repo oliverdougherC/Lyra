@@ -252,11 +252,11 @@ def test_claims_review_requires_ledger_verification_for_web_and_course_sources()
 
 def test_adaptive_contract_answers_concepts_directly_and_keeps_math_conditions() -> None:
     prompt = _normalized(build_system_prompt("guide", [], []))
-    assert "answer immediately" in prompt
-    assert "a few sentences with essential conditions" in prompt
-    assert "field, operations, axioms" in prompt
-    assert "universal length limit" in prompt
-    assert "ask only useful questions" in prompt
+    assert "start with one plain-language paragraph" in prompt
+    assert 'word "definition" appears' in prompt
+    assert "formal definition, list of axioms" in prompt
+    assert "without a length cap" in prompt
+    assert "real ambiguity" in prompt
     assert "$$...$$ on its own line for a displayed equation" in prompt
 
 
@@ -586,15 +586,16 @@ def test_writer_chat_prompt_omits_empty_blocks() -> None:
 def test_adaptive_contract_bounds_start_help_and_checks_actual_attempt() -> None:
     prompt = _normalized(build_system_prompt("guide", [], []))
     assert "one concrete first move" in prompt
-    assert "stop before later checks" in prompt
+    assert "leave that move for the student to perform" in prompt
+    assert "do not evaluate the setup" in prompt
     assert "first genuine error" in prompt
-    assert "check each transformation" in prompt
-    assert "never invent a stricter rule" in prompt
+    assert "student's transition" in prompt
+    assert "do not invent a rule" in prompt
     assert "full solution" in prompt
-    assert "keeps necessary conditions true" in prompt
+    assert "same necessary conditions" in prompt
 
 
 def test_adaptive_contract_respects_explicit_no_question_requests() -> None:
     prompt = _normalized(build_system_prompt("show", [], []))
-    assert "if asked to omit questions, teach directly" in prompt
-    assert "no automatic recap, closing question, follow-up offer" in prompt
+    assert "if the student asks for no questions, answer without one" in prompt
+    assert "automatic recap, greeting, closing question, follow-up" in prompt

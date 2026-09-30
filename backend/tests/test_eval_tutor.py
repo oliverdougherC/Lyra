@@ -97,6 +97,7 @@ def test_adaptive_corpus_covers_concision_depth_and_followup_scope() -> None:
         "heldout-simple-concept",
         "heldout-attempt-diagnosis",
         "request-more-depth-heldout",
+        "vector-space-multiturn-full",
         "vector-space-multiturn-narrow",
     ):
         assert case_id in by_id
@@ -583,13 +584,16 @@ def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
 
     system = str(assembly.messages[0]["content"])
     # The shared education contract the turn runs under (the full tutor prompt).
-    assert "Teach the latest request in the shortest useful accurate reply" in system
-    assert "No automatic recap" in system
+    assert "Teach the student's latest request, at the depth it asks for" in system
+    assert "an automatic recap" in system
     assert "one concrete first move" in system
-    assert "reduces abstraction" in system
-    # The agent capability layer, appended on top of it.
+    assert "less abstraction with the same necessary conditions" in system
+    # The capability layer precedes the shared education contract.
     assert "You are Lyra's class agent" in system
     assert "The latest user request sets the answer's scope" in system
+    assert system.index("You are Lyra's class agent") < system.index(
+        "Teach the student's latest request"
+    )
     assert "Use verified results only for the claims they actually check" in system
     # The case's retrieved context, rendered as the route renders it.
     assert "Retrieved context from the student's uploaded material:" in system
@@ -635,7 +639,7 @@ def test_the_class_chat_surface_is_tool_less_on_a_known_incompatible_endpoint(
     assert "is not available in this conversation" in system
     # The full tutor contract is still there: tool-less is a smaller surface, not a
     # different conversation.
-    assert "Teach the latest request in the shortest useful accurate reply" in system
+    assert "Teach the student's latest request, at the depth it asks for" in system
     # The question still went out, tool-less: the basic tutoring turn is never refused
     # over the cost of optional capability.
     assert assembly.messages[-1] == {"role": "user", "content": case.user}
