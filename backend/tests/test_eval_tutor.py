@@ -590,7 +590,7 @@ def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
     assert "less abstraction with the same necessary conditions" in system
     # The capability layer precedes the shared education contract.
     assert "You are Lyra's class agent" in system
-    assert "The latest user request sets the answer's scope" in system
+    assert "the complete requested work" in system
     assert system.index("You are Lyra's class agent") < system.index(
         "Teach the student's latest request"
     )

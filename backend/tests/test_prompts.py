@@ -255,7 +255,7 @@ def test_adaptive_contract_answers_concepts_directly_and_keeps_math_conditions()
     assert "start with one plain-language paragraph" in prompt
     assert 'word "definition" appears' in prompt
     assert "formal definition, list of axioms" in prompt
-    assert "without a length cap" in prompt
+    assert "without an arbitrary length cap" in prompt
     assert "real ambiguity" in prompt
     assert "$$...$$ on its own line for a displayed equation" in prompt
 
