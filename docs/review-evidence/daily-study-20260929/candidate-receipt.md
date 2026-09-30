@@ -14,7 +14,7 @@ The application-source commit is `2591e06015f375014c40e24e8f7793fc23a73116`
 (Git tree `83284de0c81f8f463bdf99439603dc5da1189ab6`). The evidence-only commit
 containing this report follows that source commit. None of these PRs was merged.
 Draft PR #100 native scrolling was kept separate; its head was
-`7551212695192f79e0a5726b94630ad4f7eaf339` at the final inventory check.
+`e855a8277a70ad078e5c886c693fe671c7678a92` at the final inventory check.
 
 ## Signed artifact
 
@@ -58,9 +58,9 @@ two successful CAS computations, including the false-equality check.
   upload-to-chat and regeneration browser acceptance cases passed on the exact final
   source, with zero backend failures recorded. The signed bundle and frozen-backend
   smoke were rebuilt from this exact source revision.
-- Documentation and active-reference scans passed. PRs #101 and #102 passed all 11
-  exact-head CI jobs; #103 and #104's final CI status must be checked before review
-  completion.
+- Documentation and active-reference scans passed. All four PRs passed all 11 required
+  exact-head CI jobs, including full backend/frontend, full-stack acceptance, Rust,
+  frozen Python smoke, macOS artifact and aggregate gate.
 - The final live production-route tutor evaluation still **fails** concise definition,
   first-step scope and mathematical-correctness checks. Representative failure: the
   exact vector-space question received about 615 words; a formal definition misstated
