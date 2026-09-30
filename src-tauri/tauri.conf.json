@@ -12,6 +12,7 @@
       {
         "label": "main",
         "create": false,
+        "dragDropEnabled": false,
         "title": "Lyra",
         "width": 1400,
         "height": 960,
