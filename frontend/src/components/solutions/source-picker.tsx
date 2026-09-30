@@ -8,6 +8,11 @@ import { Button } from '@/components/ui/button'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatFileSize, truncateMiddle } from '@/lib/format'
+import {
+  documentNameNote,
+  effectiveDocumentName,
+  matchesDocumentName,
+} from '@/lib/document-display'
 import { cn } from '@/lib/utils'
 import type { DocumentRead } from '@/types'
 
@@ -47,9 +52,7 @@ export function SourcePicker({
   name,
 }: SourcePickerProps) {
   const [search, setSearch] = useState('')
-  const visible = documents.filter((document) =>
-    document.filename.toLowerCase().includes(search.trim().toLowerCase()),
-  )
+  const visible = documents.filter((document) => matchesDocumentName(document, search))
   if (loading) {
     return (
       <div className="flex flex-col gap-2" aria-busy="true">
@@ -96,6 +99,7 @@ export function SourcePicker({
           const isClaimed = claimed.includes(document.id)
           const ready = document.state === 'ready'
           const disabled = !ready || isClaimed
+          const identityNote = documentNameNote(document, documents)
           return (
             <li key={document.id}>
               <label
@@ -117,6 +121,9 @@ export function SourcePicker({
                 <input
                   type="checkbox"
                   name={name}
+                  aria-label={[effectiveDocumentName(document), identityNote]
+                    .filter(Boolean)
+                    .join(' ')}
                   className="sr-only"
                   checked={isSelected}
                   disabled={disabled}
@@ -141,9 +148,17 @@ export function SourcePicker({
                     tells the student what kind of file a row is. The default budget is
                     what the document list already uses, and it fits the narrowest
                     breakpoint; a CSS clip on top of it would cut the extension back off. */}
-                  <span className="text-text-primary block text-sm" title={document.filename}>
-                    {truncateMiddle(document.filename)}
+                  <span
+                    className="text-text-primary block text-sm"
+                    title={effectiveDocumentName(document)}
+                  >
+                    {truncateMiddle(effectiveDocumentName(document))}
                   </span>
+                  {identityNote ? (
+                    <span className="text-text-tertiary block truncate text-xs">
+                      {identityNote}
+                    </span>
+                  ) : null}
                   <span className="text-text-tertiary block text-xs">
                     {describe(document, isClaimed)}
                   </span>

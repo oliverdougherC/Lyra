@@ -51,6 +51,91 @@ def _chunk(
     db.commit()
 
 
+def test_nickname_is_visible_to_scoped_tools_and_citations(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    selected = _document(db, class_id, "LADW_2026_08-31.pdf")
+    _chunk(db, class_id, selected, 2, "A vector space is closed under addition.")
+    same_alias = _document(db, class_id, "other.pdf")
+    _chunk(db, class_id, same_alias, 1, "Different material")
+    other_class = int(classes.create_class(db, name="Other")["id"])
+    foreign = _document(db, other_class, "foreign.pdf")
+    _chunk(db, other_class, foreign, 1, "Private material")
+    db.execute(
+        "update documents set nickname = 'Textbook' where id in (?, ?, ?)",
+        (selected, same_alias, foreign),
+    )
+    db.commit()
+
+    listed = document_access.inventory(db, class_id, selected)["documents"]
+    assert [row["document_id"] for row in listed] == [selected]
+    assert listed[0]["display_name"] == "Textbook"
+    assert listed[0]["filename"] == "Textbook"
+    assert listed[0]["original_filename"] == "LADW_2026_08-31.pdf"
+    by_content = document_access.search(db, class_id, selected, "vector space")["sources"]
+    assert by_content[0]["citation"] == "Textbook, p. 2"
+    assert by_content[0]["document_id"] == selected
+    assert (
+        document_access.search(db, class_id, selected, "Textbook")["sources"][0]["document_id"]
+        == selected
+    )
+    assert (
+        document_access.search(db, class_id, selected, "LADW_2026_08-31")["sources"][0][
+            "document_id"
+        ]
+        == selected
+    )
+    db.execute(
+        "insert into document_read_pages (document_id, page_number, generation, content) "
+        "values (?, 2, 'fixture', 'A vector space is closed under addition.')",
+        (selected,),
+    )
+    db.commit()
+    db.executescript(agent_store.TABLE_SQL)
+    db.executescript(tool_audit.TABLE_SQL)
+    app_settings.update_settings_row(db, {"endpoint_url": "http://127.0.0.1:8080/v1"})
+    session = int(sessions.create_session(db, class_id)["id"])
+    registry, _ = agent_tools.build_agent_registry(
+        db,
+        class_id,
+        session,
+        "agent",
+        selected_document_id=selected,
+        document_endpoint="http://127.0.0.1:8080/v1",
+    )
+    tool_list = registry["list_documents"].handler().value["documents"]
+    assert tool_list[0]["filename"] == "Textbook"
+    tool_read = registry["read_document_page"].handler(document_id=selected, page_number=2)
+    assert tool_read.ok
+    assert tool_read.value["sources"][0]["citation"] == "Textbook, p. 2"
+
+    _chunk(db, class_id, selected, 3, "Another vector space fact")
+    cursor = document_access.search(db, class_id, selected, "vector", limit=1)["next_cursor"]
+    assert cursor is not None
+    db.execute("update documents set nickname = 'Textbook II' where id = ?", (selected,))
+    db.commit()
+    with pytest.raises(ValueError, match="expired"):
+        document_access.search(db, class_id, selected, "vector", limit=1, cursor=cursor)
+
+
+def test_nickname_search_finds_readable_pages_after_partial_ingestion_failure(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id, "LADW_2026_08-31.pdf", state="failed")
+    db.execute("update documents set nickname = 'Textbook' where id = ?", (document_id,))
+    db.execute(
+        "insert into document_read_pages (document_id, page_number, generation, content) "
+        "values (?, 3, 'fixture', 'The readable page still has useful material.')",
+        (document_id,),
+    )
+    db.commit()
+
+    for query in ("Textbook", "LADW_2026_08-31"):
+        result = document_access.search(db, class_id, document_id, query)
+        assert result["sources"][0]["document_id"] == document_id
+        assert result["sources"][0]["citation"] == "Textbook, p. 3"
+
+
 def test_selected_document_tools_refuse_other_class_and_other_selected_file(
     db: sqlite3.Connection, class_id: int
 ) -> None:

@@ -2,6 +2,9 @@
 # resolve a nested 0.16.x whose emitted classes mismatch the 0.18.x stylesheet we import.
 overrides:
   katex: 0.18.1
+  # DOMPurify 3.4.13–3.4.15 leaves hook-detached handlers armed in IN_PLACE mode
+  # (GHSA-p98j-92pf-mc4p). Pin the existing Milkdown transitive dependency.
+  'dompurify@': 3.4.16
   # fast-uri <3.1.8 carries SSRF / host-confusion and host-normalization advisories
   # (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf,
   # GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, GHSA-58mr-gqgx-xq4g,
