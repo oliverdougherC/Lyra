@@ -2,6 +2,8 @@ import { act, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
+import { selectionFromTranscript } from '@/native-transcript'
+import type { NativeChatSnapshot } from '@/lib/native-chat'
 
 function words(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>('[data-stream-word]'))
@@ -38,6 +40,67 @@ afterEach(() => {
 })
 
 describe('StreamingMarkdown', () => {
+  it.each(['forward', 'backward'] as const)(
+    'restores a %s cross-node selection when the live reply settles',
+    (direction) => {
+      const content = 'AB**CDEF**GH'
+      const { container, rerender } = render(
+        <div data-native-row-key="reply">
+          <StreamingMarkdown content={content} streaming generation="g1" />
+        </div>,
+      )
+      const root = container.querySelector<HTMLElement>('.assistant-content')!
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      const textNodes: Node[] = []
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) textNodes.push(node)
+      expect(textNodes.length).toBeGreaterThan(1)
+      const selection = window.getSelection()!
+      const start = textNodes[0]
+      const end = textNodes.at(-1)!
+      selection.removeAllRanges()
+      selection.setBaseAndExtent(
+        direction === 'forward' ? start : end,
+        direction === 'forward' ? 1 : 1,
+        direction === 'forward' ? end : start,
+        direction === 'forward' ? 1 : 1,
+      )
+      const snapshot = {
+        hostId: 'host',
+        scope: 'one',
+        version: 1,
+        rows: [
+          {
+            key: 'reply',
+            message: { id: 1, role: 'assistant', content },
+            startsTimeGap: false,
+            generation: 'g1',
+          },
+        ],
+        agent: true,
+        dark: false,
+      } as NativeChatSnapshot
+      const reported = selectionFromTranscript(snapshot, selection)
+      expect(reported.rowKey).toBe('reply')
+      const selectedText = selection.toString()
+      rerender(
+        <div data-native-row-key="reply">
+          <StreamingMarkdown
+            content={content}
+            selectionRestore={{ anchor: reported.anchor!, focus: reported.focus! }}
+          />
+        </div>,
+      )
+      expect(selection.toString()).toBe(selectedText)
+      expect(selection.anchorNode).toBeTruthy()
+      expect(selection.focusNode).toBeTruthy()
+      if (direction === 'backward')
+        expect(
+          selection.anchorNode!.compareDocumentPosition(selection.focusNode!) &
+            Node.DOCUMENT_POSITION_PRECEDING,
+        ).toBeTruthy()
+      selection.removeAllRanges()
+    },
+  )
   describe('markdown rendering', () => {
     it('renders headings and prose', () => {
       const { container } = render(<StreamingMarkdown content={'# Title\n\nSome prose.'} />)

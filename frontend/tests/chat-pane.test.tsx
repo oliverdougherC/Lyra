@@ -279,6 +279,51 @@ describe('ChatPane', () => {
     deliverMessages?.([message({ id: 11, content: QUESTION })])
     await waitFor(() => expect(screen.getAllByText(QUESTION)).toHaveLength(1))
   })
+
+  it('checks scroll follow once per frame and only changes it for reader scrolling', async () => {
+    vi.mocked(api.listMessages).mockResolvedValue([
+      message({ id: 11, content: QUESTION }),
+      message({ id: 12, role: 'assistant', content: 'Saved answer' }),
+    ])
+    renderWorkspace()
+    await userEvent.click(screen.getByRole('button', { name: 'Reopen chat' }))
+    await screen.findByText('Saved answer')
+    const viewport = screen.getByRole('region', { name: 'Conversation' })
+    expect(viewport).toHaveClass('overflow-y-auto')
+    expect(viewport).toHaveAttribute('tabindex', '0')
+    Object.defineProperties(viewport, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+    })
+    const frames: FrameRequestCallback[] = []
+    const requestFrame = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => frames.push(callback))
+    try {
+      viewport.scrollTop = 400
+      act(() => {
+        viewport.dispatchEvent(new Event('scroll'))
+        viewport.dispatchEvent(new Event('scroll'))
+      })
+      expect(requestFrame).toHaveBeenCalledTimes(1)
+      act(() => frames.shift()?.(0))
+      expect(screen.queryByRole('button', { name: 'Jump to latest' })).toBeNull()
+
+      act(() => {
+        viewport.dispatchEvent(new WheelEvent('wheel'))
+        viewport.dispatchEvent(new Event('scroll'))
+      })
+      act(() => frames.shift()?.(0))
+      expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeVisible()
+
+      viewport.scrollTop = 800
+      act(() => viewport.dispatchEvent(new Event('scroll')))
+      act(() => frames.shift()?.(0))
+      expect(screen.queryByRole('button', { name: 'Jump to latest' })).toBeNull()
+    } finally {
+      requestFrame.mockRestore()
+    }
+  })
 })
 
 /**

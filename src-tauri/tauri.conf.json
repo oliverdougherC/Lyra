@@ -23,7 +23,8 @@
     ],
     "security": {
       "capabilities": [
-        "main-capability"
+        "main-capability",
+        "native-chat-capability"
       ],
       "csp": "default-src 'self'; base-uri 'none'; connect-src 'self' http://127.0.0.1:*; font-src 'self' asset:; form-action 'self'; frame-ancestors 'none'; img-src 'self' asset: blob: data: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'"
     }

@@ -1087,7 +1087,7 @@ test('a reader who scrolls away keeps their place while the stream runs', async 
     // The reader leaves the tail. A wheel event first, then the scroll: the pane only
     // stops following a scroll the reader drove, and a bare programmatic scrollTo would
     // not be one — the pane would keep following and yank the position back on every token.
-    const viewport = page.locator('[data-slot="scroll-area-viewport"]').last()
+    const viewport = page.getByRole('region', { name: 'Conversation' })
     await viewport.evaluate((node) => {
       node.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
       node.scrollTo({ top: 0, behavior: 'instant' })
