@@ -338,6 +338,7 @@ describe('the material scope keeps its full behavior behind a compact pill', () 
       screen.getByRole('radio', { name: /Textbook Original: same.pdf · Added .+ · Document #2/ }),
     )
     expect(onPick).toHaveBeenLastCalledWith(2)
+    expect(screen.getByRole('button', { name: /Lyra reads only Textbook/ })).toHaveTextContent('#2')
   })
 })
 

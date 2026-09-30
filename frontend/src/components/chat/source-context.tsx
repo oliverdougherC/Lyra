@@ -74,12 +74,12 @@ export function SourceContext({
         ? 'Loading selected file'
         : 'Selected file unavailable'
       : 'All material'
-  const selectedVisibleLabel =
+  const selectedSecondaryLabel =
     selected && selectedNote
       ? selectedNote.includes(' · Document #')
-        ? `#${selected.id} ${effectiveDocumentName(selected)}`
+        ? `#${selected.id}`
         : selected.filename
-      : selectedLabel
+      : null
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -127,7 +127,17 @@ export function SourceContext({
             )}
           >
             <FileSearch aria-hidden className="size-3.5 shrink-0" />
-            <span className="truncate">{selectedVisibleLabel}</span>
+            {selectedSecondaryLabel && selected ? (
+              <span className="flex min-w-0 items-center gap-0.5" title={selectedLabel}>
+                <span className="min-w-0 max-w-[50%] truncate">
+                  {effectiveDocumentName(selected)}
+                </span>
+                <span aria-hidden>·</span>
+                <span className="min-w-0 max-w-[50%] truncate">{selectedSecondaryLabel}</span>
+              </span>
+            ) : (
+              <span className="truncate">{selectedLabel}</span>
+            )}
           </button>
         </PopoverTrigger>
         {selectedId !== null ? (
