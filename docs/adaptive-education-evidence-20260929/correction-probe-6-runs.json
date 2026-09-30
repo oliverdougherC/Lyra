@@ -1,0 +1,180 @@
+{
+  "cases": {
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right \u2014 $y(t)=\\int_{-\\infty}^{\\infty}x(\\tau)h(t-\\tau)\\,d\\tau$, and $x(\\tau)$ does confine the integral to $0\\le\\tau\\le1$. The slip is in the very next step, where you wrote the integrand as $e^{-t}$.\n\nShifting $h$ means shifting *everywhere* the argument appears:\n\n$$h(t-\\tau)=e^{-(t-\\tau)}u(t-\\tau)$$\n\nThe $\\tau$ doesn't drop out of the exponential. Pulling $e^{-t}$ outside the integral treats it as constant in $\\tau$, which is exactly why you got a factor of $t$ (integrating a constant over a length-$t$ interval). Keeping $\\tau$ in the exponent, and using your own limits $0\\to t$:\n\n$$y(t)=\\int_0^t e^{-(t-\\tau)}\\,d\\tau=e^{-t}\\int_0^t e^{\\tau}\\,d\\tau=e^{-t}\\left(e^{t}-1\\right)=1-e^{-t},\\qquad 0<t<1$$\n\nOne thing to watch next, in the same limits step: $0\\to t$ is only correct while $t<1$. The integrand is nonzero only where both $x(\\tau)\\ne0$ (needs $0\\le\\tau\\le1$) and $u(t-\\tau)\\ne0$ (needs $\\tau\\le t$), so the upper limit is $\\min(t,1)$, and the two regimes give different formulas.",
+      "generated_at": "2026-09-30T01:58:28+00:00",
+      "duration_seconds": 29.51,
+      "system_prompt_tokens": 1566,
+      "assembled_prompt_sha256": "d4b7ce18dfa8ddacc082a3b64a8efe2afdf554456c933d5dc71b2bacac05544e",
+      "assembled_system_prompt_sha256": "555d1286b93b1ad0538bbed71f1a4d861ece92a9ed3bf6ae602a76968ef409dd",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "92f16ecf8f5ffa8106c81fd8ccf3cdc74b565cd053278cd9c9310aa782c907f1",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A vector space is a set of objects that you can add together and multiply by scalars from a field, such as the real numbers, in a way that behaves like ordinary vectors. More formally, if \\(F\\) is a field, a vector space \\(V\\) over \\(F\\) is a set equipped with vector addition and scalar multiplication such that the operations stay inside \\(V\\), addition is associative and commutative, there is a zero vector and additive inverses, scalar multiplication is compatible with field multiplication, and the distributive laws hold, including \\(1v=v\\).",
+      "generated_at": "2026-09-30T01:58:39+00:00",
+      "duration_seconds": 10.91,
+      "system_prompt_tokens": 1566,
+      "assembled_prompt_sha256": "1b287041634651dffd58900b4cff7a30c1af5e598af3dbed5a43308ed3cf209b",
+      "assembled_system_prompt_sha256": "555d1286b93b1ad0538bbed71f1a4d861ece92a9ed3bf6ae602a76968ef409dd",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "92f16ecf8f5ffa8106c81fd8ccf3cdc74b565cd053278cd9c9310aa782c907f1",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-start-heldout": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start by writing two *generic* members of the set with unspecified coefficients, say $p(x)=a_0+a_1x+a_2x^2$ and $q(x)=b_0+b_1x+b_2x^2$, where nothing is assumed about $a_2$ or $b_2$ except that they're real numbers (they're allowed to be $0$). Then form $p+q$ and $c\\,p$ and look at what the highest power of $x$ can be.\n\nThat's the right first move because closure is the cheapest thing to break: if adding two members or scaling one member can produce something outside the set, you're done and the other axioms don't matter. Keeping the coefficients symbolic is what makes the check honest \u2014 the phrase \"degree at most $2$\" is exactly the condition that the leading coefficient may vanish, so a generic representative has to allow that.",
+      "generated_at": "2026-09-30T01:58:48+00:00",
+      "duration_seconds": 9.17,
+      "system_prompt_tokens": 1566,
+      "assembled_prompt_sha256": "f1a6baa9d8e363a1815d6c4f2d1ab051024b5fcca81b211678e1b8fcecb0f50b",
+      "assembled_system_prompt_sha256": "555d1286b93b1ad0538bbed71f1a4d861ece92a9ed3bf6ae602a76968ef409dd",
+      "tool_schema_tokens": 1823,
+      "user": "For the set of real polynomials with degree at most 2, how should I start checking whether it is a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "92f16ecf8f5ffa8106c81fd8ccf3cdc74b565cd053278cd9c9310aa782c907f1",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

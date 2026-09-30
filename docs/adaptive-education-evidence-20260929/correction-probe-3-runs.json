@@ -1,0 +1,196 @@
+{
+  "cases": {
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right \u2014 the flip-and-shift in $h(t-\\tau)$ is where it slips.\n\n**The error:** you replaced $h(t-\\tau)$ with $e^{-t}$. But the whole argument shifts, so\n\n$$h(t-\\tau) = e^{-(t-\\tau)}\\,u(t-\\tau)$$\n\nThe exponent is $-(t-\\tau)$, not $-t$. That matters because $\\tau$ is the integration variable: $e^{-t}$ is a constant with respect to $\\tau$, so pulling it out of the integral makes the integrand flat and gives you a factor of $t$ (linear growth) where you should get a saturating exponential.\n\n**Corrected line**, for $0<t<1$:\n\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = e^{-t}\\int_0^t e^{\\tau}\\,d\\tau = e^{-t}\\left(e^{t}-1\\right) = 1-e^{-t}$$\n\n**One more thing to fix before you finish:** your upper limit $t$ assumes $x(\\tau)$ is still nonzero at $\\tau=t$, but $x(\\tau)=u(\\tau)-u(\\tau-1)$ is a pulse that dies at $\\tau=1$. So the upper limit is really $\\min(t,1)$, and you need a separate case for $t>1$ \u2014 that's why $y(t)$ stops growing instead of running away.\n\nRedo it with $e^{-(t-\\tau)}$ and the two ranges $0<t<1$ and $t>1$, and I'll check your pieces.",
+      "generated_at": "2026-09-30T01:53:35+00:00",
+      "duration_seconds": 38.44,
+      "system_prompt_tokens": 1375,
+      "assembled_prompt_sha256": "b8a24fd9297c2c379025eae36295652406b76710092b1e31ce77607a900d61a9",
+      "assembled_system_prompt_sha256": "4055c62931811c7a282570b6b2f9a475ff7b406f256624920ab28da60a72c1a2",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "4826aaf742b0a2575ef44498be7b02b440d63d16fc7996a0277468b2ed83a1b9",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A vector space is a set of objects you're allowed to **add** and **stretch by numbers**, where neither operation ever produces something outside the set, and where the results obey the arithmetic rules you already trust from arrows in the plane. The word \"vector\" doesn't mean an arrow specifically \u2014 it just means \"an element of a set with these two well-behaved operations.\" So the definition has three ingredients (a set, a field of scalars, two operations) plus the axioms that say the operations cooperate.\n\n**Formal definition.** Let $F$ be a field (in this course usually $\\mathbb{R}$ or $\\mathbb{C}$). A *vector space over $F$* is a set $V$ equipped with\n\n- vector addition $+ : V \\times V \\to V$,\n- scalar multiplication $\\cdot : F \\times V \\to V$,\n\nsuch that for all $u,v,w \\in V$ and all $a,b \\in F$:\n\n**Under addition** (i.e. $(V,+)$ is an abelian group)\n\n$$u+v = v+u$$\n$$(u+v)+w = u+(v+w)$$\n$$\\exists\\, \\mathbf{0} \\in V \\text{ such that } v+\\mathbf{0}=v$$\n$$\\forall v\\ \\exists\\, (-v) \\in V \\text{ such that } v+(-v)=\\mathbf{0}$$\n\n**Under scalar multiplication**\n\n$$a(u+v) = au+av$$\n$$(a+b)v = av+bv$$\n$$(ab)v = a(bv)$$\n$$1v = v \\quad (\\text{where } 1 \\text{ is the multiplicative identity of } F)$$\n\nTwo things worth noticing about how it's written. First, **closure isn't a separate axiom** here \u2014 it's already baked in, since $+$ and $\\cdot$ are defined as maps *into* $V$. Many textbooks list \"if $u,v\\in V$ then $u+v\\in V$\" and \"if $a\\in F, v\\in V$ then $av\\in V$\" as axioms 1 and 2; that's the same content, just spelled out. Second, the axioms are deliberately minimal: facts you'd expect, like $\\mathbf{0}$ being unique, $0v=\\mathbf{0}$, $a\\mathbf{0}=\\mathbf{0}$, and $-v = (-1)v$, are *theorems* you derive from the list above rather than extra requirements.\n\nThe payoff of stating it this abstractly is that any single proof you do from these axioms applies at once to $\\mathbb{R}^n$, to polynomials of degree $\\le n$, to $m\\times n$ matrices, and to spaces of functions \u2014 because the proof never uses anything but the axioms.",
+      "generated_at": "2026-09-30T01:53:58+00:00",
+      "duration_seconds": 23.3,
+      "system_prompt_tokens": 1375,
+      "assembled_prompt_sha256": "b095b8128d917def2bae62c9378ece0a11b55217da217b59292c120bfb35854f",
+      "assembled_system_prompt_sha256": "4055c62931811c7a282570b6b2f9a475ff7b406f256624920ab28da60a72c1a2",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "4826aaf742b0a2575ef44498be7b02b440d63d16fc7996a0277468b2ed83a1b9",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-start-heldout": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start with **closure under addition**, since that's where a degree restriction is the only thing that can actually go wrong. Write two arbitrary members in full,\n\n$$p(x)=a_2x^2+a_1x+a_0,\\qquad q(x)=b_2x^2+b_1x+b_0,$$\n\nform $p+q$, and ask whether the result still satisfies \"degree at most 2.\"\n\nThe reason to begin there rather than at associativity or the distributive laws: polynomials with the usual addition and scalar multiplication already satisfy all the structural axioms, because they hold for *all* polynomials \u2014 restricting to a subset doesn't break them. So the real question is only whether your subset is closed under $+$ and under scalar multiplication, and whether it contains the zero vector. (That last one is the subtle bit worth checking by hand: the zero polynomial has no degree in the usual sense, so you need to decide whether it counts as a member of \"degree at most 2.\")",
+      "generated_at": "2026-09-30T01:54:07+00:00",
+      "duration_seconds": 8.73,
+      "system_prompt_tokens": 1375,
+      "assembled_prompt_sha256": "7ff62bf38d130e64d710161aaa82603c6f05dc339d771f05794e5e078cd9cf36",
+      "assembled_system_prompt_sha256": "4055c62931811c7a282570b6b2f9a475ff7b406f256624920ab28da60a72c1a2",
+      "tool_schema_tokens": 1823,
+      "user": "For the set of real polynomials with degree at most 2, how should I start checking whether it is a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "4826aaf742b0a2575ef44498be7b02b440d63d16fc7996a0277468b2ed83a1b9",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "cases": {
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right: folding $x(\\tau)$ against the flipped, shifted $h(t-\\tau)$ is exactly the way to go, and the pulse does kill part of the integral.\n\nThe first real slip is in the integrand. You wrote $h(t-\\tau)=e^{-t}$, but the shift applies to the whole exponential:\n\n$$h(t-\\tau)=e^{-(t-\\tau)}\\,u(t-\\tau)$$\n\nDropping the $\\tau$ makes the integrand constant in $\\tau$, which is what produced the factor of $t$ out front. That's also why your answer can't be right: with a constant integrand, $\\int_0^t e^{-t}\\,d\\tau = t e^{-t}$, whereas the actual integral $\\int_0^t e^{-(t-\\tau)}d\\tau$ evaluates to $1-e^{-t}$ \u2014 a different function entirely.\n\nThe second slip is in the same step: the upper limit $t$ only encodes $u(t-\\tau)$, i.e. $\\tau \\le t$. It ignores the pulse, which requires $0 \\le \\tau \\le 1$. Both conditions have to hold at once, so the window is their intersection:\n\n$$y(t)=\\int_{0}^{\\min(1,\\,t)} e^{-(t-\\tau)}\\,d\\tau,\\qquad t>0$$\n\nBecause $\\min(1,t)$ changes form at $t=1$, that upper limit is where your case split belongs \u2014 $0<t<1$ and $t\\ge1$ give different limits, and $t<0$ gives an empty window. Take it from there and evaluate each case.",
+      "generated_at": "2026-09-30T01:57:07+00:00",
+      "duration_seconds": 30.17,
+      "system_prompt_tokens": 1545,
+      "assembled_prompt_sha256": "b5ceccc8b40ff6aebce2df23b0d5a1ad8ec3e7ea44bd15fd0c01b12f8c6e9d43",
+      "assembled_system_prompt_sha256": "56e92200a21c9b9d07c45e162af8cb40821b280cd5bb81d746d1dd4014c67fcc",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "f63558b5a72457a5c4a3e884716fdced73f42240d1bd1ac22c8ec58a7a433e10",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A vector space is a set of objects that you can add together and multiply by scalars from a field, usually real numbers, in a way that behaves consistently like ordinary vectors. That means adding two objects stays in the set, scaling stays in the set, addition has a zero object and negatives, and scalar multiplication follows the usual distributive and associative rules.",
+      "generated_at": "2026-09-30T01:57:16+00:00",
+      "duration_seconds": 8.46,
+      "system_prompt_tokens": 1545,
+      "assembled_prompt_sha256": "e44ba9d3279c49bac7d61b6d840ead8dbeac88a106e875fb75681a9b72de7efe",
+      "assembled_system_prompt_sha256": "56e92200a21c9b9d07c45e162af8cb40821b280cd5bb81d746d1dd4014c67fcc",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "f63558b5a72457a5c4a3e884716fdced73f42240d1bd1ac22c8ec58a7a433e10",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-start-heldout": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start by writing a generic element in a form that keeps every coefficient free:\n\n$$p(x)=a_0+a_1x+a_2x^2,\\qquad a_0,a_1,a_2\\in\\mathbb{R}$$\n\nwith $a_2$ *allowed to be zero* \u2014 that allowance is exactly what \"degree at most 2\" means, and you'll want it when you look for the zero element. Then take two such polynomials $p,q$, form $p+q$ and $\\alpha p$, and ask only whether the results still fit that same shape.\n\nThe reason to start there: closure is the only axiom that can actually fail for a candidate subset. Everything else \u2014 associativity, commutativity of addition, the distributive laws, the role of $1$ \u2014 is arithmetic you already know holds for polynomials in general, so those axioms carry over for free once you know you're working inside a set that addition and scalar multiplication don't let you escape. Test closure first and either the claim dies immediately or the remaining checks are routine.",
+      "generated_at": "2026-09-30T01:57:28+00:00",
+      "duration_seconds": 12.6,
+      "system_prompt_tokens": 1545,
+      "assembled_prompt_sha256": "fef1011597e19f556fd900f2ba5abae50b0daca8664a499e032efe8083a524f3",
+      "assembled_system_prompt_sha256": "56e92200a21c9b9d07c45e162af8cb40821b280cd5bb81d746d1dd4014c67fcc",
+      "tool_schema_tokens": 1823,
+      "user": "For the set of real polynomials with degree at most 2, how should I start checking whether it is a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "c0eeaf1675559b37aa255cc20e0a3c2b66364eed",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "987c22ea157a31a69a1d8c4208c5e0b2eeffd1d928cd4997510f9d4fcf533e73",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "f63558b5a72457a5c4a3e884716fdced73f42240d1bd1ac22c8ec58a7a433e10",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

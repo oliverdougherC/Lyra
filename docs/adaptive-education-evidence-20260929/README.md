@@ -1,10 +1,11 @@
 # Adaptive education chat: bounded production-path evaluation
 
 **Status: quality gate failed.** This is exploratory evidence for PLA-574/PLA-461,
-not acceptance of the candidate. The exact vector-space question remains far too
-long; first-step help still proceeds through the calculation; some worked replies contain
-false intermediate claims. The owner has not reviewed these outputs. Historical
-Guide/Show evidence remains in its original files.
+not acceptance of the candidate. The original v3 failures and the correction-pass
+outputs below are retained separately. The correction makes some conversational answers
+compact and preserves full solutions, but final-source quality still varies and one
+held-out answer makes a false mathematical claim. The owner has not reviewed these
+outputs. Historical Guide/Show evidence remains in its original files.
 
 ## Setup and retained outputs
 
@@ -33,12 +34,69 @@ answer hit a stop limit. All four runs used the same endpoint and settings.
 | Candidate v2, ten cases | [candidate-v2-runs.json](candidate-v2-runs.json) | [candidate-v2-meta.json](candidate-v2-meta.json) |
 | Candidate v3, five critical cases | [candidate-v3-runs.json](candidate-v3-runs.json) | [candidate-v3-meta.json](candidate-v3-meta.json) |
 
+## Current-main correction pass
+
+PR #104 was reconciled with main `299d0da7debb22244c484cd7fd779c423866f9c3`
+after #100 merged. The first clean prompt revision was
+`2a64ab22fbb6acb3d0c990e20230025a0179038e`; its repeated first-pass matrix
+exposed a false optional numerical check in a full convolution solution and an invalid
+equality in a multi-turn polynomial proof. The final application source is
+`d5c2b6a4e3420815e26766b205d33046827e4136`, which directs explicit full answers
+toward the shortest complete route while retaining source and tool rules. Contract 4
+and corpus 2.1.0 cover definition → example → exercise → full proof → narrow follow-up.
+The retained raw records include assembled prompt/source hashes, terminal answers,
+tools, stop reasons and configuration. All 21 final-source observations completed.
+
+| Stage | Raw answers and tool records | Metadata |
+|---|---|---|
+| Diagnostic probes 1–3 | [1](correction-probe-1-runs.json), [2](correction-probe-2-runs.json), [3](correction-probe-3-runs.json) | [1](correction-probe-1-meta.json), [2](correction-probe-2-meta.json), [3](correction-probe-3-meta.json) |
+| Diagnostic probes 4–6 | [4](correction-probe-4-runs.json), [5](correction-probe-5-runs.json), [6](correction-probe-6-runs.json) | [4](correction-probe-4-meta.json), [5](correction-probe-5-meta.json), [6](correction-probe-6-meta.json) |
+| Clean first revision, A/B | [A](correction-first-pass-a-runs.json), [B](correction-first-pass-b-runs.json) | [A](correction-first-pass-a-meta.json), [B](correction-first-pass-b-meta.json) |
+| **Final source, C/D** | [C](correction-final-c-runs.json), [D](correction-final-d-runs.json) | [C](correction-final-c-meta.json), [D](correction-final-d-meta.json) |
+
+Probe 1 changed prompt wording while its cases were running, so its per-case prompt
+hashes are diagnostic only. Probes 2–6 used dirty source snapshots and are also not
+final evidence. A/B and C/D each used a clean, single source SHA per pair. The already
+configured Qwen3.8-Flash-Next endpoint and its hashed URL were unchanged; a separate
+read-only `/v1/models` check returned that configured model before the final pass.
+The 262,144-token window remained a configured value, not a measured server maximum.
+Runs used the production `class_chat` planner and tool loop with a disposable synthetic
+class, temperature 0, the existing generation/context guards, and no student documents.
+No endpoint URL, key, or coursework is present in the retained JSON.
+
+Direct reading of the **C/D final answers** against correctness, requested scope, and
+reading burden gives this bounded assessment. Word counts describe the observations,
+not a response cap or automatic pass rule.
+
+| Request | C / D words | Assessment |
+|---|---:|---|
+| Conversational vector-space definition | 62 / 151 | C is compact and correct; D is correct but re-lists axioms and adds an unasked consequence. Proportionality varies. |
+| Formal vector-space definition | 306 / 388 | Complete and mathematically sound in both observations; some extra remarks. |
+| Polynomial “how do I start?” | 184 / 109 | Both give a useful generic setup but name addition and scalar closure; C adds a wider survey. The one-move burden criterion remains unmet. |
+| Convolution attempt diagnosis | 160 / 170 | Both identify the lost $\tau$ and use valid bounds or restricted ranges. Both evaluate a branch and mention a second issue beyond the first-error request. |
+| Explicit full convolution solution | 311 / 252 | Both derive the correct piecewise result. C includes several unrequested but correct checks; D is sound on direct review. |
+| Brine-tank start help | 114 / 138 | Both give a usable opening move; D adds the next balance context. |
+| Multi-turn full polynomial proof | 423 / 344 | Complete and correct on direct reading, with surplus axiom-by-axiom work and closing tangents. The prior A run's invalid equality is preserved separately. |
+| Scalar-multiplication / narrow zero follow-ups | 148 / 103 (C only) | Correct core points, but both add axioms or nonemptiness discussion beyond the narrow question. |
+| Held-out negative-eigenvalue depth request | 695 (C only) | **Correctness failure.** It correctly derives $Av=\lambda v$ and gives a matrix example, then falsely says a negative-eigenvalue mode of the continuous system $\dot x=Ax$ decays *through* the origin to the opposite ray. A continuous mode $e^{\lambda t}v$ retains its sign for finite $t$. |
+
+The other C held-out cases (plain-English eigenvector, algebra-attempt diagnosis,
+answer checking, simpler convolution explanation) answered their core questions
+without a found critical mathematical error, though several carry avoidable prose.
+This is the implementer's direct review, not owner or independent human acceptance.
+The false continuous-time claim and repeated scope misses keep PLA-461 **In Progress**.
+The synthetic nicknamed-source case, final combined signed-app behavior and native
+acceptance belong to the later integrated candidate review; none is claimed here.
+
+## Original v3 comparison
+
 The baseline used [baseline-corpus.json](baseline-corpus.json), a copy of the
 new synthetic cases with the legacy prompt-contract version set to 2. Candidate v1
 used [candidate-corpus-run.json](candidate-corpus-run.json); one rubric wording was
-corrected afterward, so that exact snapshot is retained. The final corpus is
-`scripts/eval_corpora/tutor_semantic.json` (2.0.0, contract 3). V3's recorded
-corpus, prompt, route-prompt and harness hashes match the branch files.
+corrected afterward, so that exact snapshot is retained. The v3 corpus was
+`scripts/eval_corpora/tutor_semantic.json` at version 2.0.0, contract 3. V3's
+recorded corpus, prompt, route-prompt and harness hashes identify that historical
+branch revision, not the current source. The current corpus is 2.1.0, contract 4.
 
 ## Direct reading against the rubric
 
@@ -62,14 +120,13 @@ is still required before any acceptance claim.
 
 ## Limits and next gate
 
-The key quality criterion has not passed, so no further prompt tuning or live runs
-were launched after v3. The retained runs are single observations per
-case, not repeat distributions. Source-scoped document tools were offered, but this
-corpus had no synthetic uploaded document; the local full-stack acceptance tests for
-later-page direct grounding, document-tool continuation, and native matrix text/image
-passed after the compact prompt. Nickname behavior must be evaluated after PLA-576
-integration. A live tool-less endpoint run was not
-performed; offline route tests cover its fallback and shared contract. No native
-acceptance or independent human review was performed in this worktree. PLA-461 stays
-open until the critical failures are repaired and independently reviewed on the
-production path.
+The current correction pass adds repeated critical observations and held-out/multi-turn
+cases after v3, but its final-source quality gate still fails. Source-scoped document
+tools were offered; this semantic corpus contains no synthetic uploaded document.
+The local full-stack tests cover later-page direct grounding, document-tool
+continuation, and native matrix text/image, but the combined nicknamed-source live
+case remains for integration. A live tool-less endpoint run was not performed;
+offline route tests cover its fallback and shared contract. No native acceptance or
+independent human review was performed in this worktree. PLA-461 stays open for the
+specific correctness and scope failures above. Green software checks do not waive
+that result.

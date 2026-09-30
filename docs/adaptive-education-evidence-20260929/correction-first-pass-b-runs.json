@@ -1,0 +1,388 @@
+{
+  "cases": {
+    "no-idea-how-to-start": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start with just the inflow: multiply the incoming concentration by the incoming flow rate, $0.1\\ \\text{kg/L} \\times 3\\ \\text{L/min}$.\n\nThat one number is the entire \"salt arriving\" side of the balance, and it's the only piece you can write down without knowing anything about $S(t)$ \u2014 everything else in the problem (the outflow term) depends on how much salt is in the tank at time $t$, so pinning down this constant first leaves you with exactly one term left to build.",
+      "generated_at": "2026-09-30T02:08:58+00:00",
+      "duration_seconds": 13.77,
+      "system_prompt_tokens": 1534,
+      "assembled_prompt_sha256": "bb02240965d2402904b999ba9dda4f9af4e103f4861438700db499d49b956bf0",
+      "assembled_system_prompt_sha256": "66261eff0d391cc2a791ceb887b9dcef4e4f98660d44a65d413537450f66ec42",
+      "tool_schema_tokens": 1823,
+      "user": "I have no idea how to start.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "2a64ab22fbb6acb3d0c990e20230025a0179038e",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "3011b3df6d9d41287e53d0f29ed94c9bfe270899ed63d61473c0e95c05334010",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right \u2014 $y(t)=\\int_{-\\infty}^{\\infty} x(\\tau)\\,h(t-\\tau)\\,d\\tau$, and using $x(\\tau)$ as the window is the correct way to go.\n\n**The slip is in the substitution.** You wrote $h(t-\\tau)=e^{-t}$, but $h$ is being evaluated at the *shifted* argument:\n\n$$h(t-\\tau)=e^{-(t-\\tau)}\\,u(t-\\tau).$$\n\nOnly $x(\\tau)$ gets replaced by the pulse; the exponential still carries $\\tau$. Dropping the $\\tau$ turns the integrand into a constant with respect to $\\tau$, which is exactly why your answer came out as (length of interval) $\\times$ a constant \u2014 and it also breaks the check that $y(t)\\to 0$ as $t\\to\\infty$, since a pulse against a decaying kernel must eventually wash out.\n\n**Corrected step:**\n\n$$y(t)=\\int_{0}^{1} e^{-(t-\\tau)}\\,u(t-\\tau)\\,d\\tau .$$\n\nOne more thing to fix in the same line, before you evaluate: the step $u(t-\\tau)$ is $1$ only when $\\tau\\le t$, so the upper limit is not $t$ but $\\min(t,1)$ \u2014 and if $t\\le 0$ the overlap is empty, giving $y(t)=0$. That $\\min$ is what forces the piecewise split at $t=1$.\n\nTake it from there with the two ranges $0<t<1$ and $t>1$.",
+      "generated_at": "2026-09-30T02:09:43+00:00",
+      "duration_seconds": 45.28,
+      "system_prompt_tokens": 1534,
+      "assembled_prompt_sha256": "5caa4d38b5d8bc759c21fd36315ed464af725a15d38e3b3e0f4f072e7a641be5",
+      "assembled_system_prompt_sha256": "66261eff0d391cc2a791ceb887b9dcef4e4f98660d44a65d413537450f66ec42",
+      "tool_schema_tokens": 1823,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "2a64ab22fbb6acb3d0c990e20230025a0179038e",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "3011b3df6d9d41287e53d0f29ed94c9bfe270899ed63d61473c0e95c05334010",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": 0,
+            "upper": 1
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": 0, \"upper\": 1}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## Setup\n\nLet $x(t)=u(t)-u(t-1)$ (the unit pulse on $[0,1]$) and $h(t)=e^{-t}u(t)$. Then\n\n$$y(t)=(x*h)(t)=\\int_{-\\infty}^{\\infty}x(\\tau)\\,h(t-\\tau)\\,d\\tau=\\int_{-\\infty}^{\\infty}x(\\tau)\\,e^{-(t-\\tau)}u(t-\\tau)\\,d\\tau.$$\n\n## Step 1: Find where the integrand is nonzero\n\nTwo conditions must hold at the same time:\n\n- $x(\\tau)\\ne 0 \\iff 0\\le \\tau \\le 1$\n- $u(t-\\tau)=1 \\iff \\tau \\le t$\n\nSo the integration window is\n\n$$0\\le \\tau \\le \\min(t,1),\\qquad\\text{provided } t\\ge 0 .$$\n\nThis is the whole trick with convolution: the upper limit $\\min(t,1)$ is what forces the piecewise answer.\n\n## Step 2: Case $t<0$\n\nThe sliding window $\\tau\\le t$ never touches $[0,1]$, so\n\n$$y(t)=0,\\qquad t<0 .$$\n\n## Step 3: Case $0\\le t\\le 1$ (partial overlap)\n\nHere $\\min(t,1)=t$:\n\n$$y(t)=\\int_{0}^{t}e^{-(t-\\tau)}\\,d\\tau=e^{-t}\\int_0^t e^{\\tau}\\,d\\tau=e^{-t}\\left(e^{t}-1\\right)=1-e^{-t}.$$\n\nRising, and at $t=1$ it reaches $1-e^{-1}\\approx 0.632$.\n\n## Step 4: Case $t>1$ (full overlap)\n\nNow the whole pulse sits inside the exponential's support, so $\\min(t,1)=1$:\n\n$$y(t)=\\int_{0}^{1}e^{-(t-\\tau)}\\,d\\tau=e^{-t}\\int_0^1 e^{\\tau}\\,d\\tau=e^{-t}(e-1)=e^{-(t-1)}-e^{-t}.$$\n\nDecaying, since the pulse has fully entered the decaying tail.\n\n## Step 5: Assemble\n\n$$\ny(t)=\n\\begin{cases}\n0, & t<0\\\\[4pt]\n1-e^{-t}, & 0\\le t\\le 1\\\\[4pt]\ne^{-(t-1)}-e^{-t}, & t>1\n\\end{cases}\n$$\n\n**Sanity checks.** At $t=1$ both formulas give $1-e^{-1}$, so $y$ is continuous (it must be: you are convolving a bounded function with an $L^1$ function). The peak is at $t=1$, after which the exponential decay wins.\n\n**Independent check via differentiation.** Since $x'(t)=\\delta(t)-\\delta(t-1)$,\n\n$$y'(t)=h(t)-h(t-1)=e^{-t}u(t)-e^{-(t-1)}u(t-1),$$\n\nwhich differentiates each branch correctly ($e^{-t}$ on $0<t<1$, and $e^{-t}-e^{-(t-1)}$ for $t>1$) and integrates to $0$ as $t\\to-\\infty$. Equivalently, in the Laplace domain $Y(s)=\\dfrac{1-e^{-s}}{s}\\cdot\\dfrac{1}{s+1}$, whose inverse is exactly the piecewise result above.",
+      "generated_at": "2026-09-30T02:10:51+00:00",
+      "duration_seconds": 68.12,
+      "system_prompt_tokens": 1534,
+      "assembled_prompt_sha256": "970d3d0a0e47ce1fc8c096924d50ab1fe1c59d9bad5611b0b448f72150af4a8c",
+      "assembled_system_prompt_sha256": "66261eff0d391cc2a791ceb887b9dcef4e4f98660d44a65d413537450f66ec42",
+      "tool_schema_tokens": 1823,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "2a64ab22fbb6acb3d0c990e20230025a0179038e",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "3011b3df6d9d41287e53d0f29ed94c9bfe270899ed63d61473c0e95c05334010",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-definition": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A vector space is a set of objects called vectors, together with two operations\u2014vector addition and scalar multiplication by numbers from a field such as \\(\\mathbb{R}\\)\u2014that behave like the usual rules for arrows or coordinate lists. Concretely, you must be able to add two vectors and multiply a vector by a scalar and stay inside the set, with addition associative and commutative, a zero vector, additive inverses, and scalar multiplication compatible with field arithmetic, including \\(1\\mathbf{v}=\\mathbf{v}\\).",
+      "generated_at": "2026-09-30T02:10:59+00:00",
+      "duration_seconds": 7.44,
+      "system_prompt_tokens": 1534,
+      "assembled_prompt_sha256": "2999251aac221afd9cefba3fbbcf20c50f46a1a2f48749172a902d7c341921ed",
+      "assembled_system_prompt_sha256": "66261eff0d391cc2a791ceb887b9dcef4e4f98660d44a65d413537450f66ec42",
+      "tool_schema_tokens": 1823,
+      "user": "Can we go over the definition of a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "2a64ab22fbb6acb3d0c990e20230025a0179038e",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "3011b3df6d9d41287e53d0f29ed94c9bfe270899ed63d61473c0e95c05334010",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-formal": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "## Vector space \u2014 formal definition\n\nLet $\\mathbb{F}$ be a field (its elements are called **scalars**; usually $\\mathbb{F}=\\mathbb{R}$ or $\\mathbb{C}$). A **vector space over $\\mathbb{F}$** is a set $V$ whose elements are called **vectors**, equipped with two operations\n\n$$\n+ \\;:\\; V\\times V\\to V,\\qquad (\\mathbf u,\\mathbf v)\\mapsto \\mathbf u+\\mathbf v\n$$\n$$\n\\cdot \\;:\\; \\mathbb{F}\\times V\\to V,\\qquad (a,\\mathbf v)\\mapsto a\\mathbf v,\n$$\n\nsuch that the eight axioms below hold for **all** $\\mathbf u,\\mathbf v,\\mathbf w\\in V$ and **all** $a,b\\in\\mathbb{F}$.\n\nBecause the two operations are defined as *functions on* $V\\times V$ and $\\mathbb{F}\\times V$, sums and scalar multiples automatically land back in $V$; closure is built into the setup rather than stated as a separate axiom.\n\n### Axioms for vector addition\n\n| | Axiom | Statement |\n|---|---|---|\n| (V1) | Commutativity | $\\mathbf u+\\mathbf v=\\mathbf v+\\mathbf u$ |\n| (V2) | Associativity | $(\\mathbf u+\\mathbf v)+\\mathbf w=\\mathbf u+(\\mathbf v+\\mathbf w)$ |\n| (V3) | Zero vector | $\\exists\\,\\mathbf 0\\in V$ such that $\\mathbf v+\\mathbf 0=\\mathbf v$ |\n| (V4) | Additive inverse | $\\forall\\,\\mathbf v\\ \\exists\\,(-\\mathbf v)\\in V$ such that $\\mathbf v+(-\\mathbf v)=\\mathbf 0$ |\n\nTogether, (V1)\u2013(V4) say exactly that $(V,+)$ is an abelian group.\n\n### Axioms for scalar multiplication\n\n| | Axiom | Statement |\n|---|---|---|\n| (V5) | Distributivity over vector addition | $a(\\mathbf u+\\mathbf v)=a\\mathbf u+a\\mathbf v$ |\n| (V6) | Distributivity over scalar addition | $(a+b)\\mathbf v=a\\mathbf v+b\\mathbf v$ |\n| (V7) | Scalar associativity | $a(b\\mathbf v)=(ab)\\mathbf v$ |\n| (V8) | Scalar identity | $1\\mathbf v=\\mathbf v$, where $1$ is the multiplicative identity of $\\mathbb{F}$ |\n\n### Points worth noting about the statement\n\n- The zero vector in (V3) and the inverse in (V4) are stated as *existing*; uniqueness follows from the axioms rather than being assumed, and the same symbol $\\mathbf 0$ is reserved for the zero **vector** as opposed to the scalar $0\\in\\mathbb{F}$.\n- Axioms (V5)\u2013(V8) are what tie the two operations together; each one is a *compatibility* requirement, and each has a genuine counterexample if you perturb the operations (e.g. define $a\\mathbf v=\\mathbf 0$ for all $a$: (V8) fails).\n- The field structure of $\\mathbb{F}$ matters in (V6) and (V7): $(a+b)\\mathbf v$ uses field addition, $a(b\\mathbf v)$ uses field multiplication. Replacing $\\mathbb{F}$ by a ring that is not a field gives the different notion of a module.\n- Familiar facts such as $0\\mathbf v=\\mathbf 0$, $a\\mathbf 0=\\mathbf 0$, and $(-1)\\mathbf v=-\\mathbf v$ are **theorems** derived from these axioms, not axioms themselves \u2014 a common source of \"is this allowed?\" doubt when checking whether some structure is a vector space.\n\nTo verify a specific candidate set is a vector space, you check the axioms against the *given* operations (or exhibit it as a subspace of a known space, which reduces the check to nonemptiness plus closure under $\\mathbf u+\\mathbf v$ and $a\\mathbf v$).",
+      "generated_at": "2026-09-30T02:11:17+00:00",
+      "duration_seconds": 18.08,
+      "system_prompt_tokens": 1534,
+      "assembled_prompt_sha256": "66cceaa483f032775742e063565669a5cc567122a7198ee0998a41f8dc3db47b",
+      "assembled_system_prompt_sha256": "66261eff0d391cc2a791ceb887b9dcef4e4f98660d44a65d413537450f66ec42",
+      "tool_schema_tokens": 1823,
+      "user": "Give me the formal definition of a vector space, including the axioms.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "2a64ab22fbb6acb3d0c990e20230025a0179038e",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "3011b3df6d9d41287e53d0f29ed94c9bfe270899ed63d61473c0e95c05334010",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "vector-space-start-heldout": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start by writing two completely general elements with undetermined coefficients, say $p(t)=a_2t^2+a_1t+a_0$ and $q(t)=b_2t^2+b_1t+b_0$, forming $p+q$, and asking whether the result still has the same form \u2014 a polynomial of degree at most $2$.\n\nThat's the right first move because the bulk of the axioms (associativity, commutativity of addition, distributivity, and the rest) are inherited for free from ordinary polynomial arithmetic, which already satisfies them. The only thing a *restricted* set like this can genuinely fail is closure: whether adding two members, or scaling one by a real number, ever lands you outside the set. So closure is both the cheapest check and the only one with real risk.\n\nOne caution as you set it up: \"degree at most $2$\" means the leading coefficient is allowed to be zero, so keep $a_2$ and $b_2$ as free parameters rather than assuming they're nonzero. If you impose $a_2\\neq 0$, you've quietly switched to testing a different set.",
+      "generated_at": "2026-09-30T02:11:29+00:00",
+      "duration_seconds": 12.27,
+      "system_prompt_tokens": 1534,
+      "assembled_prompt_sha256": "9bee05161386eaf1dbb83208b6874769639016bb258084bcf0b42aac3a56a03e",
+      "assembled_system_prompt_sha256": "66261eff0d391cc2a791ceb887b9dcef4e4f98660d44a65d413537450f66ec42",
+      "tool_schema_tokens": 1823,
+      "user": "For the set of real polynomials with degree at most 2, how should I start checking whether it is a vector space?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "2a64ab22fbb6acb3d0c990e20230025a0179038e",
+          "dirty": false
+        },
+        "hashes": {
+          "corpus": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2",
+          "rubric": "49c3860af3ec9297f45b672fb95fff6be65e36e1f1c187c5caaf839752113e7c",
+          "prompts": "3011b3df6d9d41287e53d0f29ed94c9bfe270899ed63d61473c0e95c05334010",
+          "agent_prompt_source": "4b8825abf105dcb6b6109db11624e3da51198f4898f367c2213258cb95b49904",
+          "harness": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458"
+        },
+        "model": "Qwen3.8-Flash-Next",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}
