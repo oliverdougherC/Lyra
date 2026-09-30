@@ -123,11 +123,11 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     await expect(rejectA).toBeVisible()
     await rejectA.click()
     // A's rejection settles out of the live band: the card leaves the top work band, and
-    // its terminal state stays findable in the collapsed Details audit.
+    // its terminal state stays findable through history in the app header.
     await expect(card).toBeHidden({ timeout: 10_000 })
     await page
-      .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Activity history/i })
+      .locator('[data-app-header]')
+      .getByRole('button', { name: 'Activity history' })
       .click()
     await expect(page.locator('[data-slot="badge"]', { hasText: 'Rejected' })).toBeVisible({
       timeout: 10_000,
@@ -170,12 +170,12 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     // 7. Student explicitly reviews B and accepts it through the browser UI. C's base is
     //    the current file state (B), so the re-fetched review matches and the apply lands.
     await cardC.getByRole('button', { name: /Accept remaining/i }).click()
-    // C applied: its result settles out of the live band into the collapsed audit
-    // (the reload above re-collapsed it).
+    // C applied: its result settles out of the live band into the history
+    // (the reload above closed it).
     await expect(cardC).toBeHidden({ timeout: 15_000 })
     await page
-      .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Activity history/i })
+      .locator('[data-app-header]')
+      .getByRole('button', { name: 'Activity history' })
       .click()
     await expect(page.getByText('Applied', { exact: true })).toBeVisible()
 
