@@ -53,7 +53,13 @@ from backend.llm.turn_budget import (
     plan_budget,
     trim_history,
 )
-from backend.rag.retrieve import RetrievalResult, RetrievedChunk, exact_reference_chunks, retrieve
+from backend.rag.retrieve import (
+    PAGE_REFERENCE,
+    RetrievalResult,
+    RetrievedChunk,
+    exact_reference_chunks,
+    retrieve,
+)
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import get_db
 from backend.storage.secrets import wait_for_credential_read
@@ -170,8 +176,9 @@ _NO_TOOL_SUPPORT_VERDICT_MESSAGE = (
 _STOP_TASK_TIMEOUT = QUIESCENCE_SECONDS + 30.0
 # A document tool's result must be able to re-enter the guarded conversation. Without
 # this room, a first request that fills retrieval to the ceiling can dispatch a read and
-# then fail before the model sees its result. The visual path already holds image room.
-_TOOL_CONTINUATION_RESERVE = 512
+# then fail before the model sees its result. An explicitly named readable text page
+# avoids an unnecessary initial image so this reserve remains available.
+_TOOL_CONTINUATION_RESERVE = 1024
 
 
 class AgentChatRequest(BaseModel):
@@ -343,17 +350,26 @@ def _scoped_session(conn: sqlite3.Connection, class_id: int, session_id: int) ->
     return session
 
 
-def _agent_layer_prompt(registry: dict[str, object]) -> str:
+def _agent_layer_prompt(registry: dict[str, object], *, compact_availability: bool = False) -> str:
     """The contextual agent's capability layer: the base agent instructions plus the
     per-family availability notes for this turn.
 
     Per-family availability is appended so the model can say plainly what it cannot do
-    this turn without being told a family is off when it is on. This layer is appended on
-    top of the full tutor system prompt (`build_system_prompt`) and describes only the
+    this turn without being told a family is off when it is on. With an attached image,
+    the same facts use one compact list to preserve room for the page's text. This layer
+    precedes the full tutor system prompt (`build_system_prompt`) and describes only the
     tools - the identity, the base rules, the Guide/Show contract, and the class/user facts
     all come from the one shared tutoring prompt, so there is nothing to re-define here.
     """
     prompt = _SYSTEM_PROMPTS["agent"]
+    if compact_availability:
+        unavailable = [label for tool, label in _AGENT_AVAILABILITY if tool not in registry]
+        if unavailable:
+            prompt += (
+                " Unavailable this turn: " + ", ".join(unavailable) + ". "
+                "Mention only if the request needs one."
+            )
+        return prompt
     for tool, label in _AGENT_AVAILABILITY:
         if tool not in registry:
             prompt += (
@@ -484,12 +500,112 @@ def _source_context_entry(chunk: RetrievedChunk) -> dict[str, object]:
     }
 
 
+def _needs_initial_page_image(
+    conn: sqlite3.Connection, class_id: int, document_id: int, question: str
+) -> bool:
+    """Keep visual evidence for scans and layouts, not an already-readable text page.
+
+    A named text page can still be read as an image on demand. Attaching that image
+    before a document read consumes the continuation room in an 8,192-token turn.
+    When the request names a visual feature, a page is unreadable, or the page has a
+    recorded figure, retain the image path. Unnamed requests keep the existing visual
+    selection policy for short scanned worksheets.
+    """
+    if re.search(
+        r"\b(?:image|scan|diagram|figure|graph|circuit|matrix|table|layout)\b",
+        question,
+        re.I,
+    ):
+        return True
+    pages = {int(match.group(1)) for match in PAGE_REFERENCE.finditer(question)}
+    if not pages:
+        return True
+    for page in pages:
+        row = conn.execute(
+            "select p.state, r.content, exists("
+            "select 1 from document_figures f where f.document_id = p.document_id "
+            "and f.page_number = p.page_number) as has_figure "
+            "from document_pages p join documents d on d.id = p.document_id "
+            "left join document_read_pages r "
+            "on r.document_id = p.document_id and r.page_number = p.page_number "
+            "where p.document_id = ? and d.class_id = ? and p.page_number = ?",
+            (document_id, class_id, page),
+        ).fetchone()
+        if (
+            row is None
+            or row["state"] not in ("text", "recognized")
+            or not str(row["content"] or "").strip()
+            or row["has_figure"]
+            or "[figure]" in str(row["content"])
+        ):
+            return True
+    return False
+
+
+def _physical_page_chunks(
+    conn: sqlite3.Connection,
+    class_id: int,
+    document_id: int | None,
+    question: str,
+    budget_tokens: int,
+    selected_filename: str | None,
+) -> list[RetrievedChunk]:
+    """Ground an explicit physical page even when the semantic index starts elsewhere.
+
+    Long pages stay with the bounded read tool; only whole page text that fits the
+    retrieval budget is added here. The selected document and class are checked in
+    the query, and the formatted source label still carries its physical page. The
+    inventory label supplies the selected document's effective display name.
+    """
+    if document_id is None or budget_tokens <= 0:
+        return []
+    pages = sorted({int(match.group(1)) for match in PAGE_REFERENCE.finditer(question)})
+    result: list[RetrievedChunk] = []
+    remaining = budget_tokens
+    for page in pages:
+        row = conn.execute(
+            "select p.content, d.filename from document_read_pages p "
+            "join documents d on d.id = p.document_id "
+            "where p.document_id = ? and d.class_id = ? and d.state = 'ready' "
+            "and p.page_number = ?",
+            (document_id, class_id, page),
+        ).fetchone()
+        if row is None:
+            continue
+        content = str(row["content"] or "").strip()
+        cost = estimate_tokens(content)
+        if not content or cost > remaining:
+            continue
+        result.append(
+            RetrievedChunk(
+                # This result is prompt-only: negative IDs cannot collide with stored
+                # chunk IDs and never enter document cursors or persisted source IDs.
+                chunk_id=-(document_id * 100_000 + page),
+                document_id=document_id,
+                content=content,
+                token_count=cost,
+                page_number=page,
+                section_title=None,
+                section_path=None,
+                section_number=None,
+                problem_number=None,
+                part_index=None,
+                filename=selected_filename or str(row["filename"]),
+                similarity=1.0,
+                score=1.0,
+            )
+        )
+        remaining -= cost
+    return result
+
+
 def _retrieve_turn_context(
     conn: sqlite3.Connection,
     class_id: int,
     query: str,
     budget_tokens: int,
     document_id: int | None,
+    selected_filename: str | None,
 ) -> RetrievalResult:
     """The class material the turn grounds on, ranked and fitted to its budget.
 
@@ -511,6 +627,10 @@ def _retrieve_turn_context(
             omitted_document_count=0,
         )
     direct = exact_reference_chunks(conn, class_id, document_id, query, budget_tokens)
+    if not direct:
+        direct = _physical_page_chunks(
+            conn, class_id, document_id, query, budget_tokens, selected_filename
+        )
     ranked = retrieve(conn, class_id, query, budget_tokens, document_id=document_id)
     if not direct:
         return ranked
@@ -725,7 +845,12 @@ def _plan_agent_turn_surface(
     budget = plan_budget(config.context_window)
     visual_evidence: list[tuple[int, bytes]] = []
     visual_omitted = 0
-    if profile == "agent" and config.vision_supported and document_id is not None:
+    if (
+        profile == "agent"
+        and config.vision_supported
+        and document_id is not None
+        and _needs_initial_page_image(conn, class_id, document_id, content)
+    ):
         try:
             visual_evidence, visual_omitted = document_access.visual_pages(
                 conn, class_id, document_id, content
@@ -770,13 +895,17 @@ def _plan_agent_turn_surface(
             mode,
             profiles.select_user_facts(conn),
             profiles.select_active_facts(conn, class_id),
+            include_examples=not visual_evidence,
         )
         if toolless:
             base_system = f"{tutor_prompt}\n\n{_TOOLLESS_AGENT_NOTE}"
         else:
             # Put the shared teaching contract after capability instructions. A long
             # capability inventory must not become the last word on answer scope.
-            base_system = f"{_agent_layer_prompt(probe_registry)}\n\n{tutor_prompt}"
+            base_system = (
+                f"{_agent_layer_prompt(probe_registry, compact_availability=bool(visual_evidence))}"
+                f"\n\n{tutor_prompt}"
+            )
             if config.vision_supported and not allow_dynamic_image:
                 base_system += (
                     "\n\nThis turn's context is too small for another page image. "
@@ -786,8 +915,11 @@ def _plan_agent_turn_surface(
         tutor_prompt = ""
         base_system = _availability_prompt(profile, probe_registry)
 
+    selected_filename: str | None = None
     if profile == "agent":
         overview = document_access.inventory(conn, class_id, document_id, limit=30)
+        if document_id is not None and overview["documents"]:
+            selected_filename = str(overview["documents"][0]["filename"])
         if (
             document_id is not None
             and not config.vision_supported
@@ -888,7 +1020,7 @@ def _plan_agent_turn_surface(
     )
     available_retrieval = max(0, prompt_room - history_used)
     continuation_room = (
-        min(_TOOL_CONTINUATION_RESERVE, available_retrieval // 4)
+        min(_TOOL_CONTINUATION_RESERVE, available_retrieval // 2)
         if profile == "agent" and not toolless and not visual_evidence
         else 0
     )
@@ -914,7 +1046,12 @@ def _plan_agent_turn_surface(
         retrieval = cached_retrieval
     else:
         retrieval = _retrieve_turn_context(
-            conn, class_id, retrieval_query, retrieval_budget, document_id
+            conn,
+            class_id,
+            retrieval_query,
+            retrieval_budget,
+            document_id,
+            selected_filename,
         )
     # The shared final pass charges the block's source labels and heading against the same
     # budget the chunks were drawn to, dropping lowest-ranked chunks from the end. Re-fitting

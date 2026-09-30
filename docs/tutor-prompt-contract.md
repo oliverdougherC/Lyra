@@ -25,6 +25,14 @@ contract; tool results needed for the answer remain visible in the final reply. 
 turn uses this same teaching contract. Writer, structured solver, and study-generation prompts
 are separate.
 
+For an attached visual page in a small context window, the class agent omits only the
+optional response-shape examples and condenses unavailable-capability labels. Its core
+teaching, source-safety, and citation rules remain. Explicitly named readable text pages
+use their physical page text before indexed search; a page image remains attached for
+scans, figures, and visual-layout requests. A plain text page need not spend the image
+budget, leaving room for a scoped document-tool reply. Long pages remain available
+through the bounded page-read tool rather than being silently cut into the prompt.
+
 `scripts/eval_corpora/tutor_semantic.json` version 2.1.0 pins this contract. Its legacy
 mode values test compatibility, not distinct response styles. `scripts/eval_tutor.py
 run --surface class_chat` exercises the production planner/tool loop. Retained terminal
