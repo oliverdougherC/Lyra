@@ -62,6 +62,22 @@ fn fit_main_window(config: &mut WindowConfig, width: f64, height: f64, x: f64, y
 mod tests {
     use super::*;
 
+    use serde_json::Value;
+
+    #[test]
+    fn main_window_does_not_consume_native_file_drops() {
+        // Wry's macOS handler consumes Finder drops when this is true. False delegates
+        // to WKWebView, where the Documents pane's existing HTML drop queue owns them.
+        let config: Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+        let main = config["app"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|window| window["label"] == "main")
+            .unwrap();
+        assert_eq!(main["dragDropEnabled"], false);
+    }
+
     #[test]
     fn laptop_work_area_keeps_title_bar_and_controls_visible() {
         let mut config = WindowConfig {

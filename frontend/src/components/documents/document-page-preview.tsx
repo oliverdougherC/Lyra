@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api, documentPagePath, loadProtectedAssetSource } from '@/lib/api'
+import { effectiveDocumentName } from '@/lib/document-display'
 import { useDocuments } from '@/lib/hooks/use-documents'
 
 type Preview = { kind: 'image'; url: string } | { kind: 'text'; text: string; truncated: boolean }
@@ -70,7 +71,7 @@ export function DocumentPagePreview({
       <DialogContent className="flex max-h-[90dvh] max-w-4xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>
-            {document?.filename ?? 'Source document'} · page {page}
+            {document ? effectiveDocumentName(document) : 'Source document'} · page {page}
           </DialogTitle>
           <DialogDescription>Exact source page used in this conversation.</DialogDescription>
         </DialogHeader>
@@ -91,7 +92,7 @@ export function DocumentPagePreview({
           {preview?.kind === 'image' ? (
             <img
               src={preview.url}
-              alt={`${document?.filename ?? 'Source'}, page ${page}`}
+              alt={`${document ? effectiveDocumentName(document) : 'Source'}, page ${page}`}
               className="mx-auto h-auto max-w-full"
             />
           ) : preview?.kind === 'text' ? (

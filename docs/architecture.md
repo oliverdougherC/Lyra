@@ -109,15 +109,37 @@ identity, physical page, character range, evidence type, and relevant continuati
 detail. The live trail stays beside the active answer; settled activity and provider-exposed
 reasoning are collapsed in Details, including after reload. Source links open the exact page
 through the authenticated Files preview. The separate activity history retains the durable audit
-and results. An uploaded course document is retrieved as study context; it does not require an
-attached local workspace. The agent requests workspace access only for work that needs files in
-an attached folder.
+and results. Its disclosure lives in the existing chat header so audit availability cannot move
+the transcript or composer. The attention list is an accessible menu that the native chat
+occlusion observer recognizes while open; selecting an action focuses its exact card after
+the menu closes. It points to unresolved access, approval, retry, and load-recovery controls
+by scope or artifact ID; historical tool failures and terminal effects
+remain in the audit without an unresolvable warning. An uploaded course document is retrieved
+as study context; it does not require an attached local workspace. The agent requests workspace
+access only for work that needs files in an attached folder.
 
 `search_documents` returns bounded cited excerpts and a `next_cursor` when more text is
 available. The agent passes that cursor with the same query to continue. Search cursors
 expire after any indexed chunk or readable-page write, including ingestion in another
 class, because FTS ranking uses database-wide statistics. Each page checks the cursor
 and reads its results in one SQLite snapshot; an expired cursor must restart the search.
+
+Document nicknames are nullable metadata on `documents`. A nonblank nickname is the current
+display name; the original filename, file kind, path, hash, and document ID remain unchanged.
+`PATCH /api/documents/{id}/nickname` trims and validates a new name and compares the caller's
+nickname captured when the edit dialog opened before writing only that column. A refetch does
+not advance that baseline. A stale edit returns a conflict, keeps the typed draft, shows the
+current name, and requires the student to adopt it or explicitly keep the draft before retrying.
+Equal display names in source selectors show the original filename; equal originals also show
+the date added and stable document ID. The chat source picker keeps that ID visible beside the
+original-name note whenever display names collide, including when long filenames truncate.
+Current retrieval and document tools
+use the effective name for new citations while retaining document/page IDs; saved conversation
+prose and historical source labels remain as recorded. Inventory exposes both original and
+current names, and search matches either. A rename expires document-tool cursors because their
+labels changed; it never widens class or selected-source scope. The Files tab stores its
+alphabetical, date-added, or actual file-kind presentation order per class. Date added remains
+the initial newest-first order, and all actions and deep links continue to use document IDs.
 
 The backend prefers explicit provider reasoning fields. Legacy inline reasoning markers are
 recognized only at the start of content, before answer prose begins; tags in subsequent answer
@@ -234,7 +256,6 @@ restarts with a fresh session. Backup validation lives in `backend/desktop_backu
 publication/recovery spans `backend/desktop_backup.py` and `src-tauri/src/backup.rs`. Updates verify
 trusted signed artifacts and schema compatibility before replacement; see
 [releasing](releasing.md) and `src-tauri/src/updater.rs`. No update check runs automatically at launch.
-
 
 ## Observation and rendering work
 

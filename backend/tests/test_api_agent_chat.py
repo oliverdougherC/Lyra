@@ -501,6 +501,70 @@ def test_failed_first_index_still_sends_actual_worksheet_text_to_provider(
     assert len(requests) == 2
 
 
+def test_nicknamed_document_stays_grounded_through_production_tool_loop(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute(
+        "update documents set filename = 'LADW_2026_08-31.pdf', nickname = 'Textbook' where id = 7"
+    )
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "doc_type, embedding_model, embedding_dim) "
+        "values (7, ?, 'A vector space is closed under addition.', 9, 2, 'generic', 'test', 768)",
+        (class_id,),
+    )
+    db.commit()
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    calls = 0
+
+    async def provider(
+        _endpoint: str,
+        _key: str | None,
+        _model: str | None,
+        messages: list[dict[str, object]],
+        _schemas: list[dict[str, object]],
+        **_kwargs: object,
+    ) -> routes_agent_chat.llm_client.AssistantMessage:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return routes_agent_chat.llm_client.AssistantMessage(
+                "",
+                (
+                    routes_agent_chat.llm_client.ToolCall(
+                        "find-textbook", "search_documents", '{"query":"Textbook"}'
+                    ),
+                ),
+            )
+        result = json.loads(str(messages[-1]["content"]))
+        source = result["sources"][0]
+        assert source["document_id"] == 7
+        assert source["citation"] == "Textbook, p. 2"
+        return routes_agent_chat.llm_client.AssistantMessage(
+            "Textbook says a vector space is closed under addition."
+        )
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tools.run_tool_loop)
+    monkeypatch.setattr(tools, "complete_with_tools", provider)
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "What does Textbook say about vector spaces?", "document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert calls == 2
+    assert "Textbook" in response.json()["content"]
+    source_events = [
+        source for event in response.json()["activity"] for source in event.get("sources", [])
+    ]
+    assert any(
+        source["document_id"] == 7 and source["page_number"] == 2 for source in source_events
+    )
+    assert all(source["document_id"] == 7 for source in source_events)
+
+
 def test_changed_endpoint_blocks_late_page_image_before_next_provider_request(
     client: TestClient,
     db: sqlite3.Connection,

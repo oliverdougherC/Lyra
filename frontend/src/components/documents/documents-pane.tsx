@@ -42,6 +42,12 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
+import {
+  effectiveDocumentName,
+  matchesDocumentName,
+  sortDocuments,
+  type DocumentSort,
+} from '@/lib/document-display'
 import { formatCount } from '@/lib/format'
 import { documentStudyTitle } from '@/lib/handoff'
 import {
@@ -113,6 +119,14 @@ function ClassDocumentsPane({
   // long enough that silence reads as nothing having happened.
   const [scanning, setScanning] = useState(false)
   const [rejectedFiles, setRejectedFiles] = useState<string[] | null>(null)
+  const handledDrops = useRef(new WeakSet<DataTransfer>())
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   // The list polls itself while anything in it is mid-ingestion, so no interval is asked
   // for here. Tying it to the upload batch was the bug: the batch clears a couple of
@@ -143,10 +157,27 @@ function ClassDocumentsPane({
       /* Filtering still works in memory. */
     }
   }, [filterKey, filter])
+  const sortKey = `lyra:class:${classId}:documents-sort`
+  const [sort, setSort] = useState<DocumentSort>(() => {
+    try {
+      const saved = localStorage.getItem(sortKey)
+      if (saved === 'alphabetical' || saved === 'kind') return saved
+    } catch {
+      /* Sorting still works in memory when storage is unavailable. */
+    }
+    return 'date-added'
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(sortKey, sort)
+    } catch {
+      /* Keep the in-memory selection. */
+    }
+  }, [sortKey, sort])
 
   const onFiles = (files: File[]) => {
     const { accepted, rejected } = partitionFiles(files)
-    setRejectedFiles(rejected.length > 0 ? rejected : null)
+    if (mounted.current) setRejectedFiles(rejected.length > 0 ? rejected : null)
     if (accepted.length > 0) uploads.enqueue(accepted)
   }
 
@@ -230,7 +261,7 @@ function ClassDocumentsPane({
   const onPractice = useCallback(
     (document: DocumentRead) => {
       createQuiz.mutate(
-        { title: documentStudyTitle(document.filename), document_ids: [document.id] },
+        { title: documentStudyTitle(effectiveDocumentName(document)), document_ids: [document.id] },
         {
           onSuccess: (artifact) => router.push(`/classes/${classId}/study/${artifact.id}`),
           onError: (caught) =>
@@ -281,7 +312,11 @@ function ClassDocumentsPane({
     [classId, queryClient],
   )
 
-  const allDocuments = data ? documentsInListOrder(data) : []
+  const allDocuments = data
+    ? managing
+      ? sortDocuments(data, sort)
+      : documentsInListOrder(data)
+    : []
   // The "needs attention" half of the shared navigation contract: a `lyra-anchor=document-N`
   // arrival stands on the exact row (focus, scroll, announce, transient emphasis) and steps
   // through the rest of the affected documents. A reveal may temporarily hide a filter that
@@ -293,7 +328,7 @@ function ClassDocumentsPane({
   const effectiveFilter = attention.filterOverride ?? filter
   const query = effectiveFilter.trim().toLowerCase()
   const documents = query
-    ? allDocuments.filter((document) => document.filename.toLowerCase().includes(query))
+    ? allDocuments.filter((document) => matchesDocumentName(document, query))
     : allDocuments
   const checked = allDocuments.filter((document) => checkedIds.includes(document.id))
   const hiddenCheckedCount = checked.filter((document) => !documents.includes(document)).length
@@ -330,13 +365,26 @@ function ClassDocumentsPane({
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault()
+        const transfer = event.dataTransfer
+        if (handledDrops.current.has(transfer)) return
+        handledDrops.current.add(transfer)
         // `filesFromDrop` claims the dropped entries synchronously, so it has to be called
         // here rather than after any await: the item list is gone once this handler yields.
-        void filesFromDrop(event.dataTransfer, () => setScanning(true)).then(
+        void filesFromDrop(transfer, () => setScanning(true)).then(
           ({ files, errors }) => {
-            setScanning(false)
-            uploads.reportScanErrors(errors)
+            if (mounted.current) setScanning(false)
+            uploads.reportScanErrors(
+              files.length === 0 && errors.length === 0
+                ? ['No readable files were found in that drop.']
+                : errors,
+            )
+            // This closure owns the class that received the gesture even if a slow folder
+            // scan resolves after navigation or a new pane mounts for another class.
             onFiles(files)
+          },
+          () => {
+            if (mounted.current) setScanning(false)
+            uploads.reportScanErrors(['The dropped folder could not be scanned. Try again.'])
           },
         )
       }}
@@ -434,22 +482,37 @@ function ClassDocumentsPane({
         </div>
       ) : null}
 
-      {showFilter ? (
-        <div className="relative shrink-0 border-b px-3 py-2">
-          <Search
-            aria-hidden
-            className="text-text-tertiary pointer-events-none absolute top-1/2 left-6 size-4 -translate-y-1/2"
-          />
-          <Input
-            type="search"
-            value={effectiveFilter}
-            // Typing (or clearing) is the student's intent: it lands in the pane's own
-            // filter, and the reveal's temporary clearing steps aside for it.
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder={`Filter ${formatCount(allDocuments.length, 'document')}`}
-            aria-label="Filter documents by name"
-            className="h-9 pl-9"
-          />
+      {showFilter || (managing && allDocuments.length > 0) ? (
+        <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+          {showFilter ? (
+            <div className="relative min-w-0 flex-1">
+              <Search
+                aria-hidden
+                className="text-text-tertiary pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
+              />
+              <Input
+                type="search"
+                value={effectiveFilter}
+                // A deep link borrows a temporary clearing without changing this state.
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder={`Filter ${formatCount(allDocuments.length, 'document')}`}
+                aria-label="Filter documents by name"
+                className="h-9 pl-9"
+              />
+            </div>
+          ) : null}
+          {managing && allDocuments.length > 0 ? (
+            <select
+              aria-label="Sort documents"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as DocumentSort)}
+              className="border-border bg-background text-text-secondary h-9 max-w-36 rounded-md border px-2 text-xs"
+            >
+              <option value="date-added">Date added</option>
+              <option value="alphabetical">Alphabetical</option>
+              <option value="kind">File kind</option>
+            </select>
+          ) : null}
         </div>
       ) : null}
 
@@ -467,7 +530,8 @@ function ClassDocumentsPane({
             {attention.attention.length} need attention
           </span>
           <span className="text-text-tertiary min-w-0 truncate text-xs">
-            {attention.position} of {attention.attention.length} · {attention.target.filename}
+            {attention.position} of {attention.attention.length} ·{' '}
+            {effectiveDocumentName(attention.target)}
           </span>
           <span className="ml-auto flex shrink-0 items-center">
             <Button
@@ -586,7 +650,7 @@ function ClassDocumentsPane({
               uploading
                 ? `Uploading ${uploading}`
                 : batchDocument
-                  ? `${STATE_ACTIONS[batchDocument.state]} ${batchDocument.filename}`
+                  ? `${STATE_ACTIONS[batchDocument.state]} ${effectiveDocumentName(batchDocument)}`
                   : 'Preparing documents'
             }
             detail={batchDocument?.stage_detail}
@@ -675,7 +739,7 @@ function ClassDocumentsPane({
           <ul className="max-h-48 overflow-y-auto text-sm">
             {deleting.map((document) => (
               <li key={document.id} className="break-words">
-                {document.filename}
+                {effectiveDocumentName(document)}
               </li>
             ))}
           </ul>

@@ -16,6 +16,7 @@ import {
 } from '@/lib/api'
 import { saveOriginalDocument } from '@/lib/runtime'
 import { truncateMiddle } from '@/lib/format'
+import { documentNameNote, effectiveDocumentName } from '@/lib/document-display'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, SolutionSource } from '@/types'
 
@@ -126,7 +127,9 @@ export function SourcePane({
   const document = documents.find((entry) => entry.id === documentId)
   const isPdf = document?.mime === 'application/pdf'
   const pages = document?.pages_total ?? 1
-  const filename = document?.filename ?? sources.find((s) => s.document_id === documentId)?.filename
+  const filename = document
+    ? effectiveDocumentName(document)
+    : sources.find((s) => s.document_id === documentId)?.filename
 
   // Measured rather than assumed: the width a whole page needs depends on the height this
   // pane was actually given, and that is capped by the panel minimums.
@@ -230,11 +233,24 @@ export function SourcePane({
               onChange={(event) => setBrowsing({ documentId: Number(event.target.value), page: 1 })}
               aria-label="Source document"
             >
-              {problemSets.map((source) => (
-                <option key={source.document_id} value={source.document_id}>
-                  {source.filename}
-                </option>
-              ))}
+              {problemSets.map((source) => {
+                const current = documents.find((item) => item.id === source.document_id)
+                const note = current ? documentNameNote(current, documents) : null
+                const historicalCollision =
+                  !current &&
+                  problemSets.some(
+                    (other) =>
+                      other.document_id !== source.document_id &&
+                      other.filename === source.filename,
+                  )
+                return (
+                  <option key={source.document_id} value={source.document_id}>
+                    {current
+                      ? `${effectiveDocumentName(current)}${note ? ` (${note})` : ''}`
+                      : `${source.filename}${historicalCollision ? ` (Document #${source.document_id})` : ''}`}
+                  </option>
+                )
+              })}
             </select>
           ) : null}
           {fitToggle}
@@ -317,7 +333,7 @@ export function SourcePane({
               key={documentId}
               documentId={documentId}
               isPdf={isPdf}
-              filename={filename ?? 'document'}
+              filename={document?.filename ?? filename ?? 'document'}
             />
           )}
         </div>

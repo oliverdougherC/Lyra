@@ -35,7 +35,10 @@ function createWrapper() {
     <QueryClientProvider client={queryClient}>
       {/* The app wraps every route in one tooltip provider; the tests mirror that seam. */}
       <TooltipProvider delayDuration={300}>
-        <WorkspaceAttachProvider classId={CLASS_ID}>{children}</WorkspaceAttachProvider>
+        <WorkspaceAttachProvider classId={CLASS_ID}>
+          <div id="lyra-header-actions" />
+          {children}
+        </WorkspaceAttachProvider>
       </TooltipProvider>
     </QueryClientProvider>
   )
@@ -362,9 +365,10 @@ describe('the contextual agent work surface (PLA-401)', () => {
     }))
     const { wrapper } = createWrapper()
 
-    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    const view = render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     await screen.findByText('Read the attached folder')
+    expect(screen.getByRole('button', { name: /1 item needs attention/i })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
     // "Not now" is server state with a bounded lifetime, not component-local state: the
     // dismissal is recorded against the conversation, so a reload or unmount cannot
@@ -372,9 +376,39 @@ describe('the contextual agent work surface (PLA-401)', () => {
     active.push('read')
     await waitFor(() => expect(dismiss).toHaveBeenCalledWith(CLASS_ID, SESSION_ID, 'read'))
     await waitFor(() => expect(screen.queryByText('Read the attached folder')).toBeNull())
+    expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument()
+    view.unmount()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument()
     // Dismissing is not a resolution: nothing is granted and nothing is re-run.
     expect(api.updateAgentWorkspaceGrants).not.toHaveBeenCalled()
     expect(regenerate).not.toHaveBeenCalled()
+  })
+
+  it('uses the latest access reason despite out-of-order and duplicate audit delivery', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace({ read_enabled: false }))
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({
+        id: 'new',
+        started_at: '2026-09-02T00:00:03Z',
+        result_summary: { reason: 'Read the new handout.' },
+      }),
+      accessEvent({
+        id: 'old',
+        started_at: '2026-09-02T00:00:00Z',
+        result_summary: { reason: 'Read an older handout.' },
+      }),
+      accessEvent({
+        id: 'new',
+        started_at: '2026-09-02T00:00:03Z',
+        result_summary: { reason: 'Read the new handout.' },
+      }),
+    ])
+    const { wrapper } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    expect(await screen.findByText('Read the new handout.')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /1 item needs attention/i })).toHaveLength(1)
+    expect(screen.queryByText('Read an older handout.')).not.toBeInTheDocument()
   })
 
   it('re-answers the interrupted turn once the access its request asked for is resolved', async () => {
@@ -516,17 +550,123 @@ describe('the contextual agent work surface (PLA-401)', () => {
     expect(screen.getByText(/each still need their own approval/)).toBeInTheDocument()
   })
 
-  it('surfaces failed command results without opening settled history', async () => {
+  it('keeps a terminal command failure in history without an unresolvable warning', async () => {
     vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
     vi.spyOn(api, 'listAgentCommands').mockResolvedValue([
       command({ state: 'failed', exit_code: 1, stderr_text: 'Required fixture is missing' }),
     ])
     const { wrapper } = createWrapper()
     render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
-    const failure = await screen.findByText('1 result needs attention')
-    expect(failure).toBeVisible()
-    fireEvent.click(failure)
-    expect(await screen.findByText('Required fixture is missing')).toBeVisible()
+    const history = await screen.findByRole('button', { name: 'Activity history' })
+    expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument()
+    fireEvent.click(history)
+    expect(screen.getByText('Required fixture is missing')).toBeVisible()
+  })
+
+  it('keeps recovered and refused optional tool attempts in history without an attention warning', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({
+        id: 'invalid',
+        tool: 'read_file',
+        target_kind: 'file',
+        target_id: 'bad.py',
+        state: 'failed',
+        error_message: 'Invalid path',
+      }),
+      accessEvent({
+        id: 'corrected',
+        tool: 'read_file',
+        target_kind: 'file',
+        target_id: 'main.py',
+      }),
+      accessEvent({
+        id: 'corrected',
+        tool: 'read_file',
+        target_kind: 'file',
+        target_id: 'main.py',
+        state: 'started',
+        finished_at: null,
+      }),
+      accessEvent({
+        id: 'optional',
+        tool: 'search_web',
+        target_kind: 'web',
+        target_id: null,
+        state: 'refused',
+        error_message: 'Web access is off',
+      }),
+    ])
+    const { wrapper } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    const history = await screen.findByRole('button', { name: 'Activity history' })
+    expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument()
+    fireEvent.click(history)
+    expect(screen.getByText('Invalid path')).toBeInTheDocument()
+    expect(screen.getByText('Web access is off')).toBeInTheDocument()
+    expect(screen.queryByText('Working', { exact: true })).not.toBeInTheDocument()
+  })
+
+  it('counts only a still-pending approval alongside failed audit attempts and focuses its card', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({
+        id: 'bad',
+        tool: 'read_file',
+        target_kind: 'file',
+        target_id: 'bad.py',
+        state: 'failed',
+        error_message: 'Invalid path',
+      }),
+    ])
+    vi.spyOn(api, 'listAgentCommands').mockResolvedValue([command({ id: 42, argv: ['pytest'] })])
+    const { wrapper } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    await userEvent.click(await screen.findByRole('button', { name: /1 item needs attention/i }))
+    await userEvent.click(screen.getByRole('menuitem', { name: /Approve command: pytest/i }))
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAttribute('data-attention-id', 'command:42'),
+    )
+    expect(screen.getByRole('button', { name: 'Confirm and run' })).toBeInTheDocument()
+  })
+
+  it('keeps a failed final turn retry reachable without counting its repeated audit failures', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    vi.spyOn(api, 'listMessages').mockResolvedValue([
+      message({
+        agent_attempt: {
+          state: 'failed',
+          stopped_reason: 'failed',
+          detail: 'The answer could not finish.',
+        },
+      }),
+    ])
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({
+        id: 'failure-2',
+        tool: 'read_file',
+        state: 'failed',
+        error_message: 'Bad path',
+      }),
+      accessEvent({
+        id: 'failure-1',
+        tool: 'read_file',
+        state: 'failed',
+        error_message: 'Bad path',
+      }),
+      accessEvent({
+        id: 'failure-1',
+        tool: 'read_file',
+        state: 'failed',
+        error_message: 'Bad path',
+      }),
+    ])
+    const { wrapper } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    await userEvent.click(await screen.findByRole('button', { name: /1 item needs attention/i }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Retry the last agent turn' }))
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('data-attention-id', 'turn'))
+    expect(screen.getByRole('button', { name: 'Retry this turn' })).toBeEnabled()
   })
 
   it('keeps successful activity history compact and removes routine event counts', async () => {

@@ -98,12 +98,12 @@ test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
     await acceptBtn.click()
 
     // Wait for the change to be applied: the result settles OUT of the live band (which
-    // carries only outstanding work) into the collapsed Details audit, where the terminal
+    // carries only outstanding work) into history, where the terminal
     // state stays findable.
     await expect(changeCard).toBeHidden({ timeout: 10_000 })
     await page
-      .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Activity history/i })
+      .locator('[data-app-header]')
+      .getByRole('button', { name: 'Activity history' })
       .click()
     await expect(page.getByText('Applied', { exact: true })).toBeVisible()
 
@@ -141,11 +141,11 @@ test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
     await rejectBtn.click()
 
     // The rejection settles out of the live band: the card leaves the top work band, and
-    // its terminal state stays findable in the collapsed Details audit.
+    // its terminal state stays findable through history in the app header.
     await expect(changeCard).toBeHidden({ timeout: 10_000 })
     await page
-      .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Activity history/i })
+      .locator('[data-app-header]')
+      .getByRole('button', { name: 'Activity history' })
       .click()
     await expect(page.locator('[data-slot="badge"]', { hasText: 'Rejected' })).toBeVisible({
       timeout: 10_000,

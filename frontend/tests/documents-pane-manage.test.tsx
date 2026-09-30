@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -56,6 +56,7 @@ const DOCUMENTS = [
 
 beforeEach(() => {
   sessionStorage.clear()
+  localStorage.clear()
   clearUploadHistory(1)
   vi.restoreAllMocks()
   vi.spyOn(api, 'listDocuments').mockResolvedValue(DOCUMENTS)
@@ -68,6 +69,77 @@ beforeEach(() => {
 })
 
 describe('DocumentsPane in the manage variant', () => {
+  it('persists per-class sorting without changing selected document IDs', async () => {
+    vi.mocked(api.listDocuments).mockResolvedValue([
+      { ...DOCUMENTS[0], nickname: 'Zoo', display_name: 'Zoo' },
+      { ...DOCUMENTS[1], nickname: 'Alpha', display_name: 'Alpha' },
+    ])
+    const { wrapper } = createWrapper()
+    const view = render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+    await screen.findByRole('button', { name: 'Select Zoo' })
+    const order = () =>
+      Array.from(document.querySelectorAll('[id^="document-"]'))
+        .map((element) => element.id)
+        .filter((id) => /^document-\d+$/.test(id))
+    expect(order()).toEqual(['document-3', 'document-5'])
+    await userEvent.click(screen.getByRole('button', { name: 'Select Alpha' }))
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: 'Sort documents' }),
+      'alphabetical',
+    )
+    expect(order()).toEqual(['document-5', 'document-3'])
+    expect(screen.getByRole('button', { name: 'Deselect Alpha' })).toBeInTheDocument()
+    expect(localStorage.getItem('lyra:class:1:documents-sort')).toBe('alphabetical')
+    view.unmount()
+
+    render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+    expect(await screen.findByRole('combobox', { name: 'Sort documents' })).toHaveValue(
+      'alphabetical',
+    )
+    render(<DocumentsPane classId={2} variant="manage" />, { wrapper })
+    await waitFor(() =>
+      expect(screen.getAllByRole('combobox', { name: 'Sort documents' })).toHaveLength(2),
+    )
+    expect(screen.getAllByRole('combobox', { name: 'Sort documents' })[1]).toHaveValue('date-added')
+  })
+
+  it('keeps sorting usable when preference storage is denied', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('denied')
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('denied')
+    })
+    render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+    const control = await screen.findByRole('combobox', { name: 'Sort documents' })
+    expect(control).toHaveValue('date-added')
+    await userEvent.selectOptions(control, 'kind')
+    expect(control).toHaveValue('kind')
+  })
+
+  it('finds a nicknamed document by its current or original name', async () => {
+    vi.mocked(api.listDocuments).mockResolvedValue([
+      {
+        ...DOCUMENTS[0],
+        filename: 'LADW_2026_08-31.pdf',
+        nickname: 'Textbook',
+        display_name: 'Textbook',
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        ...DOCUMENTS[1],
+        id: index + 20,
+        filename: `other-${index}.pdf`,
+      })),
+    ])
+    render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+    const search = await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    await userEvent.type(search, 'Textbook')
+    expect(screen.getByRole('button', { name: 'Select Textbook' })).toBeInTheDocument()
+    await userEvent.clear(search)
+    await userEvent.type(search, 'LADW_2026')
+    expect(screen.getByRole('button', { name: 'Select Textbook' })).toBeInTheDocument()
+  })
+
   it('keeps the bulk bar out of the way until something is picked', async () => {
     const { wrapper } = createWrapper()
 
@@ -214,6 +286,104 @@ it('restores each class filter without copying the previous class query', async 
   )
   expect(sessionStorage.getItem('lyra:class:1:files-query')).toBe('homework')
   expect(sessionStorage.getItem('lyra:class:2:files-query')).toBe('syllabus')
+})
+
+it('routes a DOM drop through the existing class upload queue only once', async () => {
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 20 } as DocumentRead)
+  const { wrapper } = createWrapper()
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  await screen.findByRole('group', { name: 'Upload documents' })
+  const transfer = { items: [], files: [new File(['pdf'], 'révision one.pdf')] }
+  const target = screen.getByRole('group', { name: 'Upload documents' })
+
+  fireEvent.drop(target, { dataTransfer: transfer })
+  fireEvent.drop(target, { dataTransfer: transfer })
+
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+  expect(upload.mock.calls[0][0]).toBe(1)
+  expect(upload.mock.calls[0][1].name).toBe('révision one.pdf')
+})
+
+it('accepts a later gesture with the same filename as a separate upload', async () => {
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 20 } as DocumentRead)
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  const target = screen.getByRole('group', { name: 'Upload documents' })
+  for (const content of ['first', 'second']) {
+    fireEvent.drop(target, {
+      dataTransfer: { items: [], files: [new File([content], 'notes.pdf')] },
+    })
+  }
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(2))
+})
+
+it('uploads supported files from a mixed drop and names unsupported files', async () => {
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 20 } as DocumentRead)
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: {
+      items: [],
+      files: [new File(['pdf'], 'notes.pdf'), new File(['slides'], 'slides.pptx')],
+    },
+  })
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+  expect(upload.mock.calls[0][1].name).toBe('notes.pdf')
+  expect(screen.getByText(/slides.pptx is not a supported type/)).toBeInTheDocument()
+})
+
+it('shows the existing 50 MB server rejection for a dropped file', async () => {
+  const upload = vi
+    .spyOn(api, 'uploadDocument')
+    .mockRejectedValue(new ApiError(413, 'That file is larger than 50 MB. Upload a smaller file.'))
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: { items: [], files: [new File(['oversized fixture'], 'large.pdf')] },
+  })
+  expect(await screen.findByText(/larger than 50 MB/)).toBeInTheDocument()
+  expect(upload).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a pending folder scan with the class that accepted the drop', async () => {
+  let finishScan!: (entries: FileSystemEntry[]) => void
+  let scanCalls = 0
+  const folder = {
+    isFile: false,
+    isDirectory: true,
+    name: 'Week 1',
+    createReader: () => ({
+      readEntries: (resolve: (entries: FileSystemEntry[]) => void) => {
+        if (scanCalls++ > 0) resolve([])
+        else finishScan = resolve
+      },
+    }),
+  }
+  const upload = vi.spyOn(api, 'uploadDocument').mockResolvedValue({ id: 21 } as DocumentRead)
+  const { wrapper } = createWrapper()
+  const view = render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: { items: [{ webkitGetAsEntry: () => folder }], files: [] },
+  })
+  expect(screen.getByText(/Reading the folder/)).toBeInTheDocument()
+
+  view.rerender(<DocumentsPane classId={2} variant="manage" />)
+  finishScan([
+    {
+      isFile: true,
+      isDirectory: false,
+      name: 'notes.pdf',
+      file: (resolve: (file: File) => void) => resolve(new File(['pdf'], 'notes.pdf')),
+    } as unknown as FileSystemEntry,
+  ])
+
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+  expect(upload.mock.calls[0][0]).toBe(1)
+})
+
+it('reports a drop without readable entries instead of silently accepting it', async () => {
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  fireEvent.drop(screen.getByRole('group', { name: 'Upload documents' }), {
+    dataTransfer: { items: [], files: [] },
+  })
+  expect(await screen.findByText(/No readable files/)).toBeInTheDocument()
 })
 
 // The six-restart storm: a request that never landed (`ApiError(0)`) after the runtime

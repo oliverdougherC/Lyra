@@ -2529,7 +2529,12 @@ export function ChatPane({
       )}
 
       <div className="relative min-h-0 flex-1">
-        <div ref={nativeHostRef} className="pointer-events-none absolute inset-0" aria-hidden />
+        <div
+          ref={nativeHostRef}
+          data-native-chat-host=""
+          className="pointer-events-none absolute inset-0"
+          aria-hidden
+        />
         {!showingNative ? (
           // Browser and inline fallbacks keep the same accessible scroll surface.
           <div

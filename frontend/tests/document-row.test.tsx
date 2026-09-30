@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DocumentRow } from '@/components/documents/document-row'
-import { api } from '@/lib/api'
+import { ApiError, api } from '@/lib/api'
 import { documentKeys } from '@/lib/hooks/use-documents'
 import type { DocumentRead, DocumentState, DocumentStatus, SettingsRead } from '@/types'
 
@@ -130,6 +130,42 @@ describe('DocumentRow', () => {
 })
 
 describe('DocumentRow, contextual actions', () => {
+  it('keeps a failed nickname edit in the dialog and resets to the original name', async () => {
+    const document = { ...documentAt('ready'), nickname: 'Textbook', display_name: 'Textbook' }
+    const save = vi
+      .spyOn(api, 'updateDocumentNickname')
+      .mockRejectedValueOnce(new ApiError(503, 'Could not save right now.'))
+      .mockResolvedValueOnce({ ...document, nickname: null, display_name: document.filename })
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([document])
+    const { wrapper } = createWrapper()
+    render(
+      <DocumentRow
+        document={document}
+        selected={false}
+        onSelect={noop}
+        onRetry={noop}
+        onRecognize={noop}
+        onDelete={noop}
+        onStatus={noop}
+      />,
+      { wrapper },
+    )
+
+    expect(screen.getByText('Textbook')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Textbook' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Edit nickname' }))
+    const field = screen.getByRole('textbox', { name: 'Document nickname' })
+    await userEvent.clear(field)
+    await userEvent.type(field, 'New textbook')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save right now.')
+    expect(field).toHaveValue('New textbook')
+    expect(save).toHaveBeenCalledWith(7, 'New textbook', 'Textbook')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Use original name' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith(7, null, 'Textbook'))
+  })
+
   it('allows chat from readable text when initial semantic indexing failed', async () => {
     const { wrapper } = createWrapper()
     render(

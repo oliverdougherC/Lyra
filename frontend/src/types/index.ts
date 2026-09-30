@@ -63,6 +63,9 @@ export interface DocumentRead {
   id: number
   class_id: number
   filename: string
+  /** Additive metadata; absent only in older cached/fixture payloads. */
+  nickname?: string | null
+  display_name?: string
   mime: string
   byte_size: number
   state: DocumentState
@@ -683,6 +686,7 @@ export interface SegmentationUpdate {
 /** A text source as the solver's source pane reads it. PDFs render as page images. */
 export interface DocumentText {
   filename: string
+  display_name?: string
   text: string
   truncated: boolean
 }
