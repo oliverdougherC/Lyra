@@ -71,3 +71,38 @@ so this evidence demonstrates substantial improvement over half-rate
 presentation but does not certify that every 120 Hz display refresh painted
 a distinct frame. Physical trackpad feel and exact production-identity
 acceptance remain open gates for PLA-570.
+
+## PR #100 correctness correction
+
+The targeted correction is code commit `8db2fe8db5c0430d3b8b64c738e8868d1ceca116`
+on `perf/pla570-native-chat`, following reviewed head
+`e16cc21cb133916bff1798a248af7dfc8fe3e8f0`. It keeps the segmented
+AppKit renderer and narrow main/child capability split. Main-thread operations
+now validate their owning mount and snapshot generation before touching the
+scroll view; teardown revokes the owner before releasing the view. Native show
+and hide requests carry ordered presentation IDs and acknowledge actual AppKit
+application. Child actions carry host, conversation, snapshot, and row identity,
+and show waits for the requested conversation's sections to be sized and ready.
+
+The main WebView's source picker and other interactive portals temporarily use
+the ordinary transcript above a hidden native view. The handoff transfers the
+scroll position and reconnects the ordinary viewport's scroll input and content
+resize observer. Selection settlement now requires the actual live row and turn
+generation, including when the answer spans a section boundary. A failed native
+frame or render tears down its mount and leaves the ordinary transcript usable.
+
+Focused regressions were first observed failing against the reviewed implementation.
+The corrected code passed 1,440 frontend tests across 129 files, typecheck, lint,
+production frontend build, Rust check, 58 Rust tests, Clippy with warnings denied,
+and documentation/active-reference checks. The bridge tests use controlled IPC and
+DOM behavior; the Rust tests cover owner and request ordering without executing a
+native UI race. The signed candidate bundle and frozen-backend smoke result are
+recorded in the PR body at the exact final head after packaging.
+
+No production-identity native acceptance was available: it requires a separate
+account or device without an incumbent compiled-ID endpoint. Full main-WebView
+reload recovery from an orphaned native host also remains unverified; a foreign
+host mount is rejected to protect the current owner. The normal installed app and
+study profile were not opened or replaced. PLA-570 remains In Progress because
+synthetic scrolling and capture still do not establish exact 120 Hz presentation,
+physical trackpad feel, or production-identity acceptance.
