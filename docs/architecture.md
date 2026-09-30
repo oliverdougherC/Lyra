@@ -126,8 +126,9 @@ nickname captured when the edit dialog opened before writing only that column. A
 not advance that baseline. A stale edit returns a conflict, keeps the typed draft, shows the
 current name, and requires the student to adopt it or explicitly keep the draft before retrying.
 Equal display names in source selectors show the original filename; equal originals also show
-the date added and stable document ID so the intended source remains identifiable. Current
-retrieval and document tools
+the date added and stable document ID. The chat source picker keeps that ID visible beside the
+original-name note whenever display names collide, including when long filenames truncate.
+Current retrieval and document tools
 use the effective name for new citations while retaining document/page IDs; saved conversation
 prose and historical source labels remain as recorded. Inventory exposes both original and
 current names, and search matches either. A rename expires document-tool cursors because their
@@ -250,7 +251,6 @@ restarts with a fresh session. Backup validation lives in `backend/desktop_backu
 publication/recovery spans `backend/desktop_backup.py` and `src-tauri/src/backup.rs`. Updates verify
 trusted signed artifacts and schema compatibility before replacement; see
 [releasing](releasing.md) and `src-tauri/src/updater.rs`. No update check runs automatically at launch.
-
 
 ## Observation and rendering work
 

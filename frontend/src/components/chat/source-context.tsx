@@ -242,6 +242,7 @@ export function SourceContext({
                       id={`${ALL}-${document.id}`}
                       label={effectiveDocumentName(document)}
                       identityNote={documentNameNote(document, documents)}
+                      documentId={document.id}
                       checked={document.id === selectedId}
                       note={
                         document.text_readable && document.state !== 'ready'
@@ -272,15 +273,24 @@ type SourceRowProps = {
   checked: boolean
   note: string | null
   identityNote?: string | null
+  documentId?: number
   disabled?: boolean
 }
 
-function SourceRow({ id, label, checked, note, identityNote, disabled = false }: SourceRowProps) {
+function SourceRow({
+  id,
+  label,
+  checked,
+  note,
+  identityNote,
+  documentId,
+  disabled = false,
+}: SourceRowProps) {
   return (
     <label
       htmlFor={id}
       className={cn(
-        'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+        'flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
         'hover:bg-muted',
         'focus-within:ring-2 focus-within:ring-ring/50',
         disabled && 'cursor-not-allowed text-text-tertiary hover:bg-transparent',
@@ -295,7 +305,14 @@ function SourceRow({ id, label, checked, note, identityNote, disabled = false }:
       <span className="min-w-0 flex-1">
         <span className={cn('block truncate', checked && 'font-medium')}>{label}</span>
         {identityNote ? (
-          <span className="text-text-tertiary block truncate text-xs">{identityNote}</span>
+          <span className="text-text-tertiary flex min-w-0 items-baseline gap-1 text-xs">
+            <span className="min-w-0 flex-1 truncate">{identityNote}</span>
+            {documentId !== undefined ? (
+              <span aria-hidden="true" className="shrink-0 tabular-nums">
+                #{documentId}
+              </span>
+            ) : null}
+          </span>
         ) : null}
       </span>
       {note ? <span className="text-text-tertiary shrink-0 text-xs">{note}</span> : null}
