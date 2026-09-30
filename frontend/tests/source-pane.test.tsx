@@ -138,6 +138,27 @@ function renderPane(
 }
 
 describe('SourcePane', () => {
+  it('distinguishes equal nicknames in the source document selector', () => {
+    const second = { ...DOCUMENT, id: 8, filename: 'other.pdf', nickname: 'Textbook' }
+    const first = { ...DOCUMENT, nickname: 'Textbook' }
+    renderPane(
+      { documentId: 7, pageNumber: 1 },
+      {
+        documents: [first, second],
+        sources: [
+          ...SOURCES,
+          { document_id: 8, filename: 'other.pdf', role: 'problem_set', ordinal: 1 },
+        ],
+      },
+    )
+    expect(
+      screen.getByRole('option', { name: /Textbook \(Original: homework_7.pdf\)/ }),
+    ).toHaveValue('7')
+    expect(screen.getByRole('option', { name: /Textbook \(Original: other.pdf\)/ })).toHaveValue(
+      '8',
+    )
+  })
+
   it('keeps the reader on the page they turned to when nothing was reselected', async () => {
     // The workspace builds the anchor object fresh on every render and the solution detail
     // query polls while a solve runs, so an identity comparison here made the document

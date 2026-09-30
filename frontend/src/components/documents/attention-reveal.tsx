@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { documentRowId, parseDocumentAttentionAnchor } from '@/lib/attention'
 import { needsAttention } from '@/lib/hooks/use-documents'
+import { effectiveDocumentName, matchesDocumentName } from '@/lib/document-display'
 import { useNavigationVersion, useRouteAnchor, useRouter } from '@/router/hooks'
 import type { DocumentRead } from '@/types'
 
@@ -147,12 +148,12 @@ export function useDocumentAttention(
       // list for the visit without ever writing to the pane's own (persisted) filter.
       const query = filter.trim().toLowerCase()
       filterBaselineRef.current = filter
-      setFilterOverride(query && !target.filename.toLowerCase().includes(query) ? '' : null)
+      setFilterOverride(query && !matchesDocumentName(target, query) ? '' : null)
       setHighlightedId(target.id)
       setAnnouncement(
         attention.length === 1
-          ? `Jumped to ${target.filename}. It needs attention.`
-          : `Jumped to ${target.filename}. ${attention.length} documents need attention.`,
+          ? `Jumped to ${effectiveDocumentName(target)}. It needs attention.`
+          : `Jumped to ${effectiveDocumentName(target)}. ${attention.length} documents need attention.`,
       )
       armHighlight()
       return
@@ -168,8 +169,8 @@ export function useDocumentAttention(
       setHighlightedId(target.id)
       setAnnouncement(
         attention.length === 1
-          ? `Now standing on ${target.filename}. It needs attention.`
-          : `Now standing on ${target.filename}. ${attention.length} documents need attention.`,
+          ? `Now standing on ${effectiveDocumentName(target)}. It needs attention.`
+          : `Now standing on ${effectiveDocumentName(target)}. ${attention.length} documents need attention.`,
       )
       armHighlight()
     }

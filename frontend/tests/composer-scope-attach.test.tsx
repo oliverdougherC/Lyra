@@ -286,6 +286,60 @@ describe('the material scope keeps its full behavior behind a compact pill', () 
     await user.click(await screen.findByRole('radio', { name: 'final_exam_review.pdf' }))
     expect(onPick).toHaveBeenCalledWith(3)
   })
+
+  it('distinguishes colliding nicknames and keeps exact IDs through filtering and refetch', async () => {
+    const user = userEvent.setup()
+    const onPick = vi.fn()
+    const first = { ...doc(1, 'chapter-one.pdf'), nickname: 'Textbook' }
+    const second = { ...doc(2, 'chapter-two.pdf'), nickname: 'Textbook' }
+    const view = render(<SourceContextHarness documents={[first, second]} onPick={onPick} />)
+    await user.click(screen.getByRole('button', { name: /Choose what Lyra reads/ }))
+    expect(
+      screen.getByRole('radio', { name: /Textbook Original: chapter-one.pdf/ }),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: /Textbook Original: chapter-two.pdf/ }))
+    expect(onPick).toHaveBeenLastCalledWith(2)
+    expect(screen.getByRole('button', { name: /Lyra reads only Textbook/ })).toHaveTextContent(
+      'chapter-two.pdf',
+    )
+    view.rerender(
+      <SourceContextHarness documents={[{ ...first }, { ...second }]} onPick={onPick} />,
+    )
+    await user.click(screen.getByRole('button', { name: /Lyra reads only Textbook/ }))
+    const search = screen.getByRole('textbox', { name: "Search this class's files" })
+    await user.type(search, 'chapter-one')
+    await user.click(screen.getByRole('radio', { name: /Textbook Original: chapter-one.pdf/ }))
+    expect(onPick).toHaveBeenLastCalledWith(1)
+    view.rerender(
+      <SourceContextHarness
+        documents={[first, { ...second, nickname: 'Handbook' }]}
+        onPick={onPick}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /Lyra reads only Textbook/ }))
+    expect(screen.getByRole('radio', { name: 'Textbook' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Handbook' })).toBeInTheDocument()
+  })
+
+  it('uses stable IDs when both nickname and original filename collide', async () => {
+    const user = userEvent.setup()
+    const onPick = vi.fn()
+    render(
+      <SourceContextHarness
+        documents={[
+          { ...doc(1, 'same.pdf'), nickname: 'Textbook' },
+          { ...doc(2, 'same.pdf'), nickname: 'Textbook' },
+        ]}
+        onPick={onPick}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /Choose what Lyra reads/ }))
+    await user.click(
+      screen.getByRole('radio', { name: /Textbook Original: same.pdf · Added .+ · Document #2/ }),
+    )
+    expect(onPick).toHaveBeenLastCalledWith(2)
+    expect(screen.getByRole('button', { name: /Lyra reads only Textbook/ })).toHaveTextContent('#2')
+  })
 })
 
 describe('the folder attach keeps its full behavior behind a 24px icon', () => {

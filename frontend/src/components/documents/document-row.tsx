@@ -13,6 +13,7 @@ import {
   ListChecks,
   MessageSquare,
   MoreVertical,
+  Pencil,
   RotateCw,
   ScanText,
   Trash2,
@@ -22,6 +23,7 @@ import { toast } from 'sonner'
 import { documentRowId } from '@/lib/attention'
 import { StatusWord } from '@/components/ex-libris'
 import { IngestionProgress } from '@/components/documents/ingestion-progress'
+import { DocumentNicknameDialog } from '@/components/documents/document-nickname-dialog'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -32,6 +34,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { formatCount, formatFileSize } from '@/lib/format'
+import { effectiveDocumentName } from '@/lib/document-display'
 import { chatHandoffUrl } from '@/lib/handoff'
 import { isTerminal, useDocumentOutline, useDocumentStatus } from '@/lib/hooks/use-documents'
 import { useSettings } from '@/lib/hooks/use-settings'
@@ -115,6 +118,8 @@ export function DocumentRow({
   onPractice,
   highlighted = false,
 }: DocumentRowProps) {
+  const [nicknameOpen, setNicknameOpen] = useState(false)
+  const displayName = effectiveDocumentName(document)
   const polling =
     !isTerminal(document.state) ||
     (document.refresh_state != null && document.refresh_state !== 'failed')
@@ -163,8 +168,8 @@ export function DocumentRow({
     if (announced.current || !isTerminal(state)) return
     announced.current = true
     if (state === 'ready')
-      toast.success(`${document.filename} is ${partialCoverage ? 'partly readable' : 'ready'}.`)
-  }, [state, document.filename, partialCoverage])
+      toast.success(`${displayName} is ${partialCoverage ? 'partly readable' : 'ready'}.`)
+  }, [state, displayName, partialCoverage])
 
   // Every poll, not only the last one. The row reads its own stage straight off this query,
   // but everything else on screen - the batch readout's stage verb, the class hub's counts,
@@ -179,10 +184,10 @@ export function DocumentRow({
   const managing = mode === 'manage'
   const selectable = managing || state === 'ready' || textReadable
   const selectLabel = managing
-    ? `${selected ? 'Deselect' : 'Select'} ${document.filename}`
+    ? `${selected ? 'Deselect' : 'Select'} ${displayName}`
     : selectable
-      ? `${selected ? 'Ask about every document instead of' : 'Ask only about'} ${document.filename}`
-      : document.filename
+      ? `${selected ? 'Ask about every document instead of' : 'Ask only about'} ${displayName}`
+      : displayName
 
   return (
     <div
@@ -229,7 +234,7 @@ export function DocumentRow({
           ) : null}
           <FileIcon filename={document.filename} />
           <span className="min-w-0 flex-1 text-sm">
-            <span className="block break-words [overflow-wrap:anywhere]">{document.filename}</span>
+            <span className="block break-words [overflow-wrap:anywhere]">{displayName}</span>
             <span className="mt-1 flex flex-wrap items-center gap-2">
               {!busy && state !== 'failed' ? (
                 <span className="text-text-tertiary shrink-0 text-xs tabular-nums">
@@ -251,12 +256,16 @@ export function DocumentRow({
               variant="ghost"
               size="icon"
               className="size-8 shrink-0"
-              aria-label={`Actions for ${document.filename}`}
+              aria-label={`Actions for ${displayName}`}
             >
               <MoreVertical />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => setNicknameOpen(true)}>
+              <Pencil />
+              Edit nickname
+            </DropdownMenuItem>
             {/* The file's own next actions, ahead of its management: while a student is
                 looking at course material, "do something with this" is the likelier reason
                 to open the menu than "refile this" (contextual handoffs, not more tabs).
@@ -303,6 +312,12 @@ export function DocumentRow({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      <DocumentNicknameDialog
+        document={document}
+        open={nicknameOpen}
+        onOpenChange={setNicknameOpen}
+      />
 
       {busy ? (
         <div className="mt-2 pl-6">

@@ -7,6 +7,11 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  documentNameNote,
+  effectiveDocumentName,
+  matchesDocumentName,
+} from '@/lib/document-display'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, DocumentState } from '@/types'
 
@@ -61,19 +66,26 @@ export function SourceContext({
 
   const selected = documents?.find((document) => document.id === selectedId) ?? null
   const unresolvedSelection = selectedId !== null && !selected
+  const selectedNote = selected ? documentNameNote(selected, documents ?? []) : null
   const selectedLabel = selected
-    ? selected.filename
+    ? `${effectiveDocumentName(selected)}${selectedNote ? ` (${selectedNote})` : ''}`
     : unresolvedSelection
       ? documents === undefined && !documentsError
         ? 'Loading selected file'
         : 'Selected file unavailable'
       : 'All material'
+  const selectedSecondaryLabel =
+    selected && selectedNote
+      ? selectedNote.includes(' · Document #')
+        ? `#${selected.id}`
+        : selected.filename
+      : null
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const list = (documents ?? [])
-      .filter((document) => (needle ? document.filename.toLowerCase().includes(needle) : true))
-      .sort((a, b) => a.filename.localeCompare(b.filename))
+      .filter((document) => matchesDocumentName(document, needle))
+      .sort((a, b) => effectiveDocumentName(a).localeCompare(effectiveDocumentName(b)))
     // Ready material is what the question can be about; the rest stay visible so a file
     // that just landed does not look lost, but they are not selectable until they can be.
     const ready = list.filter((document) => document.state === 'ready' || document.text_readable)
@@ -115,7 +127,17 @@ export function SourceContext({
             )}
           >
             <FileSearch aria-hidden className="size-3.5 shrink-0" />
-            <span className="truncate">{selectedLabel}</span>
+            {selectedSecondaryLabel && selected ? (
+              <span className="flex min-w-0 items-center gap-0.5" title={selectedLabel}>
+                <span className="min-w-0 max-w-[50%] truncate">
+                  {effectiveDocumentName(selected)}
+                </span>
+                <span aria-hidden>·</span>
+                <span className="min-w-0 max-w-[50%] truncate">{selectedSecondaryLabel}</span>
+              </span>
+            ) : (
+              <span className="truncate">{selectedLabel}</span>
+            )}
           </button>
         </PopoverTrigger>
         {selectedId !== null ? (
@@ -202,6 +224,7 @@ export function SourceContext({
                     const id = next === ALL ? null : Number(next)
                     onSelect(id)
                     setOpen(false)
+                    setQuery('')
                   }}
                   aria-label="What Lyra reads for this answer"
                   className="p-2"
@@ -217,7 +240,8 @@ export function SourceContext({
                     <SourceRow
                       key={document.id}
                       id={`${ALL}-${document.id}`}
-                      label={document.filename}
+                      label={effectiveDocumentName(document)}
+                      identityNote={documentNameNote(document, documents)}
                       checked={document.id === selectedId}
                       note={
                         document.text_readable && document.state !== 'ready'
@@ -247,10 +271,11 @@ type SourceRowProps = {
   label: string
   checked: boolean
   note: string | null
+  identityNote?: string | null
   disabled?: boolean
 }
 
-function SourceRow({ id, label, checked, note, disabled = false }: SourceRowProps) {
+function SourceRow({ id, label, checked, note, identityNote, disabled = false }: SourceRowProps) {
   return (
     <label
       htmlFor={id}
@@ -261,8 +286,18 @@ function SourceRow({ id, label, checked, note, disabled = false }: SourceRowProp
         disabled && 'cursor-not-allowed text-text-tertiary hover:bg-transparent',
       )}
     >
-      <RadioGroupItem id={id} value={id.split('-')[1]} disabled={disabled} />
-      <span className={cn('min-w-0 flex-1 truncate', checked && 'font-medium')}>{label}</span>
+      <RadioGroupItem
+        id={id}
+        value={id.split('-')[1]}
+        disabled={disabled}
+        aria-label={[label, identityNote, note].filter(Boolean).join(' ')}
+      />
+      <span className="min-w-0 flex-1">
+        <span className={cn('block truncate', checked && 'font-medium')}>{label}</span>
+        {identityNote ? (
+          <span className="text-text-tertiary block truncate text-xs">{identityNote}</span>
+        ) : null}
+      </span>
       {note ? <span className="text-text-tertiary shrink-0 text-xs">{note}</span> : null}
     </label>
   )

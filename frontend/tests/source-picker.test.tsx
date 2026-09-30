@@ -93,6 +93,26 @@ describe('SourcePicker', () => {
     await userEvent.click(checkbox)
     expect(onToggle).not.toHaveBeenCalled()
   })
+
+  it('identifies duplicate nicknames in the accessible label and selects the intended ID', async () => {
+    const onToggle = vi.fn()
+    render(
+      <SourcePicker
+        name="problem-set"
+        documents={[
+          { ...document(1, 'one.pdf'), nickname: 'Textbook' },
+          { ...document(2, 'two.pdf'), nickname: 'Textbook' },
+        ]}
+        loading={false}
+        selected={[]}
+        onToggle={onToggle}
+        emptyLabel="Nothing here."
+      />,
+    )
+    expect(screen.getByText('Original: one.pdf')).toBeVisible()
+    await userEvent.click(screen.getByRole('checkbox', { name: /Textbook Original: two.pdf/ }))
+    expect(onToggle).toHaveBeenCalledWith(2)
+  })
 })
 
 it('searches a long list without discarding hidden selections', async () => {
