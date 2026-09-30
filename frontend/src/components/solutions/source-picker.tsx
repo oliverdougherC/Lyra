@@ -8,7 +8,11 @@ import { Button } from '@/components/ui/button'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatFileSize, truncateMiddle } from '@/lib/format'
-import { effectiveDocumentName, matchesDocumentName } from '@/lib/document-display'
+import {
+  documentNameNote,
+  effectiveDocumentName,
+  matchesDocumentName,
+} from '@/lib/document-display'
 import { cn } from '@/lib/utils'
 import type { DocumentRead } from '@/types'
 
@@ -95,6 +99,7 @@ export function SourcePicker({
           const isClaimed = claimed.includes(document.id)
           const ready = document.state === 'ready'
           const disabled = !ready || isClaimed
+          const identityNote = documentNameNote(document, documents)
           return (
             <li key={document.id}>
               <label
@@ -116,6 +121,9 @@ export function SourcePicker({
                 <input
                   type="checkbox"
                   name={name}
+                  aria-label={[effectiveDocumentName(document), identityNote]
+                    .filter(Boolean)
+                    .join(' ')}
                   className="sr-only"
                   checked={isSelected}
                   disabled={disabled}
@@ -146,6 +154,11 @@ export function SourcePicker({
                   >
                     {truncateMiddle(effectiveDocumentName(document))}
                   </span>
+                  {identityNote ? (
+                    <span className="text-text-tertiary block truncate text-xs">
+                      {identityNote}
+                    </span>
+                  ) : null}
                   <span className="text-text-tertiary block text-xs">
                     {describe(document, isClaimed)}
                   </span>

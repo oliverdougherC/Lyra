@@ -16,7 +16,7 @@ import {
 } from '@/lib/api'
 import { saveOriginalDocument } from '@/lib/runtime'
 import { truncateMiddle } from '@/lib/format'
-import { effectiveDocumentName } from '@/lib/document-display'
+import { documentNameNote, effectiveDocumentName } from '@/lib/document-display'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, SolutionSource } from '@/types'
 
@@ -235,9 +235,19 @@ export function SourcePane({
             >
               {problemSets.map((source) => {
                 const current = documents.find((item) => item.id === source.document_id)
+                const note = current ? documentNameNote(current, documents) : null
+                const historicalCollision =
+                  !current &&
+                  problemSets.some(
+                    (other) =>
+                      other.document_id !== source.document_id &&
+                      other.filename === source.filename,
+                  )
                 return (
                   <option key={source.document_id} value={source.document_id}>
-                    {current ? effectiveDocumentName(current) : source.filename}
+                    {current
+                      ? `${effectiveDocumentName(current)}${note ? ` (${note})` : ''}`
+                      : `${source.filename}${historicalCollision ? ` (Document #${source.document_id})` : ''}`}
                   </option>
                 )
               })}

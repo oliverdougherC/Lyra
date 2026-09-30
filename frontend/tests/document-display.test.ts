@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   documentKind,
   effectiveDocumentName,
+  documentNameNote,
   matchesDocumentName,
   sortDocuments,
 } from '@/lib/document-display'
@@ -29,6 +30,17 @@ describe('document presentation identity', () => {
     expect(matchesDocumentName(document, 'Textbook')).toBe(true)
     expect(matchesDocumentName(document, 'LADW_2026')).toBe(true)
     expect(documentKind(row(2, 'notes.pdf', { nickname: 'notes.txt' }))).toBe('PDF')
+  })
+
+  it('adds an original-name note only for collisions and an ID fallback for equal originals', () => {
+    const first = row(1, 'one.pdf', { nickname: 'Textbook' })
+    const second = row(2, 'two.pdf', { nickname: 'Textbook' })
+    expect(documentNameNote(first, [first, second])).toBe('Original: one.pdf')
+    expect(documentNameNote(first, [first])).toBeNull()
+    const duplicate = row(3, 'one.pdf', { nickname: 'Textbook' })
+    expect(documentNameNote(first, [first, duplicate])).toMatch(
+      /^Original: one\.pdf · Added .+ · Document #1$/,
+    )
   })
 
   it('sorts naturally by effective name with stable identity ties', () => {

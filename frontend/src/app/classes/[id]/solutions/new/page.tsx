@@ -12,7 +12,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError } from '@/lib/api'
-import { effectiveDocumentName } from '@/lib/document-display'
+import { documentNameNote, effectiveDocumentName } from '@/lib/document-display'
 import { formatCount, truncateMiddle } from '@/lib/format'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
@@ -215,6 +215,11 @@ export default function NewSolutionPage() {
                         >
                           {truncateMiddle(effectiveDocumentName(suggestion.document))}
                         </span>
+                        {documentNameNote(suggestion.document, documents) ? (
+                          <span className="text-text-tertiary block truncate text-xs">
+                            {documentNameNote(suggestion.document, documents)}
+                          </span>
+                        ) : null}
                         <span className="text-text-tertiary block text-xs">
                           Matches {truncateMiddle(effectiveDocumentName(suggestion.because))}
                         </span>

@@ -7,7 +7,11 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
-import { effectiveDocumentName, matchesDocumentName } from '@/lib/document-display'
+import {
+  documentNameNote,
+  effectiveDocumentName,
+  matchesDocumentName,
+} from '@/lib/document-display'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, DocumentState } from '@/types'
 
@@ -62,13 +66,20 @@ export function SourceContext({
 
   const selected = documents?.find((document) => document.id === selectedId) ?? null
   const unresolvedSelection = selectedId !== null && !selected
+  const selectedNote = selected ? documentNameNote(selected, documents ?? []) : null
   const selectedLabel = selected
-    ? effectiveDocumentName(selected)
+    ? `${effectiveDocumentName(selected)}${selectedNote ? ` (${selectedNote})` : ''}`
     : unresolvedSelection
       ? documents === undefined && !documentsError
         ? 'Loading selected file'
         : 'Selected file unavailable'
       : 'All material'
+  const selectedVisibleLabel =
+    selected && selectedNote
+      ? selectedNote.includes(' · Document #')
+        ? `#${selected.id} ${effectiveDocumentName(selected)}`
+        : selected.filename
+      : selectedLabel
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -116,7 +127,7 @@ export function SourceContext({
             )}
           >
             <FileSearch aria-hidden className="size-3.5 shrink-0" />
-            <span className="truncate">{selectedLabel}</span>
+            <span className="truncate">{selectedVisibleLabel}</span>
           </button>
         </PopoverTrigger>
         {selectedId !== null ? (
@@ -203,6 +214,7 @@ export function SourceContext({
                     const id = next === ALL ? null : Number(next)
                     onSelect(id)
                     setOpen(false)
+                    setQuery('')
                   }}
                   aria-label="What Lyra reads for this answer"
                   className="p-2"
@@ -219,6 +231,7 @@ export function SourceContext({
                       key={document.id}
                       id={`${ALL}-${document.id}`}
                       label={effectiveDocumentName(document)}
+                      identityNote={documentNameNote(document, documents)}
                       checked={document.id === selectedId}
                       note={
                         document.text_readable && document.state !== 'ready'
@@ -248,10 +261,11 @@ type SourceRowProps = {
   label: string
   checked: boolean
   note: string | null
+  identityNote?: string | null
   disabled?: boolean
 }
 
-function SourceRow({ id, label, checked, note, disabled = false }: SourceRowProps) {
+function SourceRow({ id, label, checked, note, identityNote, disabled = false }: SourceRowProps) {
   return (
     <label
       htmlFor={id}
@@ -262,8 +276,18 @@ function SourceRow({ id, label, checked, note, disabled = false }: SourceRowProp
         disabled && 'cursor-not-allowed text-text-tertiary hover:bg-transparent',
       )}
     >
-      <RadioGroupItem id={id} value={id.split('-')[1]} disabled={disabled} />
-      <span className={cn('min-w-0 flex-1 truncate', checked && 'font-medium')}>{label}</span>
+      <RadioGroupItem
+        id={id}
+        value={id.split('-')[1]}
+        disabled={disabled}
+        aria-label={[label, identityNote, note].filter(Boolean).join(' ')}
+      />
+      <span className="min-w-0 flex-1">
+        <span className={cn('block truncate', checked && 'font-medium')}>{label}</span>
+        {identityNote ? (
+          <span className="text-text-tertiary block truncate text-xs">{identityNote}</span>
+        ) : null}
+      </span>
       {note ? <span className="text-text-tertiary shrink-0 text-xs">{note}</span> : null}
     </label>
   )

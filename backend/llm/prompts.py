@@ -1166,7 +1166,9 @@ def format_context_block(chunks: list[dict[str, object]]) -> str:
         return ""
     entries: list[str] = []
     for index, chunk in enumerate(chunks, start=1):
-        label = [str(chunk.get("filename") or "Unknown document")]
+        # Names are student-controlled metadata. Keep embedded quotes and newlines inside
+        # one data value instead of letting them look like prompt structure.
+        label = [json.dumps(str(chunk.get("filename") or "Unknown document"), ensure_ascii=False)]
         page = chunk.get("page_number")
         if page is not None:
             label.append(f"page {page}")

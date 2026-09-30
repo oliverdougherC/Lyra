@@ -122,8 +122,12 @@ and reads its results in one SQLite snapshot; an expired cursor must restart the
 Document nicknames are nullable metadata on `documents`. A nonblank nickname is the current
 display name; the original filename, file kind, path, hash, and document ID remain unchanged.
 `PATCH /api/documents/{id}/nickname` trims and validates a new name and compares the caller's
-last seen nickname before writing only that column. A stale edit returns a conflict so the
-student can review it without losing their typed text. Current retrieval and document tools
+nickname captured when the edit dialog opened before writing only that column. A refetch does
+not advance that baseline. A stale edit returns a conflict, keeps the typed draft, shows the
+current name, and requires the student to adopt it or explicitly keep the draft before retrying.
+Equal display names in source selectors show the original filename; equal originals also show
+the date added and stable document ID so the intended source remains identifiable. Current
+retrieval and document tools
 use the effective name for new citations while retaining document/page IDs; saved conversation
 prose and historical source labels remain as recorded. Inventory exposes both original and
 current names, and search matches either. A rename expires document-tool cursors because their

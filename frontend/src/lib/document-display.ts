@@ -25,6 +25,25 @@ export function matchesDocumentName(
   )
 }
 
+/** Identify equal display names without changing the document ID used for selection. */
+export function documentNameNote(
+  document: DocumentRead,
+  documents: readonly DocumentRead[],
+): string | null {
+  const name = effectiveDocumentName(document)
+  const peers = documents.filter((item) => names.compare(effectiveDocumentName(item), name) === 0)
+  if (peers.length < 2) return null
+  const original = `Original: ${document.filename}`
+  if (
+    !peers.some(
+      (item) => item.id !== document.id && names.compare(item.filename, document.filename) === 0,
+    )
+  )
+    return original
+  const added = parseTimestamp(document.created_at).getTime()
+  return `${original}${Number.isFinite(added) ? ` · Added ${new Date(added).toLocaleString()}` : ''} · Document #${document.id}`
+}
+
 export function documentKind(document: Pick<DocumentRead, 'filename' | 'mime'>): DocumentKind {
   const mime = (document.mime ?? '').toLowerCase()
   const suffix = document.filename.split('.').pop()?.toLowerCase()
