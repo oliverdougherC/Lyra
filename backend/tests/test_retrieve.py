@@ -119,6 +119,20 @@ def test_equal_similarity_ranks_the_newer_document_first(
     assert result.chunks[0].score >= result.chunks[1].score
 
 
+def test_retrieved_context_uses_current_nickname_without_changing_source_identity(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _insert_document(db, class_id, "LADW_2026_08-31.pdf", _days_ago(1))
+    _insert_chunk(db, class_id, document_id, "Vector spaces are closed under addition.", 0.0)
+    db.execute("update documents set nickname = 'Textbook' where id = ?", (document_id,))
+    db.commit()
+
+    result = retrieve(db, class_id, "vector space", 1000, document_id=document_id)
+
+    assert result.chunks[0].document_id == document_id
+    assert result.chunks[0].filename == "Textbook"
+
+
 def test_recency_does_not_outrank_a_clearly_better_match(
     db: sqlite3.Connection, class_id: int
 ) -> None:

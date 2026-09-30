@@ -110,7 +110,7 @@ where embedding match ? and k = {int(limit)} and class_id = ?
 
 _CHUNK_COLUMNS = """c.id as chunk_id, c.document_id, c.content, c.token_count, c.page_number,
        c.section_title, c.section_path, c.section_number, c.problem_number, c.part_index,
-       d.filename, d.created_at"""
+       coalesce(nullif(trim(d.nickname), ''), d.filename) as filename, d.created_at"""
 
 _CHUNK_SELECT = f"""
 select {_CHUNK_COLUMNS}

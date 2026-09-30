@@ -16,6 +16,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
+import { effectiveDocumentName } from '@/lib/document-display'
 import { formatCount } from '@/lib/format'
 import { useClasses } from '@/lib/hooks/use-classes'
 import { useMoveDocument } from '@/lib/hooks/use-documents'
@@ -109,7 +110,7 @@ export function MoveDocumentDialog({
         <DialogHeader>
           <DialogTitle>
             {documents.length === 1
-              ? `Move ${documents[0].filename}`
+              ? `Move ${effectiveDocumentName(documents[0])}`
               : `Move ${formatCount(documents.length, 'file')}`}
           </DialogTitle>
           <DialogDescription>

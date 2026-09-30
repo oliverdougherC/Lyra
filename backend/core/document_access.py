@@ -15,7 +15,7 @@ import sqlite3
 from pathlib import Path
 
 from backend.config import settings
-from backend.core import ownership
+from backend.core import document_names, ownership
 from backend.core.errors import LyraError, NotFoundError
 from backend.rag import render
 from backend.rag.chunk import chunk_document
@@ -36,7 +36,7 @@ def _revision(conn: sqlite3.Connection, class_id: int, selected_id: int | None) 
     """A cheap fingerprint of every row that a continuation is allowed to read."""
     digest = hashlib.sha256()
     sql = (
-        "select d.id, d.class_id, d.filename, d.created_at, d.state, d.refresh_state, "
+        "select d.id, d.class_id, d.filename, d.nickname, d.created_at, d.state, d.refresh_state, "
         "(select count(*) from chunks c where c.document_id = d.id), "
         "coalesce((select max(c.id) from chunks c where c.document_id = d.id), 0), "
         "coalesce((select max(p.generation) from document_read_pages p "
@@ -183,7 +183,7 @@ def inventory(
         if index >= int(conn.execute(total_sql, total_args).fetchone()[0]):
             raise ValueError("Invalid or expired document cursor. Start this read again.")
     sql = (
-        "select d.id, d.filename, d.state, d.pages_total, d.pages_skipped, "
+        "select d.id, d.filename, d.nickname, d.state, d.pages_total, d.pages_skipped, "
         "(select count(*) from chunks c where c.document_id = d.id) as chunks "
         "from documents d where d.class_id = ?"
     )
@@ -213,7 +213,10 @@ def inventory(
         documents.append(
             {
                 "document_id": int(row["id"]),
-                "filename": str(row["filename"]),
+                "filename": document_names.display_name(row),
+                "original_filename": str(row["filename"]),
+                "nickname": row["nickname"],
+                "display_name": document_names.display_name(row),
                 "state": str(row["state"]),
                 "pages_total": row["pages_total"],
                 "pages_needing_recognition": ",".join(str(item[0]) for item in missing[:20]),
@@ -235,14 +238,15 @@ def inventory(
 def _source(row: sqlite3.Row | dict[str, object], start: int, end: int) -> dict[str, object]:
     page = row["page_number"]
     problem = row["problem_number"]
-    label = str(row["filename"])
+    label = document_names.display_name(row)
     if page is not None:
         label += f", p. {page}"
     if problem:
         label += f", problem {problem}"
     return {
         "document_id": int(row["document_id"]),
-        "filename": str(row["filename"]),
+        "filename": label,
+        "original_filename": str(row["filename"]),
         "page_number": page,
         "problem_number": problem,
         "citation": label,
@@ -269,7 +273,7 @@ def search(
         raise ValueError("Search text cannot be blank.")
     limit = max(1, min(limit, MAX_RESULTS))
     sql = (
-        "select c.document_id, c.content, c.page_number, c.problem_number, d.filename, "
+        "select c.document_id, c.content, c.page_number, c.problem_number, d.filename, d.nickname, "
         "0 as tier, bm25(chunks_fts) as score, c.id as source_order "
         "from chunks_fts join chunks c on c.id = chunks_fts.rowid "
         "join documents d on d.id = c.document_id "
@@ -283,7 +287,7 @@ def search(
     # Keep this lexical path usable without claiming semantic readiness.
     direct = (
         "select p.document_id, p.content, p.page_number, null as problem_number, "
-        "d.filename, 1 as tier, 0 as score, p.page_number as source_order "
+        "d.filename, d.nickname, 1 as tier, 0 as score, p.page_number as source_order "
         "from document_read_pages p join documents d on d.id = p.document_id "
         "where d.class_id = ? and d.state != 'ready' and ("
         + " or ".join("instr(lower(p.content), lower(?)) > 0" for _ in terms)
@@ -293,10 +297,30 @@ def search(
     if selected_id is not None:
         direct += " and d.id = ?"
         args.append(selected_id)
+    # A student may know a document only by its nickname (or its original upload name).
+    # Keep identity and scope in SQL, rather than resolving a name to the first matching ID:
+    # duplicate aliases are legal and a selected source may never widen to another row.
+    named = (
+        "select c.document_id, c.content, c.page_number, c.problem_number, "
+        "d.filename, d.nickname, 2 as tier, 0 as score, c.id as source_order "
+        "from chunks c join documents d on d.id = c.document_id "
+        "where c.class_id = ? and d.state = 'ready'"
+    )
+    named_args: list[object] = [class_id]
+    if selected_id is not None:
+        named += " and d.id = ?"
+        named_args.append(selected_id)
+    for term in terms:
+        named += (
+            " and (instr(lower(d.filename), lower(?)) > 0 "
+            "or instr(lower(coalesce(d.nickname, '')), lower(?)) > 0)"
+        )
+        named_args.extend((term, term))
     combined = (
-        f"select * from ({sql} union all {direct}) "  # noqa: S608
+        f"select * from ({sql} union all {direct} union all {named}) "  # noqa: S608
         "order by tier, score, document_id, source_order"
     )
+    args.extend(named_args)
     context: list[object] = ["search", class_id, selected_id, query]
     # One SQLite read snapshot covers ownership, revision, ranking, and excerpts. A
     # concurrent ingestion can commit in WAL, but cannot split these observations.
@@ -330,7 +354,8 @@ def read_page(
     if page_number < 1:
         raise ValueError("Page number must be positive.")
     doc = conn.execute(
-        "select id, class_id, filename, state, pages_total, stored_path, mime, created_at "
+        "select id, class_id, filename, nickname, state, pages_total, stored_path, mime, "
+        "created_at "
         "from documents where id = ? and class_id = ?",
         (document_id, class_id),
     ).fetchone()
@@ -353,7 +378,8 @@ def read_page(
     ).fetchone()
     sql = (
         "select p.document_id, p.content, p.page_number, null as problem_number, "
-        "d.filename from document_read_pages p join documents d on d.id = p.document_id "
+        "d.filename, d.nickname from document_read_pages p "
+        "join documents d on d.id = p.document_id "
         "where p.document_id = ? and d.class_id = ? and p.page_number = ? "
         "order by p.page_number"
     )
@@ -472,7 +498,7 @@ def read_problem(
     _scope(conn, class_id, selected_id)
     document_id = _target(selected_id, document_id)
     doc = conn.execute(
-        "select id, class_id, filename, state, stored_path, mime, created_at "
+        "select id, class_id, filename, nickname, state, stored_path, mime, created_at "
         "from documents where id = ? and class_id = ?",
         (document_id, class_id),
     ).fetchone()
@@ -501,7 +527,7 @@ def read_problem(
     if doc["state"] != "ready":
         raise NotFoundError("That document has no readable text for this problem yet.")
     sql = (
-        "select c.document_id, c.content, c.page_number, c.problem_number, d.filename "
+        "select c.document_id, c.content, c.page_number, c.problem_number, d.filename, d.nickname "
         "from chunks c join documents d on d.id = c.document_id "
         "where c.document_id = ? and c.class_id = ? and c.problem_number = ? "
     )
@@ -557,6 +583,7 @@ def _page_problem(
             "page_number": part.page_number,
             "problem_number": part.problem_number,
             "filename": str(doc["filename"]),
+            "nickname": doc["nickname"],
         }
         for part in pieces
         if part.problem_number == problem_number
@@ -589,7 +616,7 @@ def read_section(
     if not re.fullmatch(r"[A-Za-z]?\.?\d+(?:\.\d+)*", section_number):
         raise ValueError("Section number is invalid.")
     sql = (
-        "select c.document_id, c.content, c.page_number, c.problem_number, d.filename "
+        "select c.document_id, c.content, c.page_number, c.problem_number, d.filename, d.nickname "
         "from chunks c join documents d on d.id = c.document_id "
         "where c.document_id = ? and c.class_id = ? and d.state = 'ready' "
         "and (c.section_number = ? or c.section_number like ?) "
