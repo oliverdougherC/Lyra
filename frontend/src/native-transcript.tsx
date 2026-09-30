@@ -64,7 +64,7 @@ export function selectionFromTranscript(
   }
 }
 
-function NativeTranscript() {
+export function NativeTranscript({ hostId = childHostId }: { hostId?: string } = {}) {
   const [snapshot, setSnapshot] = useState<NativeChatSnapshot | null>(null)
   const versionRef = useRef(-1)
   const contentRef = useRef<HTMLElement>(null)
@@ -106,13 +106,20 @@ function NativeTranscript() {
         reportedHeightRef.current = 0
         if (heightRetriesRef.current++ < 10)
           window.setTimeout(() => publishHeight(contentRef.current?.scrollHeight ?? 0), 100)
+        else
+          report({
+            kind: 'overflow',
+            hostId: owner.hostId,
+            scope: owner.scope,
+            version: owner.version,
+          })
       },
     )
   }, [])
 
   useEffect(() => {
     window.__lyraNativeChatReceive = (incoming) => {
-      if (incoming.hostId !== childHostId || incoming.version <= versionRef.current) return
+      if (incoming.hostId !== hostId || incoming.version <= versionRef.current) return
       versionRef.current = incoming.version
       latestSnapshotRef.current = incoming
       readyReportedRef.current = false
@@ -120,11 +127,11 @@ function NativeTranscript() {
       heightRetriesRef.current = 0
       setSnapshot(incoming)
     }
-    report({ kind: 'ready', hostId: childHostId })
+    report({ kind: 'ready', hostId })
     return () => {
       delete window.__lyraNativeChatReceive
     }
-  }, [])
+  }, [hostId])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', Boolean(snapshot?.dark))
@@ -238,6 +245,8 @@ function NativeTranscript() {
                         version: snapshot.version,
                         rowKey: row.key,
                         generation,
+                        contentEpoch: row.contentEpoch,
+                        contentRevision: row.contentRevision,
                       })
                   : undefined
               }
@@ -251,6 +260,7 @@ function NativeTranscript() {
                         version: snapshot.version,
                         rowKey: row.key,
                         generation: row.generation,
+                        contentEpoch: row.contentEpoch,
                         open,
                       })
                   : undefined

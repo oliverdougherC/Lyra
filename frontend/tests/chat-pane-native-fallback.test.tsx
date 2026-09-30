@@ -9,18 +9,25 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, type AgentStreamEvent } from '@/lib/api'
 import type { DocumentRead, MessageRead, SettingsRead } from '@/types'
 
-const nativeSurface = vi.hoisted(() => ({ active: false, occluded: false }))
+const nativeSurface = vi.hoisted(() => ({
+  active: false,
+  occluded: false,
+  snapshot: null as unknown,
+  callbacks: null as unknown,
+}))
 const scrollNativeToBottom = vi.hoisted(() => () => Promise.resolve())
 
 vi.mock('@/components/chat/native-chat-host', () => ({
   useNativeChatHost: (
     _enabled: boolean,
-    _snapshot: unknown,
-    _callbacks: unknown,
+    snapshot: unknown,
+    callbacks: unknown,
     _ref: unknown,
     occluded: boolean,
   ) => {
     nativeSurface.occluded = occluded
+    nativeSurface.snapshot = snapshot
+    nativeSurface.callbacks = callbacks
     return {
       hostRef: { current: null },
       active: nativeSurface.active && !occluded,
@@ -48,6 +55,8 @@ vi.mock('@/lib/api', async () => {
 beforeEach(() => {
   nativeSurface.active = false
   nativeSurface.occluded = false
+  nativeSurface.snapshot = null
+  nativeSurface.callbacks = null
   vi.mocked(api.listSessions).mockResolvedValue([])
   vi.mocked(api.listMessages).mockResolvedValue([
     {
@@ -277,4 +286,65 @@ it('keeps a streaming reader away from the tail after native overflow, then hono
     view.unmount()
     vi.restoreAllMocks()
   }
+})
+
+it('settles a completed native turn when its one-shot drain arrives after publication', async () => {
+  nativeSurface.active = true
+  const initial = await vi.mocked(api.listMessages)(7)
+  const saved = [
+    ...initial,
+    { ...initial[0], id: 3, content: 'Next question' },
+    { ...initial[1], id: 4, content: 'Final words' },
+  ] as MessageRead[]
+  vi.mocked(api.sendAgentChat).mockImplementation(async (...args) => {
+    args[8]?.({ type: 'token', text: 'Final words' })
+    vi.mocked(api.listMessages).mockResolvedValue(saved)
+    return {
+      message_id: 4,
+      content: 'Final words',
+      stopped: '',
+      detail: '',
+      activity: [],
+      source_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+      profile_fact_ids: [],
+    }
+  })
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ChatPane
+          classId={1}
+          className="ECE 203"
+          agent
+          selectedDocumentId={null}
+          sessionId={7}
+          onSessionIdChange={() => {}}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  )
+  const user = userEvent.setup()
+  await user.type(await screen.findByRole('textbox', { name: 'Message Lyra' }), 'Next question')
+  await user.click(screen.getByRole('button', { name: 'Send message' }))
+  await waitFor(() => {
+    const rows = (
+      nativeSurface.snapshot as { rows: { streaming?: boolean; turnEnded?: boolean }[] }
+    ).rows
+    expect(rows.some((row) => row.streaming && row.turnEnded)).toBe(true)
+  })
+  const callbacks = nativeSurface.callbacks as { onRevealComplete: (generation?: string) => void }
+  const live = (
+    nativeSurface.snapshot as { rows: { streaming?: boolean; generation?: string }[] }
+  ).rows.find((row) => row.streaming)!
+  act(() => callbacks.onRevealComplete(live.generation))
+  await waitFor(() => {
+    const rows = (nativeSurface.snapshot as { rows: { streaming?: boolean }[] }).rows
+    expect(rows.some((row) => row.streaming)).toBe(false)
+  })
+  expect(screen.getByRole('textbox', { name: 'Message Lyra' })).toBeEnabled()
 })

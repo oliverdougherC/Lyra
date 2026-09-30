@@ -295,14 +295,16 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
     if (!root) return
     restoredRef.current = true
     const range = document.createRange()
-    const start = resolveOffset(root, selectionRestore.anchor)
-    const end = resolveOffset(root, selectionRestore.focus)
+    const backward = selectionRestore.anchor > selectionRestore.focus
+    const start = resolveOffset(root, Math.min(selectionRestore.anchor, selectionRestore.focus))
+    const end = resolveOffset(root, Math.max(selectionRestore.anchor, selectionRestore.focus))
     range.setStart(start.node, start.offset)
     range.setEnd(end.node, end.offset)
     const selection = window.getSelection()
     if (!selection) return
     selection.removeAllRanges()
     selection.addRange(range)
+    if (backward) selection.setBaseAndExtent(end.node, end.offset, start.node, start.offset)
   }, [streaming, selectionRestore, rootRef])
 
   // The reveal plugin reads the raw source (as plugin options) to anchor word identity,

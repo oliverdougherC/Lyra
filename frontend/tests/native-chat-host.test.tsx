@@ -331,4 +331,164 @@ describe('native chat host ownership', () => {
     expect(h.activeRef.current).toBe(false)
     h.unmount()
   })
+
+  it('delivers a current turn reasoning change after an intervening publication', async () => {
+    const live = { ...row('reply'), streaming: true, generation: 'g1' }
+    const first: Snapshot = { scope: 'class:one', rows: [live], agent: true, liveGeneration: 'g1' }
+    const h = harness(first)
+    await waitFor(() => expect(h.last('native_chat_render')).toBeTruthy())
+    const old = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    h.rerender({
+      snapshot: {
+        ...first,
+        rows: [{ ...live, message: { ...live.message, content: 'reply more' } }],
+      },
+      occluded: false,
+    })
+    await waitFor(() =>
+      expect(
+        (h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot).version,
+      ).toBeGreaterThan(old.version),
+    )
+    act(() =>
+      action({
+        kind: 'reasoning-open',
+        hostId: old.hostId,
+        scope: old.scope,
+        version: old.version,
+        rowKey: live.key,
+        generation: 'g1',
+        contentEpoch: old.rows[0].contentEpoch,
+        open: true,
+      }),
+    )
+    expect(h.callbacks.onReasoningOpenChange).toHaveBeenCalledWith(true)
+    h.unmount()
+  })
+
+  it('starts a 65-row transcript when the final readiness ack belongs to an unchanged section', async () => {
+    const first: Snapshot = {
+      scope: 'class:one',
+      rows: Array.from({ length: 65 }, (_, index) => row(`row-${index}`)),
+      agent: true,
+    }
+    const h = harness(first)
+    await waitFor(() => expect(h.last('native_chat_render')).toBeTruthy())
+    const old = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    h.rerender({
+      snapshot: {
+        ...first,
+        rows: first.rows.map((item, index) =>
+          index === 64 ? { ...item, message: { ...item.message, content: 'tail changed' } } : item,
+        ),
+      },
+      occluded: false,
+    })
+    await waitFor(() =>
+      expect(
+        (h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot).version,
+      ).toBeGreaterThan(old.version),
+    )
+    const current = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    act(() =>
+      action({ kind: 'content-ready', hostId: old.hostId, scope: old.scope, version: old.version }),
+    )
+    await waitFor(() => expect(h.current().active).toBe(true))
+    expect(h.last('native_chat_show')?.args.version).toBe(current.version)
+    h.unmount()
+  })
+
+  it('delivers a one-shot terminal drain after a content-identical theme publication', async () => {
+    const live = { ...row('reply'), streaming: true, generation: 'g1', turnEnded: true }
+    const first: Snapshot = { scope: 'class:one', rows: [live], agent: true, liveGeneration: 'g1' }
+    const h = harness(first)
+    await waitFor(() => expect(h.last('native_chat_render')).toBeTruthy())
+    const old = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    act(() => document.documentElement.classList.toggle('dark'))
+    await waitFor(() =>
+      expect(
+        (h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot).version,
+      ).toBeGreaterThan(old.version),
+    )
+    act(() =>
+      action({
+        kind: 'reveal-complete',
+        hostId: old.hostId,
+        scope: old.scope,
+        version: old.version,
+        rowKey: live.key,
+        generation: 'g1',
+        contentEpoch: old.rows[0].contentEpoch,
+        contentRevision: old.rows[0].contentRevision,
+      }),
+    )
+    expect(h.callbacks.onRevealComplete).toHaveBeenCalledWith('g1')
+    document.documentElement.classList.remove('dark')
+    h.unmount()
+  })
+
+  it('rejects delayed callbacks for extended or replaced text and obsolete owners', async () => {
+    const live = { ...row('reply'), streaming: true, generation: 'g1', turnEnded: true }
+    const first: Snapshot = { scope: 'class:one', rows: [live], agent: true, liveGeneration: 'g1' }
+    const h = harness(first)
+    await waitFor(() => expect(h.last('native_chat_render')).toBeTruthy())
+    const old = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    const oldDrain: NativeChatAction = {
+      kind: 'reveal-complete',
+      hostId: old.hostId,
+      scope: old.scope,
+      version: old.version,
+      rowKey: live.key,
+      generation: 'g1',
+      contentEpoch: old.rows[0].contentEpoch,
+      contentRevision: old.rows[0].contentRevision,
+    }
+    h.rerender({
+      snapshot: {
+        ...first,
+        rows: [{ ...live, message: { ...live.message, content: 'reply extended' } }],
+      },
+      occluded: false,
+    })
+    await waitFor(() =>
+      expect(
+        (h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot).version,
+      ).toBeGreaterThan(old.version),
+    )
+    const extended = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    act(() => action(oldDrain))
+    expect(h.callbacks.onRevealComplete).not.toHaveBeenCalled()
+    h.rerender({
+      snapshot: {
+        ...first,
+        rows: [{ ...live, message: { ...live.message, content: 'replacement' } }],
+      },
+      occluded: false,
+    })
+    await waitFor(() =>
+      expect(
+        (h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot).version,
+      ).toBeGreaterThan(extended.version),
+    )
+    act(() => {
+      action(oldDrain)
+      action({
+        kind: 'reasoning-open',
+        hostId: old.hostId,
+        scope: old.scope,
+        version: old.version,
+        rowKey: live.key,
+        generation: 'g1',
+        contentEpoch: old.rows[0].contentEpoch,
+        open: true,
+      })
+      action({ ...oldDrain, hostId: 'former-host' })
+      action({ ...oldDrain, scope: 'former-conversation' })
+      action({ ...oldDrain, rowKey: 'former-row' })
+      action({ ...oldDrain, generation: 'former-generation' })
+    })
+    expect(h.callbacks.onRevealComplete).not.toHaveBeenCalled()
+    expect(h.callbacks.onReasoningOpenChange).not.toHaveBeenCalled()
+    h.unmount()
+  })
 })

@@ -29,7 +29,13 @@ type Owner = {
   failed: boolean
   readyScope: string | null
   version: number
+  renderedVersion: number
   presentationId: number
+  nextContentRevision: number
+  contentByRow: Map<
+    string,
+    { generation?: string; content: string; epoch: number; revision: number }
+  >
 }
 let nextHostId = 0
 let mountQueue: Promise<unknown> = Promise.resolve()
@@ -142,8 +148,36 @@ export function useNativeChatHost(
   const sendSnapshot = useCallback(() => {
     const owner = ownerRef.current
     if (!owner || !belongs(owner) || !owner.mounted) return
+    const currentRows = new Set<string>()
+    const rows = snapshotRef.current.rows.map((row) => {
+      if (!row.streaming) return row
+      currentRows.add(row.key)
+      const previous = owner.contentByRow.get(row.key)
+      let epoch = previous?.epoch ?? 0
+      let revision = previous?.revision ?? 0
+      if (
+        !previous ||
+        previous.generation !== row.generation ||
+        !row.message.content.startsWith(previous.content)
+      ) {
+        epoch = ++owner.nextContentRevision
+        revision = epoch
+      } else if (previous.content !== row.message.content) {
+        revision = ++owner.nextContentRevision
+      }
+      owner.contentByRow.set(row.key, {
+        generation: row.generation,
+        content: row.message.content,
+        epoch,
+        revision,
+      })
+      return { ...row, contentEpoch: epoch, contentRevision: revision }
+    })
+    for (const key of owner.contentByRow.keys())
+      if (!currentRows.has(key)) owner.contentByRow.delete(key)
     const payload: NativeChatSnapshot = {
       ...snapshotRef.current,
+      rows,
       hostId: owner.hostId,
       version: ++owner.version,
       dark: document.documentElement.classList.contains('dark'),
@@ -151,6 +185,7 @@ export function useNativeChatHost(
     latestPayloadRef.current = payload
     void callNativeChat('native_chat_render', { snapshot: payload }).then(
       () => {
+        owner.renderedVersion = Math.max(owner.renderedVersion, payload.version)
         if (
           belongs(owner) &&
           owner.readyScope === payload.scope &&
@@ -176,7 +211,10 @@ export function useNativeChatHost(
       failed: false,
       readyScope: null,
       version: 0,
+      renderedVersion: 0,
       presentationId: 0,
+      nextContentRevision: 0,
+      contentByRow: new Map(),
     }
     ownerRef.current = owner
     latestPayloadRef.current = null
@@ -215,9 +253,8 @@ export function useNativeChatHost(
       )
         return
       if (action.kind === 'content-ready') {
-        if (action.version !== payload.version) return
         owner.readyScope = payload.scope
-        show(owner, payload)
+        if (owner.renderedVersion === payload.version) show(owner, payload)
         return
       }
       if (action.kind === 'overflow') {
@@ -233,8 +270,12 @@ export function useNativeChatHost(
         const row = payload.rows.find((item) => item.key === action.rowKey)
         if (
           !row?.streaming ||
+          !action.generation ||
           row.generation !== action.generation ||
-          action.version !== payload.version
+          payload.liveGeneration !== action.generation ||
+          row.contentEpoch === undefined ||
+          row.contentEpoch !== action.contentEpoch ||
+          (action.kind === 'reveal-complete' && row.contentRevision !== action.contentRevision)
         )
           return
         if (action.kind === 'reveal-complete')

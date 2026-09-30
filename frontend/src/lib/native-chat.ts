@@ -13,6 +13,8 @@ export type NativeChatRow = {
   turnStartedAt?: number | null
   turnEnded?: boolean
   generation?: string
+  contentEpoch?: number
+  contentRevision?: number
   selectionRestore?: { anchor: number; focus: number } | null
   retryAction?: 'regenerate' | 'tutor-retry'
 }
@@ -46,6 +48,8 @@ export type NativeChatAction =
       version: number
       rowKey: string
       generation?: string
+      contentEpoch?: number
+      contentRevision?: number
     }
   | {
       kind: 'reasoning-open'
@@ -54,6 +58,7 @@ export type NativeChatAction =
       version: number
       rowKey: string
       generation?: string
+      contentEpoch?: number
       open: boolean
     }
   | {

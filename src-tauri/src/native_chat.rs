@@ -50,6 +50,7 @@ struct NativeChatHandle {
     loaded: Vec<bool>,
     ready: Vec<bool>,
     sent_versions: Vec<u64>,
+    section_revisions: Vec<Arc<AtomicU64>>,
     last_sections: Vec<serde_json::Value>,
     scope: String,
     version: u64,
@@ -62,6 +63,8 @@ struct NativeChatHandle {
 struct NativeChatOwner {
     host_id: String,
     generation: AtomicU64,
+    geometry: AtomicU64,
+    scroll_order: AtomicU64,
     presentation: AtomicU64,
     client_presentation: AtomicU64,
     live: AtomicBool,
@@ -72,6 +75,8 @@ impl NativeChatOwner {
         Self {
             host_id,
             generation: AtomicU64::new(generation),
+            geometry: AtomicU64::new(0),
+            scroll_order: AtomicU64::new(0),
             presentation: AtomicU64::new(0),
             client_presentation: AtomicU64::new(0),
             live: AtomicBool::new(true),
@@ -88,6 +93,22 @@ impl NativeChatOwner {
 
     fn set_generation(&self, generation: u64) {
         self.generation.store(generation, Ordering::Release);
+    }
+
+    fn next_geometry(&self) -> u64 {
+        self.geometry.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    fn may_set_geometry(&self, sequence: u64) -> bool {
+        self.matches_host(&self.host_id) && self.geometry.load(Ordering::Acquire) == sequence
+    }
+
+    fn next_scroll(&self) -> u64 {
+        self.scroll_order.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    fn may_scroll(&self, sequence: u64) -> bool {
+        self.matches_host(&self.host_id) && self.scroll_order.load(Ordering::Acquire) == sequence
     }
 
     fn next_presentation(&self) -> u64 {
@@ -137,6 +158,67 @@ fn can_show(
     ready: &[bool],
 ) -> bool {
     current_scope == scope && current_version == version && ready.iter().all(|value| *value)
+}
+
+fn may_size_section(owner: &NativeChatOwner, revision: &AtomicU64, version: u64) -> bool {
+    owner.matches_host(&owner.host_id) && revision.load(Ordering::Acquire) == version
+}
+
+fn acknowledge_section(
+    ready: &mut [bool],
+    sent_versions: &[u64],
+    index: usize,
+    version: u64,
+    current_version: u64,
+) -> Option<u64> {
+    if sent_versions.get(index) != Some(&version) || version > current_version {
+        return None;
+    }
+    ready[index] = true;
+    ready.iter().all(|value| *value).then_some(current_version)
+}
+
+fn current_turn_callback(
+    kind: &str,
+    action: &serde_json::Value,
+    row: &serde_json::Value,
+    live_generation: Option<&serde_json::Value>,
+) -> bool {
+    let generation = action.get("generation").and_then(serde_json::Value::as_str);
+    let epoch = row.get("contentEpoch").and_then(serde_json::Value::as_u64);
+    let revision = row
+        .get("contentRevision")
+        .and_then(serde_json::Value::as_u64);
+    row.get("streaming").and_then(serde_json::Value::as_bool) == Some(true)
+        && generation.is_some()
+        && row.get("generation") == action.get("generation")
+        && action.get("generation") == live_generation
+        && epoch.is_some()
+        && epoch
+            == action
+                .get("contentEpoch")
+                .and_then(serde_json::Value::as_u64)
+        && (kind != "reveal-complete"
+            || (revision.is_some()
+                && revision
+                    == action
+                        .get("contentRevision")
+                        .and_then(serde_json::Value::as_u64)))
+}
+
+fn current_action_version(
+    sent_version: u64,
+    current_version: u64,
+    action_version: u64,
+    delayed_turn_event: bool,
+) -> bool {
+    action_version > 0
+        && action_version <= current_version
+        && if delayed_turn_event {
+            action_version <= sent_version
+        } else {
+            action_version == sent_version
+        }
 }
 
 fn valid_host_id(host_id: &str) -> bool {
@@ -296,9 +378,9 @@ mod macos {
                 }
                 let scroll = existing.scroll;
                 let owner = Arc::clone(&existing.owner);
-                let generation = existing.version;
+                let geometry = owner.next_geometry();
                 app.run_on_main_thread(move || unsafe {
-                    if owner.may_run(generation) {
+                    if owner.may_set_geometry(geometry) {
                         lyra_native_chat_set_frame(
                             scroll as *mut c_void,
                             rect.x,
@@ -370,6 +452,7 @@ mod macos {
                 loaded: vec![false],
                 ready: vec![false],
                 sent_versions: vec![0],
+                section_revisions: vec![Arc::new(AtomicU64::new(0))],
                 last_sections: vec![serde_json::Value::Null],
                 scope: String::new(),
                 version: 0,
@@ -392,9 +475,10 @@ mod macos {
         if !rect.valid() {
             return Err("The chat viewport has invalid dimensions.".into());
         }
-        let (scroll, owner, generation) = handle(&app, &host_id)?;
+        let (scroll, owner, _) = handle(&app, &host_id)?;
+        let geometry = owner.next_geometry();
         app.run_on_main_thread(move || unsafe {
-            if owner.may_run(generation) {
+            if owner.may_set_geometry(geometry) {
                 lyra_native_chat_set_frame(
                     scroll as *mut c_void,
                     rect.x,
@@ -420,7 +504,7 @@ mod macos {
         if !height.is_finite() || !(1.0..=18_000.0).contains(&height) {
             return Err("The chat content has invalid dimensions.".into());
         }
-        let (scroll, owner) = {
+        let (scroll, owner, revision) = {
             let state = app.state::<NativeChatState>();
             let guard = state
                 .inner
@@ -436,11 +520,15 @@ mod macos {
             if current.webviews.get(index).map(Webview::label) != Some(webview.label()) {
                 return Err("The chat section is no longer open.".into());
             }
-            (current.scroll, Arc::clone(&current.owner))
+            (
+                current.scroll,
+                Arc::clone(&current.owner),
+                Arc::clone(&current.section_revisions[index]),
+            )
         };
         let (tx, rx) = mpsc::channel();
         app.run_on_main_thread(move || {
-            let current = owner.may_run(version);
+            let current = may_size_section(&owner, &revision, version);
             if current {
                 unsafe {
                     lyra_native_chat_set_section_height(scroll as *mut c_void, index, height)
@@ -519,6 +607,9 @@ mod macos {
             if scope != current.scope {
                 current.scope = scope;
                 current.ready.fill(false);
+                for revision in &current.section_revisions {
+                    revision.store(0, Ordering::Release);
+                }
                 current.last_sections.fill(serde_json::Value::Null);
                 let scroll = current.scroll;
                 let owner = Arc::clone(&current.owner);
@@ -580,6 +671,7 @@ mod macos {
                 current.loaded.push(false);
                 current.ready.push(false);
                 current.sent_versions.push(0);
+                current.section_revisions.push(Arc::new(AtomicU64::new(0)));
                 current.last_sections.push(serde_json::Value::Null);
             }
             while current.webviews.len() > count {
@@ -587,6 +679,11 @@ mod macos {
                 current.loaded.pop();
                 current.ready.pop();
                 current.sent_versions.pop();
+                current
+                    .section_revisions
+                    .pop()
+                    .expect("section exists")
+                    .store(0, Ordering::Release);
                 current.last_sections.pop();
                 let scroll = current.scroll;
                 let owner = Arc::clone(&current.owner);
@@ -624,6 +721,7 @@ mod macos {
                     .map_err(|_| "The native chat view could not be updated")?;
                 current.ready[index] = false;
                 current.sent_versions[index] = version;
+                current.section_revisions[index].store(version, Ordering::Release);
                 current.last_sections[index] = comparison;
             }
             Ok(())
@@ -664,6 +762,7 @@ mod macos {
             .get("hostId")
             .and_then(serde_json::Value::as_str)
             .ok_or("The chat action has no host")?;
+        let mut forwarded = action.clone();
         {
             let state = app.state::<NativeChatState>();
             let mut guard = state
@@ -679,6 +778,8 @@ mod macos {
             if kind == "ready" {
                 current.loaded[index] = true;
                 current.ready[index] = false;
+                current.sent_versions[index] = 0;
+                current.section_revisions[index].store(0, Ordering::Release);
                 current.last_sections[index] = serde_json::Value::Null;
                 let scroll = current.scroll;
                 let owner = Arc::clone(&current.owner);
@@ -692,10 +793,18 @@ mod macos {
                 .map_err(|_| "The chat view could not be hidden")?;
             } else {
                 let version = action.get("version").and_then(serde_json::Value::as_u64);
+                let sent_version = current.sent_versions.get(index).copied().unwrap_or(0);
+                let delayed_turn_event = matches!(kind, "reveal-complete" | "reasoning-open");
                 if action.get("scope").and_then(serde_json::Value::as_str)
                     != Some(current.scope.as_str())
-                    || version != current.sent_versions.get(index).copied()
-                    || !version.is_some_and(|value| value <= current.version)
+                    || !version.is_some_and(|value| {
+                        current_action_version(
+                            sent_version,
+                            current.version,
+                            value,
+                            delayed_turn_event,
+                        )
+                    })
                 {
                     return Ok(());
                 }
@@ -718,37 +827,42 @@ mod macos {
                     let Some(row) = row else {
                         return Ok(());
                     };
-                    if matches!(kind, "selection" | "reveal-complete" | "reasoning-open")
-                        && row.get("generation") != generation
-                    {
+                    if kind == "selection" && row.get("generation") != generation {
                         return Ok(());
                     }
                     if kind == "retry" && row.get("retryAction") != action.get("action") {
                         return Ok(());
                     }
-                    if matches!(kind, "reveal-complete" | "reasoning-open")
-                        && row.get("streaming").and_then(serde_json::Value::as_bool) != Some(true)
+                    if delayed_turn_event
+                        && !current_turn_callback(
+                            kind,
+                            &action,
+                            row,
+                            current.last_sections[index].get("liveGeneration"),
+                        )
                     {
                         return Ok(());
                     }
                 }
-                if matches!(kind, "reveal-complete" | "reasoning-open")
-                    && action.get("generation")
-                        != current.last_sections[index].get("liveGeneration")
-                {
-                    return Ok(());
-                }
                 if kind == "content-ready" {
-                    current.ready[index] = true;
-                    if !current.ready.iter().all(|ready| *ready) {
+                    let Some(current_version) = acknowledge_section(
+                        &mut current.ready,
+                        &current.sent_versions,
+                        index,
+                        version.expect("checked above"),
+                        current.version,
+                    ) else {
                         return Ok(());
-                    }
+                    };
+                    forwarded["version"] = serde_json::Value::from(current_version);
                 }
             }
         }
         let main = app
             .get_webview("main")
             .ok_or("The desktop view is unavailable")?;
+        let payload =
+            serde_json::to_string(&forwarded).map_err(|_| "The chat action is invalid")?;
         main.eval(format!(
             "window.dispatchEvent(new CustomEvent('lyra:native-chat-action', {{ detail: {payload} }}))"
         ))
@@ -762,9 +876,10 @@ mod macos {
         host_id: String,
     ) -> Result<(), String> {
         caller_is(&webview, "main")?;
-        let (scroll, owner, generation) = handle(&app, &host_id)?;
+        let (scroll, owner, _) = handle(&app, &host_id)?;
+        let sequence = owner.next_scroll();
         app.run_on_main_thread(move || unsafe {
-            if owner.may_run(generation) {
+            if owner.may_scroll(sequence) {
                 lyra_native_chat_scroll_to_bottom(scroll as *mut c_void);
             }
         })
@@ -782,10 +897,11 @@ mod macos {
         if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
             return Err("The chat scroll ratio is invalid.".into());
         }
-        let (scroll, owner, generation) = handle(&app, &host_id)?;
+        let (scroll, owner, _) = handle(&app, &host_id)?;
+        let sequence = owner.next_scroll();
         let (tx, rx) = mpsc::channel();
         app.run_on_main_thread(move || {
-            let current = owner.may_run(generation);
+            let current = owner.may_scroll(sequence);
             if current {
                 unsafe { lyra_native_chat_set_scroll_ratio(scroll as *mut c_void, ratio) };
             }
@@ -1079,5 +1195,133 @@ mod tests {
         assert!(!can_show("a", 4, "a", 3, &[true, true]));
         assert!(!can_show("a", 4, "a", 4, &[true, false]));
         assert!(can_show("a", 4, "a", 4, &[true, true]));
+    }
+
+    #[test]
+    fn unchanged_early_section_can_resize_after_tail_update_and_finish_reordered_readiness() {
+        let rows: Vec<_> = (0..65)
+            .map(|index| serde_json::json!({ "key": index }))
+            .collect();
+        let sections: Vec<_> = rows.chunks(32).collect();
+        assert_eq!(sections.len(), 3);
+        let owner = NativeChatOwner::new("host".into(), 1);
+        let revisions: Vec<_> = (0..3).map(|_| AtomicU64::new(1)).collect();
+        let mut sent_versions = vec![1; 3];
+        let mut ready = vec![false; 3];
+
+        // The tail alone changes. The early section still owns its version 1
+        // layout callbacks while the transcript's publication reaches version 2.
+        owner.set_generation(2);
+        sent_versions[2] = 2;
+        revisions[2].store(2, Ordering::Release);
+        assert!(may_size_section(&owner, &revisions[0], 1));
+        assert_eq!(
+            acknowledge_section(&mut ready, &sent_versions, 2, 2, 2),
+            None
+        );
+        assert_eq!(
+            acknowledge_section(&mut ready, &sent_versions, 1, 1, 2),
+            None
+        );
+        assert_eq!(
+            acknowledge_section(&mut ready, &sent_versions, 0, 1, 2),
+            Some(2)
+        );
+        assert!(can_show("conversation", 2, "conversation", 2, &ready));
+
+        revisions[0].store(3, Ordering::Release);
+        assert!(!may_size_section(&owner, &revisions[0], 1));
+        owner.deactivate();
+        assert!(!may_size_section(&owner, &revisions[2], 2));
+    }
+
+    #[test]
+    fn geometry_and_scroll_work_survive_an_unrelated_publication() {
+        let owner = NativeChatOwner::new("host".into(), 1);
+        let frame = owner.next_geometry();
+        let scroll = owner.next_scroll();
+        owner.set_generation(2);
+        assert!(owner.may_set_geometry(frame));
+        assert!(owner.may_scroll(scroll));
+        let newer_frame = owner.next_geometry();
+        assert!(!owner.may_set_geometry(frame));
+        assert!(owner.may_set_geometry(newer_frame));
+        owner.deactivate();
+        assert!(!owner.may_set_geometry(newer_frame));
+        assert!(!owner.may_scroll(scroll));
+    }
+
+    #[test]
+    fn delayed_current_turn_callbacks_cross_the_child_bridge_but_obsolete_text_does_not() {
+        let live = serde_json::json!({
+            "key": "reply", "streaming": true, "generation": "g1",
+            "contentEpoch": 7, "contentRevision": 9
+        });
+        let reasoning = serde_json::json!({
+            "rowKey": "reply", "generation": "g1", "contentEpoch": 7
+        });
+        let drain = serde_json::json!({
+            "rowKey": "reply", "generation": "g1", "contentEpoch": 7,
+            "contentRevision": 9
+        });
+        let generation = serde_json::json!("g1");
+        assert!(current_action_version(2, 3, 2, true));
+        assert!(current_action_version(2, 3, 2, false));
+        assert!(!current_action_version(3, 3, 2, false));
+        assert!(current_turn_callback(
+            "reasoning-open",
+            &reasoning,
+            &live,
+            Some(&generation)
+        ));
+        assert!(current_turn_callback(
+            "reveal-complete",
+            &drain,
+            &live,
+            Some(&generation)
+        ));
+
+        let mut extended = live.clone();
+        extended["contentRevision"] = serde_json::json!(10);
+        assert!(current_turn_callback(
+            "reasoning-open",
+            &reasoning,
+            &extended,
+            Some(&generation)
+        ));
+        assert!(!current_turn_callback(
+            "reveal-complete",
+            &drain,
+            &extended,
+            Some(&generation)
+        ));
+        let mut replaced = live.clone();
+        replaced["contentEpoch"] = serde_json::json!(11);
+        replaced["contentRevision"] = serde_json::json!(11);
+        assert!(!current_turn_callback(
+            "reasoning-open",
+            &reasoning,
+            &replaced,
+            Some(&generation)
+        ));
+        assert!(!current_turn_callback(
+            "reveal-complete",
+            &drain,
+            &replaced,
+            Some(&generation)
+        ));
+        assert!(!current_turn_callback(
+            "reasoning-open",
+            &reasoning,
+            &live,
+            Some(&serde_json::json!("g2"))
+        ));
+        assert!(!current_turn_callback(
+            "reveal-complete",
+            &drain,
+            &serde_json::json!({ "key": "other", "streaming": true, "generation": "g2", "contentEpoch": 7, "contentRevision": 9 }),
+            Some(&generation)
+        ));
+        assert!(!current_action_version(3, 3, 4, true));
     }
 }
