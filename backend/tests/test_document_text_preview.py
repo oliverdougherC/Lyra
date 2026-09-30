@@ -150,6 +150,7 @@ def test_a_document_without_an_extraction_still_gets_an_empty_preview(
     document_id = _document(db, class_id)
     assert _get_text(client, document_id) == {
         "filename": "week-3-notes.md",
+        "display_name": "week-3-notes.md",
         "text": "",
         "truncated": False,
     }
@@ -162,6 +163,7 @@ def test_an_empty_extraction_is_an_empty_preview(
     _write_extraction(document_id, "")
     assert _get_text(client, document_id) == {
         "filename": "week-3-notes.md",
+        "display_name": "week-3-notes.md",
         "text": "",
         "truncated": False,
     }
@@ -174,7 +176,12 @@ def test_a_short_extraction_is_returned_whole_with_its_filename(
     text = "Substitution takes a few lines.\n\n$$u = x^2$$"
     _write_extraction(document_id, text)
     body = _get_text(client, document_id)
-    assert body == {"filename": "cours — semaine.md", "text": text, "truncated": False}
+    assert body == {
+        "filename": "cours — semaine.md",
+        "display_name": "cours — semaine.md",
+        "text": text,
+        "truncated": False,
+    }
 
 
 # --- the ceiling, at its real size ----------------------------------------------------
