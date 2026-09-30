@@ -316,11 +316,30 @@ def search(
             "or instr(lower(coalesce(d.nickname, '')), lower(?)) > 0)"
         )
         named_args.extend((term, term))
+    # Failed or still-processing uploads can have readable page-native text without
+    # indexed chunks. Their original and nickname should find those pages too.
+    named_pages = (
+        "select p.document_id, p.content, p.page_number, null as problem_number, "
+        "d.filename, d.nickname, 3 as tier, 0 as score, p.page_number as source_order "
+        "from document_read_pages p join documents d on d.id = p.document_id "
+        "where d.class_id = ? and d.state != 'ready'"
+    )
+    named_pages_args: list[object] = [class_id]
+    if selected_id is not None:
+        named_pages += " and d.id = ?"
+        named_pages_args.append(selected_id)
+    for term in terms:
+        named_pages += (
+            " and (instr(lower(d.filename), lower(?)) > 0 "
+            "or instr(lower(coalesce(d.nickname, '')), lower(?)) > 0)"
+        )
+        named_pages_args.extend((term, term))
     combined = (
-        f"select * from ({sql} union all {direct} union all {named}) "  # noqa: S608
+        f"select * from ({sql} union all {direct} union all {named} union all {named_pages}) "  # noqa: S608
         "order by tier, score, document_id, source_order"
     )
     args.extend(named_args)
+    args.extend(named_pages_args)
     context: list[object] = ["search", class_id, selected_id, query]
     # One SQLite read snapshot covers ownership, revision, ranking, and excerpts. A
     # concurrent ingestion can commit in WAL, but cannot split these observations.

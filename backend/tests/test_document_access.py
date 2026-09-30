@@ -118,6 +118,24 @@ def test_nickname_is_visible_to_scoped_tools_and_citations(
         document_access.search(db, class_id, selected, "vector", limit=1, cursor=cursor)
 
 
+def test_nickname_search_finds_readable_pages_after_partial_ingestion_failure(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id, "LADW_2026_08-31.pdf", state="failed")
+    db.execute("update documents set nickname = 'Textbook' where id = ?", (document_id,))
+    db.execute(
+        "insert into document_read_pages (document_id, page_number, generation, content) "
+        "values (?, 3, 'fixture', 'The readable page still has useful material.')",
+        (document_id,),
+    )
+    db.commit()
+
+    for query in ("Textbook", "LADW_2026_08-31"):
+        result = document_access.search(db, class_id, document_id, query)
+        assert result["sources"][0]["document_id"] == document_id
+        assert result["sources"][0]["citation"] == "Textbook, p. 3"
+
+
 def test_selected_document_tools_refuse_other_class_and_other_selected_file(
     db: sqlite3.Connection, class_id: int
 ) -> None:
