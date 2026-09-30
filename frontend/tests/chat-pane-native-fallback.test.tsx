@@ -156,6 +156,44 @@ it('shows the source picker over native chat, then returns focus to the composer
   expect(screen.getByRole('textbox', { name: 'Message Lyra' })).toHaveValue('Continue')
 })
 
+it('hides native chat for an open attention menu and restores it on dismissal', async () => {
+  nativeSurface.active = true
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ChatPane
+          classId={1}
+          className="ECE 203"
+          agent
+          selectedDocumentId={null}
+          sessionId={7}
+          onSessionIdChange={() => {}}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  )
+  await waitFor(() => expect(screen.queryByRole('region', { name: 'Conversation' })).toBeNull())
+  const menu = document.createElement('div')
+  menu.setAttribute('role', 'menu')
+  menu.setAttribute('data-state', 'open')
+  document.body.append(menu)
+  try {
+    await waitFor(() => {
+      expect(nativeSurface.occluded).toBe(true)
+      expect(screen.getByRole('region', { name: 'Conversation' })).toBeInTheDocument()
+    })
+  } finally {
+    menu.remove()
+  }
+  await waitFor(() => {
+    expect(nativeSurface.occluded).toBe(false)
+    expect(screen.queryByRole('region', { name: 'Conversation' })).toBeNull()
+  })
+})
+
 it('reattaches ordinary scrolling and content observation after native fallback', async () => {
   const observed: Element[] = []
   class Observer {

@@ -622,9 +622,11 @@ describe('the contextual agent work surface (PLA-401)', () => {
     vi.spyOn(api, 'listAgentCommands').mockResolvedValue([command({ id: 42, argv: ['pytest'] })])
     const { wrapper } = createWrapper()
     render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
-    fireEvent.click(await screen.findByRole('button', { name: /1 item needs attention/i }))
-    fireEvent.click(screen.getByRole('button', { name: /Approve command: pytest/i }))
-    expect(document.activeElement).toHaveAttribute('data-attention-id', 'command:42')
+    await userEvent.click(await screen.findByRole('button', { name: /1 item needs attention/i }))
+    await userEvent.click(screen.getByRole('menuitem', { name: /Approve command: pytest/i }))
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAttribute('data-attention-id', 'command:42'),
+    )
     expect(screen.getByRole('button', { name: 'Confirm and run' })).toBeInTheDocument()
   })
 
@@ -661,9 +663,9 @@ describe('the contextual agent work surface (PLA-401)', () => {
     ])
     const { wrapper } = createWrapper()
     render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
-    fireEvent.click(await screen.findByRole('button', { name: /1 item needs attention/i }))
-    fireEvent.click(screen.getByRole('button', { name: 'Retry the last agent turn' }))
-    expect(document.activeElement).toHaveAttribute('data-attention-id', 'turn')
+    await userEvent.click(await screen.findByRole('button', { name: /1 item needs attention/i }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Retry the last agent turn' }))
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('data-attention-id', 'turn'))
     expect(screen.getByRole('button', { name: 'Retry this turn' })).toBeEnabled()
   })
 

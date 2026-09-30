@@ -32,8 +32,27 @@ Captured frames: [wide before](activity-geometry-before-wide.png) ·
 separately passed seven affected Chromium acceptance tests with Applied and Rejected results
 still checked in the opened history.
 
-This measures history **availability** in a browser with synthetic data. The browser test does
-not establish manual scroll-away behavior during streaming, new-draft send timing, or native
-WebKit frame pacing. At 390 × 560 with CSS 125% zoom, the existing bottom navigation obscures
-the composer in both frames; its position does not change when history appears. The signed Mac
-candidate and PR #100 native scrolling acceptance were **not executed** in this evidence pass.
+The table and frames above are the original pre-#100 baseline; that selector measured an old
+ScrollArea and cannot establish current native chat behavior. The current-main correction
+asserts exactly one conversation native host and at most one Conversation DOM fallback, then
+measures that actual fallback in Chromium. A missing target or unrelated scroll area now fails.
+
+The corrected browser regression starts at `?session=new`, creates the session on Send, emits a
+valid first tool frame, streams a long answer in two parts, verifies the reader can scroll away
+from real overflow and stays there through completion, refetches the saved rows, and only then
+releases durable activity history. It asserts the
+transcript origin, composer top, conversation bounds, and scroll offset each stay within 0.5 CSS
+px as the header history control becomes available. The test passes at 800 × 600 and 900 × 650
+with CSS 125% zoom and reduced motion. Opening history deliberately is checked separately.
+The old settled-history/reload/session-switch cases also pass at 900 × 650 and 390 × 560 with
+CSS 125% zoom; the latter still has the documented pre-existing bottom-navigation obstruction.
+
+The attention control now uses the existing Radix menu. A 12-action browser probe at 800 × 600
+measured the open menu at x=528–784, y≈37–277 and the conversation fallback at x=0–800,
+y=342–462: **no overlap in this crowded supported case**. The source risk was real even though
+that layout did not reproduce occlusion: a future overlapping menu is recognized by #100's
+open-menu observer, which hides the AppKit transcript and displays the DOM fallback. Browser
+checks cover keyboard entry, Escape and outside dismissal, trigger focus restoration, exact
+action focus, and unchanged conversation scroll on Escape. Native AppKit hide/show and reading
+position remain unverified without an isolated Mac account; this browser geometry is not native
+acceptance. The normal installed app and profile were not opened or altered.

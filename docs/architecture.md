@@ -110,8 +110,10 @@ detail. The live trail stays beside the active answer; settled activity and prov
 reasoning are collapsed in Details, including after reload. Source links open the exact page
 through the authenticated Files preview. The separate activity history retains the durable audit
 and results. Its disclosure lives in the existing chat header so audit availability cannot move
-the transcript or composer. The attention list points to unresolved access, approval, retry, and
-load-recovery controls by scope or artifact ID; historical tool failures and terminal effects
+the transcript or composer. The attention list is an accessible menu that the native chat
+occlusion observer recognizes while open; selecting an action focuses its exact card after
+the menu closes. It points to unresolved access, approval, retry, and load-recovery controls
+by scope or artifact ID; historical tool failures and terminal effects
 remain in the audit without an unresolvable warning. An uploaded course document is retrieved
 as study context; it does not require an attached local workspace. The agent requests workspace
 access only for work that needs files in an attached folder.

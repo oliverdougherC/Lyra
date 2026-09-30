@@ -17,6 +17,12 @@ import { HeaderActions } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
   agentKeys,
   useAgentAccessDismissals,
   useAgentActivity,
@@ -110,7 +116,7 @@ function accessScopeSatisfied(
 export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [attentionOpen, setAttentionOpen] = useState(false)
-  const attentionTriggerRef = useRef<HTMLButtonElement>(null)
+  const selectedAttentionRef = useRef<string | null>(null)
   const [effectBusy, setEffectBusy] = useState(false)
   const {
     workspace: workspaceData,
@@ -478,6 +484,9 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
         label: `Approve command: ${command.argv.join(' ')}`,
       })),
   ]
+  useEffect(() => {
+    if (attentionItems.length === 0) setAttentionOpen(false)
+  }, [attentionItems.length])
   const focusAttention = (id: string) => {
     const target = document.getElementById(`agent-attention-${id}`)
     if (!target) return
@@ -513,45 +522,40 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
         <HeaderActions>
           <div className="flex items-center gap-1">
             {attentionItems.length > 0 && (
-              <div className="relative">
-                <button
-                  ref={attentionTriggerRef}
-                  type="button"
-                  aria-expanded={attentionOpen}
-                  aria-controls="agent-attention-list"
-                  onClick={() => setAttentionOpen((open) => !open)}
-                  className="text-danger-text cursor-pointer rounded-md px-2 py-1 text-xs font-medium focus-visible:outline-2"
-                >
-                  {attentionItems.length}{' '}
-                  {attentionItems.length === 1 ? 'item needs' : 'items need'} attention
-                </button>
-                {attentionOpen && (
-                  <div
-                    id="agent-attention-list"
-                    className="border-border bg-background absolute right-0 z-50 mt-1 max-h-[40svh] w-64 overflow-auto rounded-md border p-1 shadow-lg"
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape') {
-                        setAttentionOpen(false)
-                        attentionTriggerRef.current?.focus()
-                      }
-                    }}
+              <DropdownMenu open={attentionOpen} onOpenChange={setAttentionOpen}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="text-danger-text cursor-pointer rounded-md px-2 py-1 text-xs font-medium focus-visible:outline-2"
                   >
-                    {attentionItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="hover:bg-muted focus-visible:bg-muted w-full rounded px-2 py-1.5 text-left text-sm"
-                        onClick={() => {
-                          focusAttention(item.id)
-                          setAttentionOpen(false)
-                        }}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+                    {attentionItems.length}{' '}
+                    {attentionItems.length === 1 ? 'item needs' : 'items need'} attention
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  id="agent-attention-list"
+                  align="end"
+                  className="max-h-[40svh] w-64 max-w-[calc(100vw-1rem)]"
+                  onCloseAutoFocus={(event) => {
+                    if (!selectedAttentionRef.current) return
+                    event.preventDefault()
+                    focusAttention(selectedAttentionRef.current)
+                    selectedAttentionRef.current = null
+                  }}
+                >
+                  {attentionItems.map((item) => (
+                    <DropdownMenuItem
+                      key={item.id}
+                      onSelect={() => {
+                        selectedAttentionRef.current = item.id
+                        setAttentionOpen(false)
+                      }}
+                    >
+                      {item.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
             {(hasActivity || settledCount > 0) && (
               <button
