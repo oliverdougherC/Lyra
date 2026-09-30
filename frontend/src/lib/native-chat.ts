@@ -18,6 +18,7 @@ export type NativeChatRow = {
 }
 
 export type NativeChatSnapshot = {
+  hostId: string
   version: number
   scope: string
   rows: NativeChatRow[]
@@ -27,14 +28,52 @@ export type NativeChatSnapshot = {
 }
 
 export type NativeChatAction =
-  | { kind: 'ready' }
-  | { kind: 'content-ready'; scope: string }
-  | { kind: 'overflow' }
-  | { kind: 'retry'; action: 'regenerate' | 'tutor-retry' }
-  | { kind: 'reveal-complete'; generation?: string }
-  | { kind: 'reasoning-open'; open: boolean }
-  | { kind: 'navigate'; href: string }
-  | { kind: 'selection'; anchor: number; focus: number; generation?: string }
+  | { kind: 'ready'; hostId: string }
+  | { kind: 'content-ready'; hostId: string; scope: string; version: number }
+  | { kind: 'overflow'; hostId: string; scope: string; version: number }
+  | {
+      kind: 'retry'
+      hostId: string
+      scope: string
+      version: number
+      rowKey: string
+      action: 'regenerate' | 'tutor-retry'
+    }
+  | {
+      kind: 'reveal-complete'
+      hostId: string
+      scope: string
+      version: number
+      rowKey: string
+      generation?: string
+    }
+  | {
+      kind: 'reasoning-open'
+      hostId: string
+      scope: string
+      version: number
+      rowKey: string
+      generation?: string
+      open: boolean
+    }
+  | {
+      kind: 'navigate'
+      hostId: string
+      scope: string
+      version: number
+      rowKey: string
+      href: string
+    }
+  | {
+      kind: 'selection'
+      hostId: string
+      scope: string
+      version: number
+      rowKey: string | null
+      anchor?: number
+      focus?: number
+      generation?: string
+    }
 
 type NativeChatRect = { x: number; top: number; width: number; height: number }
 

@@ -14,8 +14,54 @@ declare global {
   }
 }
 
+const childHostId = new URLSearchParams(window.location.search).get('hostId') ?? ''
+
 function report(action: NativeChatAction) {
   void callNativeChat('native_chat_action', { action }).catch(() => undefined)
+}
+
+function selectedOffset(root: Element, node: Node, offset: number): number | null {
+  if (!root.contains(node)) return null
+  const range = document.createRange()
+  range.selectNodeContents(root)
+  try {
+    range.setEnd(node, offset)
+    return range.toString().length
+  } catch {
+    return null
+  }
+}
+
+/** Resolve the selected row in this section; never borrow the live turn's identity. */
+export function selectionFromTranscript(
+  snapshot: NativeChatSnapshot,
+  selection: Selection | null,
+): Extract<NativeChatAction, { kind: 'selection' }> {
+  const base = {
+    kind: 'selection' as const,
+    hostId: snapshot.hostId,
+    scope: snapshot.scope,
+    version: snapshot.version,
+  }
+  const clear = { ...base, rowKey: null }
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return clear
+  const anchor = selection.anchorNode?.parentElement?.closest<HTMLElement>('[data-native-row-key]')
+  const focus = selection.focusNode?.parentElement?.closest<HTMLElement>('[data-native-row-key]')
+  if (!anchor || anchor !== focus) return clear
+  const rowKey = anchor.dataset.nativeRowKey
+  const row = snapshot.rows.find((item) => item.key === rowKey && item.message.role === 'assistant')
+  const root = anchor.querySelector('.assistant-content')
+  if (!row || !root || !selection.anchorNode || !selection.focusNode || !rowKey) return clear
+  const anchorOffset = selectedOffset(root, selection.anchorNode, selection.anchorOffset)
+  const focusOffset = selectedOffset(root, selection.focusNode, selection.focusOffset)
+  if (anchorOffset === null || focusOffset === null) return clear
+  return {
+    ...base,
+    rowKey,
+    anchor: anchorOffset,
+    focus: focusOffset,
+    ...(row.generation ? { generation: row.generation } : {}),
+  }
 }
 
 function NativeTranscript() {
@@ -23,27 +69,40 @@ function NativeTranscript() {
   const versionRef = useRef(-1)
   const contentRef = useRef<HTMLElement>(null)
   const reportedHeightRef = useRef(0)
-  const hasContentRef = useRef(false)
   const readyReportedRef = useRef(false)
   const heightRetriesRef = useRef(0)
   const latestSnapshotRef = useRef<NativeChatSnapshot | null>(null)
 
   const publishHeight = useCallback((height: number) => {
+    const owner = latestSnapshotRef.current
+    if (!owner) return
     if (height > 18_000) {
-      report({ kind: 'overflow' })
+      report({ kind: 'overflow', hostId: owner.hostId, scope: owner.scope, version: owner.version })
       return
     }
-    if (Math.abs(height - reportedHeightRef.current) < 1) return
+    if (Math.abs(height - reportedHeightRef.current) < 1 && readyReportedRef.current) return
     reportedHeightRef.current = height
-    void callNativeChat('native_chat_set_content_height', { height }).then(
+    void callNativeChat('native_chat_set_content_height', {
+      hostId: owner.hostId,
+      scope: owner.scope,
+      version: owner.version,
+      height,
+    }).then(
       () => {
+        if (latestSnapshotRef.current !== owner) return
         heightRetriesRef.current = 0
-        if (hasContentRef.current && !readyReportedRef.current) {
+        if (!readyReportedRef.current) {
           readyReportedRef.current = true
-          report({ kind: 'content-ready', scope: latestSnapshotRef.current?.scope ?? '' })
+          report({
+            kind: 'content-ready',
+            hostId: owner.hostId,
+            scope: owner.scope,
+            version: owner.version,
+          })
         }
       },
       () => {
+        if (latestSnapshotRef.current !== owner) return
         reportedHeightRef.current = 0
         if (heightRetriesRef.current++ < 10)
           window.setTimeout(() => publishHeight(contentRef.current?.scrollHeight ?? 0), 100)
@@ -53,17 +112,15 @@ function NativeTranscript() {
 
   useEffect(() => {
     window.__lyraNativeChatReceive = (incoming) => {
-      if (incoming.version <= versionRef.current) return
-      if (incoming.scope !== latestSnapshotRef.current?.scope) {
-        readyReportedRef.current = false
-        reportedHeightRef.current = 0
-      }
+      if (incoming.hostId !== childHostId || incoming.version <= versionRef.current) return
       versionRef.current = incoming.version
       latestSnapshotRef.current = incoming
-      hasContentRef.current = true
+      readyReportedRef.current = false
+      reportedHeightRef.current = 0
+      heightRetriesRef.current = 0
       setSnapshot(incoming)
     }
-    report({ kind: 'ready' })
+    report({ kind: 'ready', hostId: childHostId })
     return () => {
       delete window.__lyraNativeChatReceive
     }
@@ -92,8 +149,7 @@ function NativeTranscript() {
     }
   }, [publishHeight])
 
-  // The native view starts hidden, so its rAF callbacks may be deferred. Commit the
-  // first populated height synchronously before asking AppKit to show the transcript.
+  // Hidden WKWebViews may defer rAF. Publish the first populated height during commit.
   useLayoutEffect(() => {
     if (snapshot && contentRef.current) publishHeight(contentRef.current.scrollHeight)
   }, [snapshot, publishHeight])
@@ -102,10 +158,19 @@ function NativeTranscript() {
     const intercept = (event: MouseEvent) => {
       if (!(event.target instanceof Element)) return
       const link = event.target.closest<HTMLAnchorElement>('a[href]')
-      if (!link) return
+      const owner = latestSnapshotRef.current
+      const rowKey = link?.closest<HTMLElement>('[data-native-row-key]')?.dataset.nativeRowKey
+      if (!link || !owner || !rowKey) return
       event.preventDefault()
       event.stopPropagation()
-      report({ kind: 'navigate', href: link.getAttribute('href') ?? '' })
+      report({
+        kind: 'navigate',
+        hostId: owner.hostId,
+        scope: owner.scope,
+        version: owner.version,
+        rowKey,
+        href: link.getAttribute('href') ?? '',
+      })
     }
     document.addEventListener('click', intercept, true)
     return () => document.removeEventListener('click', intercept, true)
@@ -115,30 +180,8 @@ function NativeTranscript() {
     let frame: number | null = null
     const reportSelection = () => {
       frame = null
-      const roots = document.querySelectorAll<HTMLElement>('.assistant-content')
-      const root = roots[roots.length - 1]
-      const selection = window.getSelection()
-      if (!root || !selection || selection.rangeCount === 0) return
-      const range = selection.getRangeAt(0)
-      if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return
-      const offsetOf = (node: Node, offset: number): number | null => {
-        let total = 0
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-        for (let step = walker.nextNode(); step; step = walker.nextNode()) {
-          if (step === node) return total + offset
-          total += step.textContent?.length ?? 0
-        }
-        return null
-      }
-      const anchor = offsetOf(range.startContainer, range.startOffset)
-      const focus = offsetOf(range.endContainer, range.endOffset)
-      if (anchor !== null && focus !== null)
-        report({
-          kind: 'selection',
-          anchor,
-          focus,
-          generation: latestSnapshotRef.current?.liveGeneration,
-        })
+      const owner = latestSnapshotRef.current
+      if (owner) report(selectionFromTranscript(owner, window.getSelection()))
     }
     const schedule = () => {
       if (frame === null) frame = requestAnimationFrame(reportSelection)
@@ -158,38 +201,62 @@ function NativeTranscript() {
         aria-label="Conversation"
       >
         {snapshot?.rows.map((row) => (
-          <MessageRow
-            key={row.key}
-            message={row.message}
-            className={row.className}
-            startsTimeGap={row.startsTimeGap}
-            streaming={row.streaming}
-            activity={row.activity}
-            agent={snapshot.agent}
-            processingStage={row.processingStage}
-            turnStartedAt={row.turnStartedAt}
-            turnEnded={row.turnEnded}
-            generation={row.generation}
-            selectionRestore={row.selectionRestore}
-            canRetry={Boolean(row.retryAction)}
-            onRetry={
-              row.retryAction
-                ? () =>
-                    report({
-                      kind: 'retry',
-                      action: row.retryAction as 'regenerate' | 'tutor-retry',
-                    })
-                : undefined
-            }
-            onRevealComplete={
-              row.streaming
-                ? (generation) => report({ kind: 'reveal-complete', generation })
-                : undefined
-            }
-            onReasoningOpenChange={
-              row.streaming ? (open) => report({ kind: 'reasoning-open', open }) : undefined
-            }
-          />
+          <div key={row.key} data-native-row-key={row.key} className="contents">
+            <MessageRow
+              message={row.message}
+              className={row.className}
+              startsTimeGap={row.startsTimeGap}
+              streaming={row.streaming}
+              activity={row.activity}
+              agent={snapshot.agent}
+              processingStage={row.processingStage}
+              turnStartedAt={row.turnStartedAt}
+              turnEnded={row.turnEnded}
+              generation={row.generation}
+              selectionRestore={row.selectionRestore}
+              canRetry={Boolean(row.retryAction)}
+              onRetry={
+                row.retryAction
+                  ? () =>
+                      report({
+                        kind: 'retry',
+                        hostId: snapshot.hostId,
+                        scope: snapshot.scope,
+                        version: snapshot.version,
+                        rowKey: row.key,
+                        action: row.retryAction as 'regenerate' | 'tutor-retry',
+                      })
+                  : undefined
+              }
+              onRevealComplete={
+                row.streaming
+                  ? (generation) =>
+                      report({
+                        kind: 'reveal-complete',
+                        hostId: snapshot.hostId,
+                        scope: snapshot.scope,
+                        version: snapshot.version,
+                        rowKey: row.key,
+                        generation,
+                      })
+                  : undefined
+              }
+              onReasoningOpenChange={
+                row.streaming
+                  ? (open) =>
+                      report({
+                        kind: 'reasoning-open',
+                        hostId: snapshot.hostId,
+                        scope: snapshot.scope,
+                        version: snapshot.version,
+                        rowKey: row.key,
+                        generation: row.generation,
+                        open,
+                      })
+                  : undefined
+              }
+            />
+          </div>
         ))}
       </main>
     </TooltipProvider>

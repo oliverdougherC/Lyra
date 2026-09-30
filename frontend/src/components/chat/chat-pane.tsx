@@ -37,7 +37,7 @@ import {
 } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { openExternalUrl } from '@/lib/external-links'
-import { callNativeChat, type NativeChatRow } from '@/lib/native-chat'
+import { type NativeChatRow } from '@/lib/native-chat'
 import {
   beginChatDraftSend,
   clearChatDraftIfRevision,
@@ -301,6 +301,7 @@ export function ChatPane({
   const nativeReadyRef = useRef(false)
   const nativeSelectionRef = useRef<{
     generation?: string
+    rowKey: string
     anchor: number
     focus: number
   } | null>(null)
@@ -948,7 +949,10 @@ export function ChatPane({
         if (streamTextRef.current === data[answerIndex].content) {
           const nativeSelection = nativeSelectionRef.current
           if (nativeReadyRef.current) {
-            if (nativeSelection?.generation === revealGenRef.current) {
+            if (
+              nativeSelection?.generation === revealGenRef.current &&
+              nativeSelection.rowKey === `opt-${owner}`
+            ) {
               handoff.selection = {
                 anchor: nativeSelection.anchor,
                 focus: nativeSelection.focus,
@@ -2128,7 +2132,46 @@ export function ChatPane({
   )
   const nativeEnabled =
     layout === 'pane' && agent && !writer && rowCount > 0 && !historyError && !messagesPending
-  const { hostRef: nativeHostRef, active: nativeActive } = useNativeChatHost(
+  const ownViewportRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [following, setFollowing] = useState(true)
+  const followingRef = useRef(true)
+  const userScrollAtRef = useRef(Number.NEGATIVE_INFINITY)
+  const nativeScrollRatioRef = useRef(1)
+  const [nativeOccluded, setNativeOccluded] = useState(false)
+
+  // Portals belong to the main WebView. AppKit's transcript sits above it, so
+  // show the ordinary transcript while an interactive portal overlaps chat.
+  useEffect(() => {
+    if (!nativeEnabled) return
+    const update = () => {
+      setNativeOccluded(
+        Boolean(
+          document.querySelector(
+            '[role="dialog"]:not([data-state="closed"]), [role="menu"]:not([data-state="closed"]), [role="listbox"]:not([data-state="closed"])',
+          ),
+        ),
+      )
+    }
+    const observer = new MutationObserver(update)
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-state', 'role'],
+    })
+    update()
+    return () => {
+      observer.disconnect()
+      setNativeOccluded(false)
+    }
+  }, [nativeEnabled])
+  const {
+    hostRef: nativeHostRef,
+    active: nativeActive,
+    scrollToBottom: scrollNativeToBottom,
+  } = useNativeChatHost(
     nativeEnabled,
     nativeSnapshot,
     {
@@ -2159,16 +2202,27 @@ export function ChatPane({
         }
         void openExternalUrl(href).catch(() => toast.error('This link could not be opened.'))
       },
-      onSelection: (anchor, focus, generation) => {
-        nativeSelectionRef.current = { anchor, focus, generation }
+      onSelection: (anchor, focus, generation, rowKey) => {
+        nativeSelectionRef.current =
+          anchor === null || focus === null || !rowKey
+            ? null
+            : { anchor, focus, generation, rowKey }
       },
-      onScrollState: (atBottom) => {
+      onScrollState: (atBottom, ratio) => {
+        if (typeof ratio === 'number') nativeScrollRatioRef.current = ratio
         if (followingRef.current === atBottom) return
         followingRef.current = atBottom
         setFollowing(atBottom)
       },
     },
     nativeReadyRef,
+    nativeOccluded,
+    () => {
+      const node = ownViewportRef.current
+      if (!node) return null
+      const distance = node.scrollHeight - node.clientHeight
+      return distance > 0 ? node.scrollTop / distance : 1
+    },
   )
   const showingNative = nativeActive && nativeEnabled
 
@@ -2180,20 +2234,21 @@ export function ChatPane({
   // so the follow, the jump button, and the re-pin work the same either way. One real ref
   // resolved once per render rather than a ternary at each use: a conditional ref is not
   // one the compiler can see through, and half of this file depends on it being stable.
-  const ownViewportRef = useRef<HTMLDivElement>(null)
-  const viewportRef = useRef<HTMLDivElement | null>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const [following, setFollowing] = useState(true)
-  const followingRef = useRef(true)
-  const userScrollAtRef = useRef(Number.NEGATIVE_INFINITY)
-
   useEffect(() => {
     viewportRef.current = inline
       ? (scrollViewportRef?.current ?? null)
       : nativeReadyRef.current
         ? null
         : ownViewportRef.current
-  })
+  }, [inline, scrollViewportRef, showingNative])
+
+  useLayoutEffect(() => {
+    if (inline || showingNative) return
+    const node = ownViewportRef.current
+    if (!node) return
+    const distance = Math.max(0, node.scrollHeight - node.clientHeight)
+    node.scrollTop = followingRef.current ? distance : nativeScrollRatioRef.current * distance
+  }, [inline, showingNative])
 
   /** How far the tail of the conversation sits below the bottom of the viewport. */
   const distanceBelowFold = useCallback((): number => {
@@ -2213,7 +2268,7 @@ export function ChatPane({
   const scrollToBottom = useCallback(
     (behavior: ScrollBehavior) => {
       if (nativeReadyRef.current) {
-        void callNativeChat('native_chat_scroll_to_bottom').catch(() => undefined)
+        void scrollNativeToBottom().catch(() => undefined)
         return
       }
       const node = viewportRef.current
@@ -2227,7 +2282,7 @@ export function ChatPane({
       if (distance <= 0) return
       node.scrollTo({ top: Math.max(0, node.scrollTop + distance), behavior })
     },
-    [distanceBelowFold],
+    [distanceBelowFold, scrollNativeToBottom],
   )
 
   // Only the reader can stop the conversation following its own tail. Content that grows
@@ -2270,7 +2325,7 @@ export function ChatPane({
       node.removeEventListener('touchmove', noteUserScroll)
       node.removeEventListener('keydown', noteUserScroll)
     }
-  }, [distanceBelowFold])
+  }, [distanceBelowFold, showingNative])
 
   // Opening a conversation jumps straight to the end, with no visible travel through
   // history the reader did not ask to see. Not inline: the reader opened this thread from
@@ -2348,7 +2403,7 @@ export function ChatPane({
     })
     observer.observe(node)
     return () => observer.disconnect()
-  }, [followTailSoon])
+  }, [followTailSoon, showingNative])
 
   // A segmented control rather than underlined tabs. These do not navigate anywhere - they
   // change how the next answer is written. In the header bar there is no pane rule for an

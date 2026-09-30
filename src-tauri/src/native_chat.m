@@ -2,8 +2,9 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 #include <stdbool.h>
+#include <math.h>
 
-extern void lyra_native_chat_scroll_changed(bool atBottom);
+extern void lyra_native_chat_scroll_changed(const char *hostId, bool atBottom, double ratio);
 
 @interface LyraChatDocument : NSView
 @property (nonatomic, strong) NSMutableArray<NSView *> *sections;
@@ -21,7 +22,7 @@ extern void lyra_native_chat_scroll_changed(bool atBottom);
 
 @interface LyraChatScrollObserver : NSObject
 @property (nonatomic, weak) NSScrollView *scroll;
-@property (nonatomic) BOOL lastBottom;
+@property (nonatomic, copy) NSString *hostId;
 - (void)boundsChanged:(NSNotification *)notification;
 - (void)notifyIfChanged;
 @end
@@ -48,9 +49,9 @@ bool lyra_native_chat_near_bottom(void *rawScroll) {
 - (void)notifyIfChanged {
     if (!self.scroll) return;
     BOOL atBottom = lyra_native_chat_near_bottom((__bridge void *)self.scroll);
-    if (atBottom == self.lastBottom) return;
-    self.lastBottom = atBottom;
-    lyra_native_chat_scroll_changed(atBottom);
+    double bottom = bottomOffset(self.scroll);
+    double ratio = bottom > 0 ? self.scroll.contentView.bounds.origin.y / bottom : 1;
+    lyra_native_chat_scroll_changed(self.hostId.UTF8String, atBottom, MIN(1, MAX(0, ratio)));
 }
 @end
 
@@ -76,11 +77,11 @@ static void layoutSections(NSScrollView *scroll, bool follow) {
 
 // AppKit owns the single scroll offset; short WKWebViews paint each rich section.
 void *lyra_native_chat_attach(void *rawWindow, void *rawWebview,
-                              double x, double top, double width, double height) {
+                              double x, double top, double width, double height, const char *hostId) {
     NSWindow *window = (__bridge NSWindow *)rawWindow;
     WKWebView *webview = (__bridge WKWebView *)rawWebview;
     NSView *content = window.contentView;
-    if (!window || !webview || !content || width <= 0 || height <= 0) return NULL;
+    if (!window || !webview || !content || !hostId || width <= 0 || height <= 0) return NULL;
 
     NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     scroll.hasVerticalScroller = YES;
@@ -91,7 +92,7 @@ void *lyra_native_chat_attach(void *rawWindow, void *rawWebview,
     scroll.contentView.postsBoundsChangedNotifications = YES;
     LyraChatScrollObserver *observer = [LyraChatScrollObserver new];
     observer.scroll = scroll;
-    observer.lastBottom = YES;
+    observer.hostId = [NSString stringWithUTF8String:hostId];
     objc_setAssociatedObject(scroll, @selector(boundsChanged:), observer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [[NSNotificationCenter defaultCenter] addObserver:observer selector:@selector(boundsChanged:)
                                          name:NSViewBoundsDidChangeNotification object:scroll.contentView];
@@ -161,6 +162,14 @@ void lyra_native_chat_scroll_to_bottom(void *rawScroll) {
     NSScrollView *scroll = chatScroll(rawScroll);
     if (!scroll) return;
     [scroll.contentView scrollToPoint:NSMakePoint(0, bottomOffset(scroll))];
+    [scroll reflectScrolledClipView:scroll.contentView];
+    [observerFor(scroll) notifyIfChanged];
+}
+
+void lyra_native_chat_set_scroll_ratio(void *rawScroll, double ratio) {
+    NSScrollView *scroll = chatScroll(rawScroll);
+    if (!scroll || !isfinite(ratio)) return;
+    [scroll.contentView scrollToPoint:NSMakePoint(0, bottomOffset(scroll) * MIN(1, MAX(0, ratio)))];
     [scroll reflectScrolledClipView:scroll.contentView];
     [observerFor(scroll) notifyIfChanged];
 }
