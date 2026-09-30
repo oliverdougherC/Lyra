@@ -44,6 +44,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Integration Handoff: Study Tools, Hybrid Retrieval, and the Draft Workspace](integration-handoff.md) | Historical record |
 | [Local Deployment](local-deployment.md) | Maintained |
 | [Learning beta quality evidence](learning-beta-evidence/README.md) | Candidate evidence; recorded revisions and configurations only |
+| [Adaptive education chat, September 29](adaptive-education-evidence-20260929/README.md) | Bounded production-path evaluation; quality gate failed |
 | [Learning quality causal follow-up](learning-followup-evidence/README.md) | Candidate evidence; reviewed PR #80 preserved |
 | [PLA-461 local Guide quality pass — September 8, 2026](local-guide-quality-20260908.md) | Candidate/incident evidence; recorded revision only |
 | [macOS Apple Silicon Release Checklist](macos-apple-silicon-release-checklist.md) | Maintained |

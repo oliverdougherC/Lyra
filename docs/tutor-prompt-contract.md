@@ -1,147 +1,45 @@
 # Tutor prompt contract
 
-The model-facing contract for the tutor chat: what the system prompt tells the model, what
-each mode means, and how the behavior is evaluated. **Contract version: 2**
-(`backend.llm.prompts.TUTOR_PROMPT_CONTRACT_VERSION`), established by PLA-401.
+**Active contract version: 4** (`backend.llm.prompts.TUTOR_PROMPT_CONTRACT_VERSION`).
+The class agent and tutor/anchored chat share one adaptive education contract. The student's
+latest request and the conversation determine scope. Stored `guide`/`show` values remain
+readable for compatibility, but neither selects a different teaching policy. The education
+chat has no answer-style control.
 
-## What changed from version 1
+A conversational definition gets its meaning and essential conditions in a compact
+explanation; the word “definition” alone does not call for the full axiom list. A request
+for help getting started gets one useful move and reason, leaving its execution to the
+student. Attempt feedback names the first genuine error in the student's actual method
+and gives the next corrected step. An explicitly formal definition includes the needed
+field, operations, and axioms. Full answers, proofs, derivations, and requests for depth
+receive the complete requested work by the shortest sound route, without an arbitrary
+length cap. Optional spot-checks, examples, tangents, and transferable advice are omitted
+unless they serve the request. A narrow follow-up stays narrow even after a long turn.
+Routine tool use, internal checks, recaps, closing questions, and offers are not
+automatic final-answer content.
 
-Version 1 encoded Guide as a response format: *open with a leading question, give one step
-at a time, withhold the answer until the student earns it, offer a hint when the answer is
-asked for.* The failure it produced: a student who asks "Explain convolution" gets an
-indirect Socratic setup (which values of a variable make two functions nonzero) instead of
-the explanation they asked for. Version 2 encodes Guide as a **teaching contract** - a
-statement of what the mode optimizes for, the request shapes a small model will not infer
-on its own, and an explicit ban on withholding a directly requested answer. The mode
-instructions now agree with the base rule they sit under ("start with the answer, in your
-own voice") instead of contradicting it.
+The base prompt still governs course grounding, citations, missing context, and LaTeX.
+Anchored chat stays on its step unless the student explicitly broadens the request.
+The agent layer adds capability and trust-boundary instructions before the shared teaching
+contract; tool results needed for the answer remain visible in the final reply. A tool-less
+turn uses this same teaching contract. Writer, structured solver, and study-generation prompts
+are separate.
 
-## The contract, semantically
+`scripts/eval_corpora/tutor_semantic.json` version 2.1.0 pins this contract. Its legacy
+mode values test compatibility, not distinct response styles. `scripts/eval_tutor.py
+run --surface class_chat` exercises the production planner/tool loop. Retained terminal
+answers need independent semantic review; model self-grading and output length alone do
+not establish quality. [PLA-461](https://linear.app/platinum-labs/issue/PLA-461) tracks
+the bounded live evaluation and its limits.
 
-### Guide
+The [September 29 production-path evidence](adaptive-education-evidence-20260929/README.md)
+retains baseline, earlier candidates, and the correction-pass observations. Live quality
+acceptance remains subject to independent review of those exact final answers.
 
-Guide optimizes for **understanding and productive progress**. The reply succeeds when the
-student understands more after it than before it. The tutor chooses the move that serves
-the student's actual question:
+## Historical records
 
-- explain directly;
-- work one example;
-- scaffold the next step;
-- diagnose an attempt the student sent;
-- check that they followed;
-- ask a question **when it tells the tutor what to teach next**.
-
-Hard rules that survive as rules (everything else is judgment):
-
-1. **A question is a tool, not a format.** Never ask one merely because Guide is active.
-2. **Nothing is withheld on demand.** An explanation or answer the student asked for
-   outright is given, preferably with a concise justification.
-3. **Proportionality.** Detail matches the request and the time the student has; a quick
-   question gets a quick, complete answer, and a short window before an exam gets the
-   essentials.
-
-Request shapes the prompt names explicitly, and the behavior they map to:
-
-|Request|Behavior|
-|---|---|
-|"Explain X" / "What is X?"|Explain it; mental model first (the idea in a sentence or two), then the formalism or an example. Never make the student derive framing the tutor can simply explain.|
-|An attempt is supplied|Acknowledge valid work, locate the first invalid transition, explain exactly what changed or was lost, and correct it within the student’s method. Do not blame an operation that is valid when applied correctly.|
-|"Just give me the answer"|Give it, with the briefest justification that makes it trustworthy.|
-
-The prompt also names first-step help, simpler explanations, and explicit requests to omit
-questions. First-step help stops at a useful setup; simpler explanations reduce abstraction.
-Other requests are handled using the same scope and teaching principles. The class-chat tool
-layer limits verification claims to the expressions and conditions actually checked: a
-successful calculation does not certify its inputs, assumptions, bounds, or surrounding prose.
-Only the terminal tool-loop reply is saved: its explanation must stand alone even when
-the model wrote a draft before a tool call. Worked derivations must check intermediate
-equalities and signs, not merely produce a correct final expression. Simpler explanations
-must preserve necessary conditions. These instructions are evaluated behavior, not guarantees.
-
-### Show
-
-Show optimizes for a **complete worked result**: state the result, show every step in order
-naming the rule each step relies on, close with the idea worth carrying forward. It must
-not withhold the answer and must not turn the reply into a quiz. Show is a format, so it
-stays stated as one.
-
-### Anchored scope
-
-A conversation anchored to one step of a solution carries `_ANCHORED_SCOPE` above the mode
-instructions: answer the step the student asked about, then stop. Do not move on to the
-next step, do not recap earlier steps, never offer to walk through the rest of the
-problem. Version 1 of this block also carried a Guide question budget ("at most one
-leading question"); version 2 dropped the budget with the Socratic mode it was sized for.
-
-## What is in the system message
-
-Assembled by `build_system_prompt` and joined by the chat route (`routes_chat._build_turn`):
-
-1. `_BASE_PROMPT` - the shared rules: answer first, cite only when the citation carries
-   information, say plainly when the context does not cover the question and never invent
-   course material, LaTeX delimiters.
-2. `_GUIDE_PROMPT` or `_SHOW_PROMPT` - the mode contract above.
-3. Class profile facts (student facts, then class facts), omitted entirely when empty.
-
-The route then joins, when present: the pinned step (`_STEP_CONTEXT_HEADING` +
-`format_step_context` + `_ANCHORED_SCOPE`) and the retrieved context block
-(`format_context_block`). The tutor conversation carries no tool definitions.
-
-## Invariants this pass preserved
-
-- **RAG grounding**: the retrieved context still rides in the system message, rendered by
-  the same `format_context_block`, and the base rule "say so plainly when the context does
-  not cover the question" is unchanged.
-- **Class-profile usage**: fact filtering is still the caller's contract
-  (`profiles.select_active_facts`); `build_system_prompt` still takes pre-filtered rows and
-  still omits empty sections.
-- **Privacy/remote-consent behavior**: untouched; that gate lives in `routes_chat`
-  (`require_document_allowed`) and `app_settings`.
-- **Citations/provenance**: the base citation rule is unchanged; the context renderer is
-  unchanged.
-- **Context-window budgeting**: the turn budget, history trim, and retrieval fit check in
-  `routes_chat` are unchanged. Current prompt size is checked by the budget tests; measured token counts from the
-  original audit are not a guarantee for later prompt revisions.
-- **Retries/regeneration/concurrency, solution handoffs, safety invariants**: no route
-  logic changed; only the mode prompt text, one comment, and the anchored-scope wording.
-
-## How the behavior is evaluated
-
-Prompt *behavior* is not proved by exact-string tests; it is held to a versioned semantic
-contract:
-
-- **`scripts/eval_corpora/tutor_semantic.json`** - the corpus. `corpus_version`
-  (`1.2.0`) and `prompt_contract_version` (must equal
-  `TUTOR_PROMPT_CONTRACT_VERSION`). Thirteen cases covering at minimum the request shapes
-  PLA-401 names: explain convolution, what is a derivative, why can they cancel these
-  terms, I have no idea how to start, here's my attempt, is my answer correct, just tell me
-  the answer, explain that more simply, don't ask me questions, intuition not derivation,
-  five minutes before an exam - plus Show-mode contrast cases.
-- **`scripts/eval_tutor.py`** - the harness. `run` sends each case through the same
-  building blocks the route uses and durably records every terminal result - ok, empty,
-  and failed cases alike land in `runs.json`, so a run in which every case failed still
-  leaves a record `grade` can consume. The run metadata carries a locality class (local
-  or remote, via the same conservative rule as the consent gate), the model identity, and
-  the context-window configuration - never the endpoint URL itself. `grade` asks a
-  grader model for per-item judgments on the case's `must`/`must_not` behaviors and on
-  the seven semantic qualities (directness, proportionality, prerequisite setup,
-  questioning, withholding, correctness, pedagogical usefulness); the judge defaults to
-  the tutor's own endpoint and model, and `grade_meta` records that - or the separate
-  `--judge-source-db` / `--judge-model` configuration when one is given - so a report
-  says what graded it. The **pass/fail verdict is computed deterministically** (all
-  `must` met, no `must_not` violated, correctness not a hard failure) rather than taken
-  from the grader. `report` prints the matrix and exits nonzero below `--fail-under`.
-- **`backend/tests/test_eval_tutor.py`** - the deterministic contract tests: the corpus
-  loads versioned against the current contract, every required request shape is covered,
-  the convolution regression case keeps its contract, the harness assembles the same
-  messages the route assembles (checked against `routes_chat._build_turn` per case), and
-  the verdict arithmetic is pinned.
-- **`backend/tests/test_prompts.py`** - the prompt-level guards, including
-  `test_explain_convolution_is_explained_not_interrogated`, which protects the motivating
-  failure at the prompt surface.
-
-Bumping `TUTOR_PROMPT_CONTRACT_VERSION` means the semantics moved; the corpus and the
-eval run then need a re-read against the new version, which the harness reports.
+The material below records earlier Guide/Show work and remains historical evidence.
+It does not define the active response policy.
 
 ## Historical model-facing instruction audit (PLA-401, 2026-09-02)
 
