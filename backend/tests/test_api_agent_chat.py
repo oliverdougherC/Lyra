@@ -2209,7 +2209,7 @@ def test_legacy_sessions_share_the_adaptive_education_contract(
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
     assert llm_prompts.mode_contract("guide") in prompt
-    assert "answer general concepts and self-contained questions directly" in prompt
+    assert "General concepts need no upload search" in prompt
 
     sessions.set_session_mode(db, session_id, "show")
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
@@ -2791,7 +2791,7 @@ def test_a_known_tool_incompatible_endpoint_answers_basic_chat_tool_less(
     # The full tutor contract rides the plain completion: the mode contract is present,
     # and the one sentence that says the agent work is unavailable replaces the agent
     # capability layer (which describes tools this turn never sends).
-    assert "Teach the student according to their latest request" in system
+    assert "Teach the latest request in the shortest useful accurate reply" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
     assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
     # One durable attempt, completed with the reply; no tool activity of any kind.
@@ -2865,7 +2865,7 @@ def test_an_unknown_endpoints_first_tools_refusal_falls_back_and_remembers_the_v
     assert attempts[1]["assistant_message_id"] is not None
     # The tool-less continuation carried the full tutor contract, not the agent layer.
     system = str(completions[0][0]["content"])
-    assert "Teach the student according to their latest request" in system
+    assert "Teach the latest request in the shortest useful accurate reply" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
     assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
     # The verdict is remembered for the next turn and the settings screen.
@@ -3052,7 +3052,7 @@ def test_a_toolless_turn_carries_retrieval_and_facts_like_the_tool_turn(
     assert "Convolution combines two signals." in system
     assert "signals.pdf" in system
     assert "prefers visual proofs" in system
-    assert "Teach the student according to their latest request" in system
+    assert "Teach the latest request in the shortest useful accurate reply" in system
     assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
 
 

@@ -582,11 +582,11 @@ def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
     assembly = eval_tutor.class_chat_assembly(db, class_id, session_id, config, case)
 
     system = str(assembly.messages[0]["content"])
-    # The mode contract the turn runs under (the full tutor prompt, not a stub).
-    assert "Teach the student according to their latest request" in system
+    # The shared education contract the turn runs under (the full tutor prompt).
+    assert "Teach the latest request in the shortest useful accurate reply" in system
     assert "No automatic recap" in system
     assert "one concrete first move" in system
-    assert "reduce abstraction" in system
+    assert "reduces abstraction" in system
     # The agent capability layer, appended on top of it.
     assert "You are Lyra's class agent" in system
     assert "The latest user request sets the answer's scope" in system
@@ -635,7 +635,7 @@ def test_the_class_chat_surface_is_tool_less_on_a_known_incompatible_endpoint(
     assert "is not available in this conversation" in system
     # The full tutor contract is still there: tool-less is a smaller surface, not a
     # different conversation.
-    assert "Teach the student according to their latest request" in system
+    assert "Teach the latest request in the shortest useful accurate reply" in system
     # The question still went out, tool-less: the basic tutoring turn is never refused
     # over the cost of optional capability.
     assert assembly.messages[-1] == {"role": "user", "content": case.user}

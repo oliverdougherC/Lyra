@@ -28,7 +28,7 @@ not establish quality. [PLA-461](https://linear.app/platinum-labs/issue/PLA-461)
 the bounded live evaluation and its limits.
 
 The [September 29 production-path evidence](adaptive-education-evidence-20260929/README.md)
-retains baseline and two candidate runs. The critical concise-definition and first-step
+retains baseline and three candidate runs. The critical concise-definition and first-step
 criteria still fail; the contract is implemented, but live quality acceptance remains open.
 
 ## Historical records

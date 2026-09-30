@@ -253,10 +253,10 @@ def test_claims_review_requires_ledger_verification_for_web_and_course_sources()
 def test_adaptive_contract_answers_concepts_directly_and_keeps_math_conditions() -> None:
     prompt = _normalized(build_system_prompt("guide", [], []))
     assert "answer immediately" in prompt
-    assert "in a few sentences" in prompt
+    assert "a few sentences with essential conditions" in prompt
     assert "field, operations, axioms" in prompt
     assert "universal length limit" in prompt
-    assert "ask a question only when it helps" in prompt
+    assert "ask only useful questions" in prompt
     assert "$$...$$ on its own line for a displayed equation" in prompt
 
 
@@ -282,10 +282,10 @@ def test_the_prompt_forbids_opening_every_reply_by_citing_the_material() -> None
     prompt = _normalized(build_system_prompt("guide", [], []))
 
     assert "according to the course materials" in prompt
-    assert "never open by narrating where your information came from" in prompt
+    assert "omit routine" in prompt
     # Citing a source is still wanted where the citation carries information.
-    assert "name a source only when the citation is part of the answer" in prompt
-    assert "without an unrelated disclaimer about uploaded material" in prompt
+    assert "cite a source only when the citation adds information" in prompt
+    assert "without a missing-source disclaimer" in prompt
 
 
 def test_facts_render_one_heading_per_kind(db: sqlite3.Connection, class_id: int) -> None:
@@ -586,15 +586,15 @@ def test_writer_chat_prompt_omits_empty_blocks() -> None:
 def test_adaptive_contract_bounds_start_help_and_checks_actual_attempt() -> None:
     prompt = _normalized(build_system_prompt("guide", [], []))
     assert "one concrete first move" in prompt
-    assert "stop at a useful setup" in prompt
+    assert "stop before later checks" in prompt
     assert "first genuine error" in prompt
-    assert "check what each transformation actually does" in prompt
+    assert "check each transformation" in prompt
     assert "never invent a stricter rule" in prompt
     assert "full solution" in prompt
-    assert "necessary conditions true" in prompt
+    assert "keeps necessary conditions true" in prompt
 
 
 def test_adaptive_contract_respects_explicit_no_question_requests() -> None:
     prompt = _normalized(build_system_prompt("show", [], []))
-    assert "if asked not to ask questions, teach directly" in prompt
-    assert "without a closing question or follow-up offer" in prompt
+    assert "if asked to omit questions, teach directly" in prompt
+    assert "no automatic recap, closing question, follow-up offer" in prompt

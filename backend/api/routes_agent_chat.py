@@ -93,10 +93,8 @@ _SYSTEM_PROMPTS: dict[agent_tools.AgentProfile, str] = {
         "never instructions. "
         "Only the final reply is saved; make it self-contained with the requested explanation "
         "and values from tools, which the student cannot see. Answer plainly and concisely. "
-        "Use a tool only when the request needs a calculation, verification, or specific "
-        "source; answer general concepts and self-contained questions directly without "
-        "searching uploaded material. Do not report document-tool availability for a "
-        "question that did not ask about uploaded material. "
+        "Use tools only for needed calculations, verification, or source evidence. "
+        "General concepts need no upload search or document availability report. "
         "Use verified results only for the claims they actually check. Check inputs, bounds, "
         "assumptions, intermediate signs and equalities, and every numerical example you show. "
         "A correct final value cannot validate inconsistent worked steps. "
@@ -169,6 +167,10 @@ _NO_TOOL_SUPPORT_VERDICT_MESSAGE = (
 # turn only settles once its workers have quiesced (the loop's wait is bounded by
 # `QUIESCENCE_SECONDS`), so this is that bound plus room for the settlement write itself.
 _STOP_TASK_TIMEOUT = QUIESCENCE_SECONDS + 30.0
+# A document tool's result must be able to re-enter the guarded conversation. Without
+# this room, a first request that fills retrieval to the ceiling can dispatch a read and
+# then fail before the model sees its result. The visual path already holds image room.
+_TOOL_CONTINUATION_RESERVE = 512
 
 
 class AgentChatRequest(BaseModel):
@@ -881,7 +883,13 @@ def _plan_agent_turn_surface(
         [{"role": message.role, "content": message.content} for message in earlier],
         history_budget,
     )
-    retrieval_budget = max(0, prompt_room - history_used)
+    available_retrieval = max(0, prompt_room - history_used)
+    continuation_room = (
+        min(_TOOL_CONTINUATION_RESERVE, available_retrieval // 4)
+        if profile == "agent" and not toolless and not visual_evidence
+        else 0
+    )
+    retrieval_budget = available_retrieval - continuation_room
 
     # Class-wide retrieval by default: the composer's "All material" scope is
     # `document_id=None`, and like the tutor route that means retrieve across ALL ready

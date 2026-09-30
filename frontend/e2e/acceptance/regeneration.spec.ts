@@ -174,7 +174,8 @@ test.describe('PLA-316 regeneration (class conversation)', () => {
     // property (the pre-fix serialization) would have re-answered under the stored
     // document instead of class-wide.
     expect(regenerateBodies[0]).toHaveProperty('document_id', null)
-    expect(regenerateBodies[0].mode).toBe('guide')
+    // The retired answer-style field is absent on new agent requests.
+    expect(regenerateBodies[0]).not.toHaveProperty('mode')
     // The regeneration still replaces exactly once, now class-wide.
     expect(await assistantCount(ownSession.id)).toBe(1)
     expect(await lastAssistantContent(ownSession.id)).toBe(ANSWER_B)
