@@ -284,11 +284,11 @@ test.describe('One ordinary class conversation (PLA-401)', () => {
 
     await changeCard.getByRole('button', { name: /Accept remaining/i }).click()
     // The applied edit settles out of the live band (outstanding work only); its result
-    // lives in the collapsed Details audit.
+    // lives in the history opened from the stable app header.
     await expect(changeCard).toBeHidden({ timeout: 30_000 })
     await page
-      .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Activity history/i })
+      .locator('[data-app-header]')
+      .getByRole('button', { name: 'Activity history' })
       .click()
     await expect(page.getByText('Applied', { exact: true })).toBeVisible()
     expect(await readFile(join(workspaceDir, 'parser.py'), 'utf-8')).toBe(PARSER_SKELETON)
