@@ -1,6 +1,7 @@
 'use client'
 
 import { useQueryClient } from '@tanstack/react-query'
+import { History } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -12,9 +13,9 @@ import {
   WorkspaceChangeReviewRail,
 } from '@/components/agent/workspace-change-review'
 import { SourceLedger } from '@/components/drafts/source-ledger'
+import { HeaderActions } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   agentKeys,
   useAgentAccessDismissals,
@@ -108,6 +109,8 @@ function accessScopeSatisfied(
  */
 export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) {
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [attentionOpen, setAttentionOpen] = useState(false)
+  const attentionTriggerRef = useRef<HTMLButtonElement>(null)
   const [effectBusy, setEffectBusy] = useState(false)
   const {
     workspace: workspaceData,
@@ -236,7 +239,13 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     for (const event of activity.data ?? []) {
       if (event.target_kind !== 'capability_request' || event.state !== 'succeeded') continue
       const scope = event.target_id
-      if (scope && ACCESS_SCOPE_LABELS[scope]) latest.set(scope, event)
+      if (
+        scope &&
+        ACCESS_SCOPE_LABELS[scope] &&
+        (!latest.has(scope) || event.started_at > latest.get(scope)!.started_at)
+      ) {
+        latest.set(scope, event)
+      }
     }
     const dismissed = dismissals.data ?? new Set<string>()
     return [...latest.entries()]
@@ -383,23 +392,32 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     }
   }
 
-  const activityEntries: AgentToolActivity[] = (activity.data ?? []).map((event) => ({
-    id: event.id,
-    title: event.tool.replaceAll('_', ' '),
-    toolLabel: `${event.capability} · ${event.effect}`,
-    targetLabel: event.target_id ?? undefined,
-    timestampLabel: event.started_at,
-    status:
-      event.state === 'started'
-        ? 'running'
-        : event.state === 'succeeded'
-          ? 'completed'
-          : event.state === 'refused'
-            ? 'disabled'
-            : 'failed',
-    failureReason: event.error_message ?? undefined,
-    disabledReason: event.error_message ?? undefined,
-  }))
+  const uniqueEvents = new Map<string, AgentAuditEventRead>()
+  for (const event of activity.data ?? []) {
+    const previous = uniqueEvents.get(event.id)
+    if (!previous || (event.finished_at ?? '') > (previous.finished_at ?? '')) {
+      uniqueEvents.set(event.id, event)
+    }
+  }
+  const activityEntries: AgentToolActivity[] = [...uniqueEvents.values()]
+    .sort((a, b) => a.started_at.localeCompare(b.started_at) || a.id.localeCompare(b.id))
+    .map((event) => ({
+      id: event.id,
+      title: event.tool.replaceAll('_', ' '),
+      toolLabel: `${event.capability} · ${event.effect}`,
+      targetLabel: event.target_id ?? undefined,
+      timestampLabel: event.started_at,
+      status:
+        event.state === 'started'
+          ? 'running'
+          : event.state === 'succeeded'
+            ? 'completed'
+            : event.state === 'refused'
+              ? 'disabled'
+              : 'failed',
+      failureReason: event.error_message ?? undefined,
+      disabledReason: event.error_message ?? undefined,
+    }))
 
   // The list endpoints return every row in the session scope, so the split matters: the
   // primary band carries only live work - a pending or partially-applied edit, a pending or
@@ -435,18 +453,39 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     { label: 'Commands', query: commands },
     { label: 'Access requests', query: dismissals },
   ].filter(({ query }) => query.isError)
-  // Failures remain discoverable even when the rest of the run is settled. A later
-  // successful attempt at the same tool/target supersedes its old failure.
-  const latestActivity = new Map<string, AgentToolActivity>()
-  for (const entry of activityEntries)
-    latestActivity.set(`${entry.title}:${entry.targetLabel}`, entry)
-  const attentionCount =
-    [...latestActivity.values()].filter(
-      (entry) => entry.status === 'failed' || entry.status === 'disabled',
-    ).length +
-    settledChanges.filter((change) => change.state === 'failed').length +
-    settledCommands.filter((command) => command.state === 'failed' || command.state === 'timed_out')
-      .length
+  // Audit outcomes are immutable diagnostics. Attention comes only from records with
+  // an action still available to the student, addressed by scope or durable artifact ID.
+  // Tool names, paths, and other display labels are never used as identity.
+  const attentionItems = [
+    ...(workspaceError ? [{ id: 'workspace', label: 'Retry attached folder' }] : []),
+    ...failedQueries.map(({ label }) => ({
+      id: `query:${label}`,
+      label: `Retry ${label.toLowerCase()}`,
+    })),
+    ...(failedTurn && readsReady ? [{ id: 'turn', label: 'Retry the last agent turn' }] : []),
+    ...pendingRequests.map(({ scope }) => ({
+      id: `access:${scope}`,
+      label: ACCESS_SCOPE_LABELS[scope].title,
+    })),
+    ...pendingChanges.map((change) => ({
+      id: `change:${change.id}`,
+      label: `Review file: ${change.path}`,
+    })),
+    ...pendingCommands
+      .filter((command) => command.state === 'pending')
+      .map((command) => ({
+        id: `command:${command.id}`,
+        label: `Approve command: ${command.argv.join(' ')}`,
+      })),
+  ]
+  const focusAttention = (id: string) => {
+    const target = document.getElementById(`agent-attention-${id}`)
+    if (!target) return
+    const parentDetails = target.closest('details')
+    if (parentDetails) parentDetails.open = true
+    target.scrollIntoView?.({ block: 'nearest' })
+    target.focus()
+  }
   const hasLiveWork =
     workspaceError ||
     failedQueries.length > 0 ||
@@ -465,13 +504,77 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
   return (
     <section
       className={cn(
-        'bg-background flex min-h-0 flex-col px-4',
-        hasLiveWork ? 'border-border gap-3 border-b py-3' : 'py-1',
+        'bg-background flex min-h-0 flex-col',
+        hasLiveWork || detailsOpen ? 'border-border gap-3 border-b px-4 py-3' : '',
       )}
       aria-label="Agent work"
     >
+      {(hasActivity || settledCount > 0 || attentionItems.length > 0) && (
+        <HeaderActions>
+          <div className="flex items-center gap-1">
+            {attentionItems.length > 0 && (
+              <div className="relative">
+                <button
+                  ref={attentionTriggerRef}
+                  type="button"
+                  aria-expanded={attentionOpen}
+                  aria-controls="agent-attention-list"
+                  onClick={() => setAttentionOpen((open) => !open)}
+                  className="text-danger-text cursor-pointer rounded-md px-2 py-1 text-xs font-medium focus-visible:outline-2"
+                >
+                  {attentionItems.length}{' '}
+                  {attentionItems.length === 1 ? 'item needs' : 'items need'} attention
+                </button>
+                {attentionOpen && (
+                  <div
+                    id="agent-attention-list"
+                    className="border-border bg-background absolute right-0 z-50 mt-1 max-h-[40svh] w-64 overflow-auto rounded-md border p-1 shadow-lg"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        setAttentionOpen(false)
+                        attentionTriggerRef.current?.focus()
+                      }
+                    }}
+                  >
+                    {attentionItems.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="hover:bg-muted focus-visible:bg-muted w-full rounded px-2 py-1.5 text-left text-sm"
+                        onClick={() => {
+                          focusAttention(item.id)
+                          setAttentionOpen(false)
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {(hasActivity || settledCount > 0) && (
+              <button
+                type="button"
+                className="text-text-secondary hover:text-text-primary rounded-md p-1.5 focus-visible:outline-2"
+                aria-label="Activity history"
+                aria-expanded={detailsOpen}
+                aria-controls="agent-activity-details"
+                onClick={() => setDetailsOpen((open) => !open)}
+              >
+                <History aria-hidden className="size-4" />
+              </button>
+            )}
+          </div>
+        </HeaderActions>
+      )}
       {workspaceError ? (
-        <Alert variant="destructive">
+        <Alert
+          id="agent-attention-workspace"
+          data-attention-id="workspace"
+          tabIndex={-1}
+          variant="destructive"
+        >
           <AlertTitle>Attached folder could not be loaded</AlertTitle>
           <AlertDescription>
             <Button size="sm" variant="outline" onClick={retryWorkspace}>
@@ -481,7 +584,13 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
         </Alert>
       ) : null}
       {failedQueries.map(({ label, query }) => (
-        <Alert key={label} variant="destructive">
+        <Alert
+          key={label}
+          id={`agent-attention-query:${label}`}
+          data-attention-id={`query:${label}`}
+          tabIndex={-1}
+          variant="destructive"
+        >
           <AlertTitle>{label} could not be loaded</AlertTitle>
           <AlertDescription>
             <p>Some work may be missing from this view.</p>
@@ -509,7 +618,13 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
       ) : null}
 
       {failedTurn ? (
-        <Alert data-agent-retry variant="destructive">
+        <Alert
+          id="agent-attention-turn"
+          data-attention-id="turn"
+          tabIndex={-1}
+          data-agent-retry
+          variant="destructive"
+        >
           <AlertTitle>The last agent turn did not finish</AlertTitle>
           <AlertDescription className="flex flex-col items-start gap-2">
             <span>
@@ -536,6 +651,9 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
       {pendingRequests.map(({ scope, reason }) => (
         <div
           key={scope}
+          id={`agent-attention-access:${scope}`}
+          data-attention-id={`access:${scope}`}
+          tabIndex={-1}
           data-access-request={scope}
           className="border-border flex flex-col gap-2 rounded-md border p-3"
         >
@@ -566,7 +684,11 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
 
       {pendingChanges.map((change) => (
         <details key={change.id} open={pendingChanges.length === 1} className="group">
-          <summary className="cursor-pointer py-2 text-sm font-medium break-words">
+          <summary
+            id={`agent-attention-change:${change.id}`}
+            data-attention-id={`change:${change.id}`}
+            className="cursor-pointer py-2 text-sm font-medium break-words"
+          >
             Review file: {change.path} ·{' '}
             {change.state === 'stale' ? 'File changed' : 'Needs approval'}
           </summary>
@@ -591,7 +713,11 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
 
       {pendingCommands.map((command) => (
         <details key={command.id} open={pendingCommands.length === 1}>
-          <summary className="cursor-pointer py-2 text-sm font-medium break-words">
+          <summary
+            id={`agent-attention-command:${command.id}`}
+            data-attention-id={`command:${command.id}`}
+            className="cursor-pointer py-2 text-sm font-medium break-words"
+          >
             Review command: {command.argv.join(' ')} ·{' '}
             {command.state === 'running' ? 'Running' : 'Needs approval'}
           </summary>
@@ -618,67 +744,52 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
         </details>
       ))}
 
-      {hasActivity || settledCount > 0 ? (
-        <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen}>
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="text-text-secondary hover:text-text-primary flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-md py-1.5 text-left text-sm"
-              aria-expanded={detailsOpen}
-            >
-              <span>{detailsOpen ? 'Hide activity history' : 'Activity history'}</span>
-              {attentionCount > 0 ? (
-                <span className="text-danger-text font-medium">
-                  {attentionCount} {attentionCount === 1 ? 'result needs' : 'results need'}{' '}
-                  attention
-                </span>
-              ) : null}
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="flex flex-col gap-4 pt-3">
-            <AgentActivityFeed entries={activityEntries} />
-            {settledCount > 0 ? (
-              // The settled results, read-only: what was done (path / argv), how it ended
-              // (the same badge language as the live cards), and - for a command - what it
-              // printed. This is the audit trail the primary band deliberately does not
-              // carry: finished work stays findable without staying actionable.
-              <div className="flex flex-col gap-3" aria-label="Settled work">
-                {settledChanges.map((change) => (
-                  <div key={change.id} className="flex items-center justify-between gap-2">
-                    <span className="break-all font-mono text-sm">{change.path}</span>
-                    <ChangeStateBadge state={change.state} />
+      {detailsOpen && (hasActivity || settledCount > 0) ? (
+        <div
+          id="agent-activity-details"
+          className="flex flex-col gap-4"
+          aria-label="Activity history details"
+        >
+          <AgentActivityFeed entries={activityEntries} />
+          {settledCount > 0 ? (
+            // The settled results, read-only: what was done (path / argv), how it ended
+            // (the same badge language as the live cards), and - for a command - what it
+            // printed. This is the audit trail the primary band deliberately does not
+            // carry: finished work stays findable without staying actionable.
+            <div className="flex flex-col gap-3" aria-label="Settled work">
+              {settledChanges.map((change) => (
+                <div key={change.id} className="flex items-center justify-between gap-2">
+                  <span className="break-all font-mono text-sm">{change.path}</span>
+                  <ChangeStateBadge state={change.state} />
+                </div>
+              ))}
+              {settledCommands.map((command) => (
+                <div key={command.id} className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="break-all font-mono text-sm">{command.argv.join(' ')}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      {command.exit_code !== null ? (
+                        <span className="text-text-tertiary text-xs">Exit {command.exit_code}</span>
+                      ) : null}
+                      <CommandStateBadge state={command.state} />
+                    </span>
                   </div>
-                ))}
-                {settledCommands.map((command) => (
-                  <div key={command.id} className="flex flex-col gap-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="break-all font-mono text-sm">{command.argv.join(' ')}</span>
-                      <span className="flex shrink-0 items-center gap-2">
-                        {command.exit_code !== null ? (
-                          <span className="text-text-tertiary text-xs">
-                            Exit {command.exit_code}
-                          </span>
-                        ) : null}
-                        <CommandStateBadge state={command.state} />
-                      </span>
-                    </div>
-                    {command.stdout_text ? (
-                      <pre className="scrollbar-none max-h-32 overflow-auto font-mono text-[0.75rem]">
-                        {command.stdout_text}
-                      </pre>
-                    ) : null}
-                    {command.stderr_text ? (
-                      <pre className="scrollbar-none max-h-32 overflow-auto font-mono text-[0.75rem]">
-                        {command.stderr_text}
-                      </pre>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            <SourceLedger classId={classId} />
-          </CollapsibleContent>
-        </Collapsible>
+                  {command.stdout_text ? (
+                    <pre className="scrollbar-none max-h-32 overflow-auto font-mono text-[0.75rem]">
+                      {command.stdout_text}
+                    </pre>
+                  ) : null}
+                  {command.stderr_text ? (
+                    <pre className="scrollbar-none max-h-32 overflow-auto font-mono text-[0.75rem]">
+                      {command.stderr_text}
+                    </pre>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <SourceLedger classId={classId} />
+        </div>
       ) : null}
     </section>
   )

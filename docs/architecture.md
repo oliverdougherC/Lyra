@@ -109,9 +109,12 @@ identity, physical page, character range, evidence type, and relevant continuati
 detail. The live trail stays beside the active answer; settled activity and provider-exposed
 reasoning are collapsed in Details, including after reload. Source links open the exact page
 through the authenticated Files preview. The separate activity history retains the durable audit
-and results. An uploaded course document is retrieved as study context; it does not require an
-attached local workspace. The agent requests workspace access only for work that needs files in
-an attached folder.
+and results. Its disclosure lives in the existing chat header so audit availability cannot move
+the transcript or composer. The attention list points to unresolved access, approval, retry, and
+load-recovery controls by scope or artifact ID; historical tool failures and terminal effects
+remain in the audit without an unresolvable warning. An uploaded course document is retrieved
+as study context; it does not require an attached local workspace. The agent requests workspace
+access only for work that needs files in an attached folder.
 
 `search_documents` returns bounded cited excerpts and a `next_cursor` when more text is
 available. The agent passes that cursor with the same query to continue. Search cursors
