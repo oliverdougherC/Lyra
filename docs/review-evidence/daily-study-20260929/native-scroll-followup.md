@@ -106,3 +106,40 @@ host mount is rejected to protect the current owner. The normal installed app an
 study profile were not opened or replaced. PLA-570 remains In Progress because
 synthetic scrolling and capture still do not establish exact 120 Hz presentation,
 physical trackpad feel, or production-identity acceptance.
+
+## PR #100 targeted section, callback, and selection correction
+
+The next bounded implementation commit is
+`30bd3810b105c94d513afcfbd4800e3d2996362b`, based on reviewed PR head
+`7551212695192f79e0a5726b94630ad4f7eaf339`. It separates each section's
+current sizing revision from the transcript publication version. An unchanged
+early section can therefore reflow after a later section changes, and the final
+readiness acknowledgement advances the host to the current transcript version
+even when that acknowledgement comes from an older section. Frame and scroll
+requests use their own ordering while teardown still revokes the mount owner.
+
+The child now sends a stable content epoch and revision with live-turn callbacks.
+The Rust action boundary and React host accept a delayed reasoning-open event
+when the same turn's text has only grown, and accept a terminal reveal drain
+after a content-identical publication such as a theme update. A drain for
+extended or replaced text remains invalid; replaced content also invalidates
+delayed reasoning state. Host, conversation, row, and generation checks remain.
+Exhausted section-height retries report native failure so the ordinary DOM
+transcript returns. The live-to-static Markdown handoff restores forward and
+backward selections across multiple text nodes.
+
+The delayed reasoning and terminal drain regressions, plus backward selection
+restoration, failed against the reviewed head before the implementation edit.
+The corrected worktree passed 1,449 frontend tests across 130 files; typecheck,
+lint, formatting, and a production frontend build; 61 Rust tests, all-target
+check, and Clippy with warnings denied; and documentation and active-reference
+checks. Focused tests exercise 65-row section ordering, delayed bridge actions,
+terminal turn settlement without another token, exhausted height recovery,
+and directional live-to-static selection. These are controlled IPC/DOM and
+Rust protocol tests, not a candidate-equivalent native UI race execution.
+
+The retained signed bundle and frozen-backend result are recorded in the PR
+description at the final source head. The normal installed app and study profile
+remain untouched. Candidate-equivalent native UI acceptance still requires an
+isolated account or device without an incumbent compiled-ID endpoint, and
+PLA-570 remains In Progress pending its separate presentation/input gate.
