@@ -15,6 +15,41 @@ def test_connect_sets_a_bounded_busy_timeout(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_schema_49_document_upgrade_keeps_original_and_backs_up_before_nickname(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "pre-nickname.db"
+    conn = connect(db_path)
+    try:
+        migrate(conn)
+        class_id = int(conn.execute("insert into classes (name) values ('Math')").lastrowid)
+        document_id = int(
+            conn.execute(
+                "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+                "values (?, 'LADW_2026_08-31.pdf', 'unchanged-source', 'application/pdf', "
+                "123, 'ready')",
+                (class_id,),
+            ).lastrowid
+        )
+        conn.commit()
+        # Recreate the immediately preceding schema from this otherwise current fixture.
+        conn.execute("alter table documents drop column nickname")
+        conn.execute("pragma user_version = 49")
+        conn.commit()
+
+        assert migrate(conn) == 50
+        assert tuple(
+            conn.execute(
+                "select filename, stored_path, byte_size, nickname from documents where id = ?",
+                (document_id,),
+            ).fetchone()
+        ) == ("LADW_2026_08-31.pdf", "unchanged-source", 123, None)
+        backups = list((tmp_path / "migration-backups").glob("schema-49-*/lyra.db"))
+        assert len(backups) == 1
+    finally:
+        conn.close()
+
+
 def test_busy_timeout_allows_a_blocked_writer_to_complete_after_lock_release(
     tmp_path: Path,
 ) -> None:
