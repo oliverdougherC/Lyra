@@ -139,6 +139,48 @@ describe('filesFromDrop', () => {
     expect(files.map((file) => file.name)).toEqual(['a.pdf', 'b.pdf', 'c.pdf'])
   })
 
+  it('walks nested folders and keeps Unicode names while ignoring Finder sidecars', async () => {
+    const fileEntry = (name: string) => ({
+      isFile: true,
+      isDirectory: false,
+      name,
+      file: (resolve: (file: File) => void) => resolve(new File(['content'], name)),
+    })
+    const folder = (name: string, children: unknown[]) => ({
+      isFile: false,
+      isDirectory: true,
+      name,
+      createReader: () => {
+        let served = false
+        return {
+          readEntries: (resolve: (entries: unknown[]) => void) => {
+            resolve(served ? [] : children)
+            served = true
+          },
+        }
+      },
+    })
+    const transfer = {
+      items: [
+        {
+          webkitGetAsEntry: () =>
+            folder('Course', [
+              folder('Semaine 1', [fileEntry('révision one.pdf'), fileEntry('._révision one.pdf')]),
+              fileEntry('.DS_Store'),
+            ]),
+        },
+        { webkitGetAsEntry: () => folder('Other', [fileEntry('über notes.md')]) },
+      ],
+      files: [],
+    } as unknown as DataTransfer
+
+    const result = await filesFromDrop(transfer)
+    const { accepted, rejected } = partitionFiles(result.files)
+    expect(accepted.map((file) => file.name)).toEqual(['révision one.pdf', 'über notes.md'])
+    expect(rejected).toEqual([])
+    expect(result.errors).toEqual([])
+  })
+
   it('takes folders and loose files dropped together', async () => {
     const { files, folders } = await filesFromDrop(
       dropOf({ 'Week1': ['a.pdf'], 'syllabus.pdf': null }),
