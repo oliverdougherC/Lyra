@@ -12,6 +12,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError } from '@/lib/api'
+import { effectiveDocumentName } from '@/lib/document-display'
 import { formatCount, truncateMiddle } from '@/lib/format'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
@@ -67,7 +68,7 @@ export default function NewSolutionPage() {
   const documents = useMemo(() => documentsQuery.data ?? [], [documentsQuery.data])
   const suggestedTitle = useMemo(() => {
     const first = documents.find((document) => document.id === problemSet[0])
-    return first ? first.filename.replace(/\.[^.]+$/, '') : ''
+    return first ? effectiveDocumentName(first).replace(/\.[^.]+$/, '') : ''
   }, [documents, problemSet])
 
   const effectiveTitle = titleTouched ? title : suggestedTitle
@@ -210,12 +211,12 @@ export default function NewSolutionPage() {
                       <span className="min-w-0 flex-1">
                         <span
                           className="text-text-primary block text-sm"
-                          title={suggestion.document.filename}
+                          title={effectiveDocumentName(suggestion.document)}
                         >
-                          {truncateMiddle(suggestion.document.filename)}
+                          {truncateMiddle(effectiveDocumentName(suggestion.document))}
                         </span>
                         <span className="text-text-tertiary block text-xs">
-                          Matches {truncateMiddle(suggestion.because.filename)}
+                          Matches {truncateMiddle(effectiveDocumentName(suggestion.because))}
                         </span>
                       </span>
                       <Button
@@ -231,7 +232,7 @@ export default function NewSolutionPage() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        aria-label={`Dismiss ${suggestion.document.filename}`}
+                        aria-label={`Dismiss ${effectiveDocumentName(suggestion.document)}`}
                         onClick={() => setDismissed([...dismissed, suggestion.document.id])}
                       >
                         <X className="size-4" aria-hidden />

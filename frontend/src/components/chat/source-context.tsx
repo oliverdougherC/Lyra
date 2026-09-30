@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
+import { effectiveDocumentName, matchesDocumentName } from '@/lib/document-display'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, DocumentState } from '@/types'
 
@@ -62,7 +63,7 @@ export function SourceContext({
   const selected = documents?.find((document) => document.id === selectedId) ?? null
   const unresolvedSelection = selectedId !== null && !selected
   const selectedLabel = selected
-    ? selected.filename
+    ? effectiveDocumentName(selected)
     : unresolvedSelection
       ? documents === undefined && !documentsError
         ? 'Loading selected file'
@@ -72,8 +73,8 @@ export function SourceContext({
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const list = (documents ?? [])
-      .filter((document) => (needle ? document.filename.toLowerCase().includes(needle) : true))
-      .sort((a, b) => a.filename.localeCompare(b.filename))
+      .filter((document) => matchesDocumentName(document, needle))
+      .sort((a, b) => effectiveDocumentName(a).localeCompare(effectiveDocumentName(b)))
     // Ready material is what the question can be about; the rest stay visible so a file
     // that just landed does not look lost, but they are not selectable until they can be.
     const ready = list.filter((document) => document.state === 'ready' || document.text_readable)
@@ -217,7 +218,7 @@ export function SourceContext({
                     <SourceRow
                       key={document.id}
                       id={`${ALL}-${document.id}`}
-                      label={document.filename}
+                      label={effectiveDocumentName(document)}
                       checked={document.id === selectedId}
                       note={
                         document.text_readable && document.state !== 'ready'

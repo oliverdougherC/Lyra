@@ -119,6 +119,18 @@ expire after any indexed chunk or readable-page write, including ingestion in an
 class, because FTS ranking uses database-wide statistics. Each page checks the cursor
 and reads its results in one SQLite snapshot; an expired cursor must restart the search.
 
+Document nicknames are nullable metadata on `documents`. A nonblank nickname is the current
+display name; the original filename, file kind, path, hash, and document ID remain unchanged.
+`PATCH /api/documents/{id}/nickname` trims and validates a new name and compares the caller's
+last seen nickname before writing only that column. A stale edit returns a conflict so the
+student can review it without losing their typed text. Current retrieval and document tools
+use the effective name for new citations while retaining document/page IDs; saved conversation
+prose and historical source labels remain as recorded. Inventory exposes both original and
+current names, and search matches either. A rename expires document-tool cursors because their
+labels changed; it never widens class or selected-source scope. The Files tab stores its
+alphabetical, date-added, or actual file-kind presentation order per class. Date added remains
+the initial newest-first order, and all actions and deep links continue to use document IDs.
+
 The backend prefers explicit provider reasoning fields. Legacy inline reasoning markers are
 recognized only at the start of content, before answer prose begins; tags in subsequent answer
 prose or code remain literal. A recognized explicit reasoning field holding a string, including

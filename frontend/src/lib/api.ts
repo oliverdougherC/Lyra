@@ -494,6 +494,16 @@ export const api = {
   getDocument: (documentId: number, signal?: AbortSignal) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}`, { signal }),
 
+  updateDocumentNickname: (
+    documentId: number,
+    nickname: string | null,
+    expectedNickname: string | null,
+  ) =>
+    requestJson<DocumentRead>(`/api/documents/${documentId}/nickname`, {
+      method: 'PATCH',
+      body: { nickname, expected_nickname: expectedNickname },
+    }),
+
   getDocumentStatus: (documentId: number, signal?: AbortSignal) =>
     requestJson<DocumentStatus>(`/api/documents/${documentId}/status`, { signal }),
 

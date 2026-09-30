@@ -394,7 +394,8 @@ def _audited_handler(
             if capability == "document_read" and type(arguments.get("document_id")) is int:
                 doc_id = int(arguments["document_id"])
                 doc = conn.execute(
-                    "select filename from documents where id = ? and class_id = ?",
+                    "select coalesce(nullif(trim(nickname), ''), filename) as filename "
+                    "from documents where id = ? and class_id = ?",
                     (doc_id, class_id),
                 ).fetchone()
                 if doc is not None:
@@ -921,7 +922,8 @@ def _add_document_tools(
                         "document_id": doc_id,
                         "filename": str(
                             conn.execute(
-                                "select filename from documents where id = ? and class_id = ?",
+                                "select coalesce(nullif(trim(nickname), ''), filename) "
+                                "from documents where id = ? and class_id = ?",
                                 (doc_id, class_id),
                             ).fetchone()[0]
                         ),

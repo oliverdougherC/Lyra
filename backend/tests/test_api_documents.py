@@ -95,6 +95,107 @@ def _embedded_chunk(db: sqlite3.Connection, document_id: int, class_id: int) -> 
     return chunk_id
 
 
+def test_nickname_is_metadata_with_conflict_and_original_download(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    before = db.execute(
+        "select filename, stored_path, mime, byte_size, created_at from documents where id = ?",
+        (document_id,),
+    ).fetchone()
+    original = client.get(f"/api/documents/{document_id}/original")
+
+    saved = client.patch(
+        f"/api/documents/{document_id}/nickname",
+        json={"nickname": "  Textbook 日本語  ", "expected_nickname": None},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["nickname"] == "Textbook 日本語"
+    assert saved.json()["display_name"] == "Textbook 日本語"
+    assert (
+        client.get(f"/api/classes/{class_id}/documents").json()[0]["display_name"]
+        == "Textbook 日本語"
+    )
+    assert (
+        client.get(f"/api/documents/{document_id}/text").json()["display_name"] == "Textbook 日本語"
+    )
+    assert client.get(f"/api/documents/{document_id}/original").content == original.content
+    assert (
+        db.execute(
+            "select filename, stored_path, mime, byte_size, created_at from documents where id = ?",
+            (document_id,),
+        ).fetchone()
+        == before
+    )
+
+    stale = client.patch(
+        f"/api/documents/{document_id}/nickname",
+        json={"nickname": "Other", "expected_nickname": None},
+    )
+    assert stale.status_code == 409
+    assert client.get(f"/api/documents/{document_id}").json()["nickname"] == "Textbook 日本語"
+
+    reset = client.patch(
+        f"/api/documents/{document_id}/nickname",
+        json={"nickname": "  ", "expected_nickname": "Textbook 日本語"},
+    )
+    assert reset.status_code == 200
+    assert reset.json()["nickname"] is None
+    assert reset.json()["display_name"] == "lecture-2.pdf"
+
+
+@pytest.mark.parametrize("nickname", ["line\nbreak", "bad\u202eorder", "x" * 121])
+def test_nickname_rejects_unsafe_or_overlong_values(
+    client: TestClient, db: sqlite3.Connection, class_id: int, nickname: str
+) -> None:
+    document_id = _document(db, class_id)
+    response = client.patch(
+        f"/api/documents/{document_id}/nickname",
+        json={"nickname": nickname, "expected_nickname": None},
+    )
+    assert response.status_code == 422
+    assert client.get(f"/api/documents/{document_id}").json()["display_name"] == "lecture-2.pdf"
+
+
+def test_nickname_survives_ingestion_update_move_and_backup(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    tmp_path: Path,
+) -> None:
+    document_id = _document(db, class_id)
+    saved = client.patch(
+        f"/api/documents/{document_id}/nickname",
+        json={"nickname": "Textbook", "expected_nickname": None},
+    )
+    assert saved.status_code == 200
+    db.execute("update documents set state = 'failed', pages_done = 3 where id = ?", (document_id,))
+    db.commit()
+    assert client.get(f"/api/documents/{document_id}").json()["display_name"] == "Textbook"
+
+    moved = client.post(f"/api/documents/{document_id}/move", json={"class_id": other_class_id})
+    assert moved.status_code == 202
+    assert moved.json()["nickname"] == "Textbook"
+    assert client.get(f"/api/classes/{class_id}/documents").json() == []
+    assert (
+        client.get(f"/api/classes/{other_class_id}/documents").json()[0]["display_name"]
+        == "Textbook"
+    )
+
+    snapshot = sqlite3.connect(tmp_path / "nickname-backup.db")
+    try:
+        db.backup(snapshot)
+        assert (
+            snapshot.execute(
+                "select nickname from documents where id = ?", (document_id,)
+            ).fetchone()[0]
+            == "Textbook"
+        )
+    finally:
+        snapshot.close()
+
+
 def test_failed_index_reports_readable_text_separately_from_semantic_readiness(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:

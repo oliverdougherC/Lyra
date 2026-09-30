@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from backend.config import settings
-from backend.core import figures, ownership, recognition, storage_intents
+from backend.core import document_names, figures, ownership, recognition, storage_intents
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
@@ -128,7 +128,7 @@ _PAGES_FAILED_COLUMN = (
 )
 
 _DOCUMENT_COLUMNS = (
-    "id, class_id, filename, mime, byte_size, state, stage_detail, "
+    "id, class_id, filename, nickname, mime, byte_size, state, stage_detail, "
     "pages_total, pages_done, pages_skipped, error_message, created_at, recognize, refresh_state, "
     + _PAGES_FAILED_COLUMN
 )
@@ -150,6 +150,8 @@ class DocumentRead(BaseModel):
     id: int
     class_id: int
     filename: str
+    nickname: str | None
+    display_name: str
     mime: str
     byte_size: int
     state: str
@@ -184,10 +186,18 @@ class DocumentMove(BaseModel):
     class_id: int
 
 
+class DocumentNickname(BaseModel):
+    """Compare-and-set prevents a stale editor from overwriting another nickname edit."""
+
+    nickname: str | None
+    expected_nickname: str | None
+
+
 class DocumentText(BaseModel):
     """A text source as the solver's source pane reads it."""
 
     filename: str
+    display_name: str
     text: str
     truncated: bool
 
@@ -439,6 +449,25 @@ def read_document(document_id: int, conn: DbConn) -> dict[str, object]:
     return {**document, "has_text": _text_path(document_id).exists()}
 
 
+@router.patch("/documents/{document_id}/nickname", response_model=DocumentRead)
+def update_document_nickname(
+    document_id: int, payload: DocumentNickname, conn: DbConn
+) -> dict[str, object]:
+    nickname = document_names.normalize_nickname(payload.nickname)
+    updated = conn.execute(
+        "update documents set nickname = ? where id = ? and nickname is ?",
+        (nickname, document_id, payload.expected_nickname),
+    )
+    if updated.rowcount == 0:
+        if conn.execute("select 1 from documents where id = ?", (document_id,)).fetchone() is None:
+            raise NotFoundError("That document does not exist.")
+        raise ConflictError(
+            "This nickname changed elsewhere. Review the current name and try again."
+        )
+    conn.commit()
+    return _document_row(conn, document_id)
+
+
 @router.get("/documents/{document_id}/status", response_model=StatusRead)
 def read_document_status(document_id: int, conn: DbConn) -> dict[str, object]:
     return _document_row(conn, document_id)
@@ -527,6 +556,7 @@ def read_document_text(document_id: int, conn: DbConn) -> dict[str, object]:
         text = ""
     return {
         "filename": document["filename"],
+        "display_name": document["display_name"],
         "text": text[:MAX_TEXT_CHARS],
         "truncated": len(text) > MAX_TEXT_CHARS,
     }
@@ -1010,6 +1040,7 @@ def _document_row(conn: sqlite3.Connection, document_id: int) -> dict[str, objec
 
 def _with_coverage(conn: sqlite3.Connection, document: dict[str, object]) -> dict[str, object]:
     """Expose every page's bounded readability outcome without private page text."""
+    document["display_name"] = document_names.display_name(document)
     pages = []
     for row in conn.execute(
         "select p.page_number, p.state, p.skip_reason, p.error_message, "

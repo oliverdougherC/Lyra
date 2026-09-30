@@ -56,6 +56,7 @@ const DOCUMENTS = [
 
 beforeEach(() => {
   sessionStorage.clear()
+  localStorage.clear()
   clearUploadHistory(1)
   vi.restoreAllMocks()
   vi.spyOn(api, 'listDocuments').mockResolvedValue(DOCUMENTS)
@@ -68,6 +69,77 @@ beforeEach(() => {
 })
 
 describe('DocumentsPane in the manage variant', () => {
+  it('persists per-class sorting without changing selected document IDs', async () => {
+    vi.mocked(api.listDocuments).mockResolvedValue([
+      { ...DOCUMENTS[0], nickname: 'Zoo', display_name: 'Zoo' },
+      { ...DOCUMENTS[1], nickname: 'Alpha', display_name: 'Alpha' },
+    ])
+    const { wrapper } = createWrapper()
+    const view = render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+    await screen.findByRole('button', { name: 'Select Zoo' })
+    const order = () =>
+      Array.from(document.querySelectorAll('[id^="document-"]'))
+        .map((element) => element.id)
+        .filter((id) => /^document-\d+$/.test(id))
+    expect(order()).toEqual(['document-3', 'document-5'])
+    await userEvent.click(screen.getByRole('button', { name: 'Select Alpha' }))
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: 'Sort documents' }),
+      'alphabetical',
+    )
+    expect(order()).toEqual(['document-5', 'document-3'])
+    expect(screen.getByRole('button', { name: 'Deselect Alpha' })).toBeInTheDocument()
+    expect(localStorage.getItem('lyra:class:1:documents-sort')).toBe('alphabetical')
+    view.unmount()
+
+    render(<DocumentsPane classId={1} variant="manage" />, { wrapper })
+    expect(await screen.findByRole('combobox', { name: 'Sort documents' })).toHaveValue(
+      'alphabetical',
+    )
+    render(<DocumentsPane classId={2} variant="manage" />, { wrapper })
+    await waitFor(() =>
+      expect(screen.getAllByRole('combobox', { name: 'Sort documents' })).toHaveLength(2),
+    )
+    expect(screen.getAllByRole('combobox', { name: 'Sort documents' })[1]).toHaveValue('date-added')
+  })
+
+  it('keeps sorting usable when preference storage is denied', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('denied')
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('denied')
+    })
+    render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+    const control = await screen.findByRole('combobox', { name: 'Sort documents' })
+    expect(control).toHaveValue('date-added')
+    await userEvent.selectOptions(control, 'kind')
+    expect(control).toHaveValue('kind')
+  })
+
+  it('finds a nicknamed document by its current or original name', async () => {
+    vi.mocked(api.listDocuments).mockResolvedValue([
+      {
+        ...DOCUMENTS[0],
+        filename: 'LADW_2026_08-31.pdf',
+        nickname: 'Textbook',
+        display_name: 'Textbook',
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        ...DOCUMENTS[1],
+        id: index + 20,
+        filename: `other-${index}.pdf`,
+      })),
+    ])
+    render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+    const search = await screen.findByRole('searchbox', { name: 'Filter documents by name' })
+    await userEvent.type(search, 'Textbook')
+    expect(screen.getByRole('button', { name: 'Select Textbook' })).toBeInTheDocument()
+    await userEvent.clear(search)
+    await userEvent.type(search, 'LADW_2026')
+    expect(screen.getByRole('button', { name: 'Select Textbook' })).toBeInTheDocument()
+  })
+
   it('keeps the bulk bar out of the way until something is picked', async () => {
     const { wrapper } = createWrapper()
 
