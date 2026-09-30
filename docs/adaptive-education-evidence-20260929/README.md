@@ -1,5 +1,11 @@
 # Adaptive education chat: bounded production-path evaluation
 
+Latest: [September 30 bounded causal comparison](causal-20260930.md) records 16 new
+terminal answers on unchanged contract 4, exact minimal/replay/production payloads,
+and an evidence-only delivery recommendation. No new application correction was
+supported; PLA-461/574 remain open for the owner’s explicit delivery decision.
+
+
 **Status: quality gate not met.** This is exploratory evidence for PLA-574/PLA-461,
 not acceptance of the candidate. The original v3 failures, R5 outputs and R3 prompt
 experiments remain separate. The R3 candidate failed repeated direct reading and its

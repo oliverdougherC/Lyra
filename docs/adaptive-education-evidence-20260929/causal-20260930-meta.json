@@ -1,0 +1,37 @@
+{
+  "source_sha": "5548f4b14f7368ee515d5cf26725d9241adced1a",
+  "source_status_at_start": "",
+  "endpoint_sha256": "0850d34c3024f015b5ff6bf4687d788f0d302b57e2f0b64119dbc02ed0fa4fb8",
+  "configured_model": "Qwen3.8-Flash-Next",
+  "context_window": 262144,
+  "stored_tools_supported": null,
+  "response_limit": 16,
+  "corpus_version": "2.1.0",
+  "contract_version": "4",
+  "server_template_overrides": "not observable through configured OpenAI-compatible API",
+  "files": {
+    "backend/api/routes_agent_chat.py": "3b52a16d3c3e91a7d6200caaa90fdb568d0b7405c3e0ce82274b66774c3d5954",
+    "backend/llm/prompts.py": "e1fceaef7ce938d0b966310621591477d92e10a1aa569500c9b68873f82b57e2",
+    "backend/llm/client.py": "baaa82b1077e97c2d516dd03b7f3b3138562d8a0f1536877a007d1340e6869ae",
+    "backend/llm/tools.py": "d0f03b315af5c2efc4a3eeda9ea4bb4bcf3933ab365803d08eacb8f47a4270eb",
+    "scripts/eval_tutor.py": "e968719a3431a94c4552c26b06b46e751e1a463b10c8d85107aec8b669706458",
+    "scripts/eval_corpora/tutor_semantic.json": "7eb529c8c6ff791c3a976821e019035ad0a2e90497277e93237dc322d2213fd2"
+  },
+  "models_probe": {
+    "status": 200,
+    "model_ids": [
+      "Qwen3.8-Flash-Next"
+    ]
+  },
+  "completed_responses": 16,
+  "harness_sha256": "3b68f4a92f297167397a13282a7f9cf76c427935397ae4170c6825749966797f",
+  "verification": {
+    "completed_terminal_answers": 16,
+    "provider_rounds_including_tool_requests": 21,
+    "first_payload_match_BC": true,
+    "non_docs_git_inventory_sha256": "643c4ce203945c12fb7ccf5889c74bf5ac934b073ccd47768fda3740146bf499",
+    "application_changes": false,
+    "local_tests": "40 passed: test_eval_tutor.py + test_agent_chat_streaming.py",
+    "prior_ci": "36677772707: 11 jobs success at 5548f4b"
+  }
+}

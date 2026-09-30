@@ -1,0 +1,91 @@
+{
+  "synthetic_database_path": "/tmp/lyra-causal-trace/data/assembly-4fo14vc3/eval.db",
+  "source_revision": "5548f4b14f7368ee515d5cf26725d9241adced1a",
+  "results": [
+    {
+      "tools_supported": true,
+      "toolless": false,
+      "message_count": 4,
+      "roles": [
+        "system",
+        "user",
+        "assistant",
+        "user"
+      ],
+      "messages_sha256": "e2e4cd97eb0bcb2b7491b6f3a7c1cf690d4a40d86e257f1f60691aa42ab115d3",
+      "system_sha256": "8d3f7a806972ef38b396d096cf0605c9fd462388419d25b509343b9049938716",
+      "tools_sha256": "c14a6c9c383c7b50572088cd1587aaafbca7cd4108b16a8a49bd99a8172446a7",
+      "tool_names": [
+        "cas_evaluate",
+        "cas_solve",
+        "cas_integrate",
+        "cas_differentiate",
+        "cas_linalg",
+        "check_units",
+        "list_documents",
+        "search_documents",
+        "read_document_page",
+        "read_document_problem",
+        "read_document_section",
+        "request_workspace_access"
+      ],
+      "marker_counts": {
+        "user_fact": 1,
+        "class_fact": 1,
+        "retrieval": 1
+      },
+      "character_positions": {
+        "education": 3474,
+        "user_fact": 6314,
+        "class_fact": 6425,
+        "retrieval": 6545
+      },
+      "eval_vs_persisted_history_planner_messages_equal": true,
+      "eval_vs_planner_tools_equal": true,
+      "guide_show_equal": true
+    },
+    {
+      "tools_supported": false,
+      "toolless": true,
+      "message_count": 4,
+      "roles": [
+        "system",
+        "user",
+        "assistant",
+        "user"
+      ],
+      "messages_sha256": "03f4edfbffb44f399bbdc8f10c285a18e4fc2248a728ae3f7df6b4f6211b2f72",
+      "system_sha256": "759269edc0f469db590a8385b0f9ecc79292c8f843a2b69a7ca3138a1eaba225",
+      "tools_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "tool_names": [],
+      "marker_counts": {
+        "user_fact": 1,
+        "class_fact": 1,
+        "retrieval": 1
+      },
+      "character_positions": {
+        "education": 791,
+        "user_fact": 3631,
+        "class_fact": 3742,
+        "retrieval": 4372
+      },
+      "eval_vs_persisted_history_planner_messages_equal": true,
+      "eval_vs_planner_tools_equal": true,
+      "guide_show_equal": true
+    }
+  ],
+  "synthetic_database_rows": {
+    "documents": 0,
+    "chunks": 0,
+    "profile_facts": 2,
+    "messages": 2
+  },
+  "network_attempts": 0,
+  "retrieval_source": "Explicit cached RetrievalResult from synthetic corpus fixture; no uploaded documents, ingestion, embeddings, or search exercised.",
+  "limitations": [
+    "Assembly parity only: no provider calls, output behavior, streaming, or final answer parsing tested.",
+    "No image attachments or image-tool continuation callbacks exercised.",
+    "Synthetic confirmed facts test rendering/order, not ingestion/extraction/confirmation workflows.",
+    "Fixed 16384 context window and short history; trimming pressure is not exercised."
+  ]
+}
