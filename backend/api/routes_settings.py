@@ -10,7 +10,7 @@ from threading import RLock
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.core import exa
 from backend.core.app_settings import (
@@ -91,6 +91,14 @@ class SettingsUpdate(BaseModel):
         default=None,
         description="Routed to the keychain, never stored in the database. Empty string deletes.",
     )
+
+    @field_validator("context_window", "extraction_enabled", "remote_ack")
+    @classmethod
+    def _require_value(cls, value: int | bool | None) -> int | bool:
+        # Omission preserves the setting; explicit null cannot clear NOT NULL columns.
+        if value is None:
+            raise ValueError("This setting cannot be null.")
+        return value
 
 
 class ConnectionTestResult(BaseModel):

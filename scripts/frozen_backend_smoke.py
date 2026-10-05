@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -77,6 +78,26 @@ def run_cas_smoke(
             raise RuntimeError("frozen CAS worker returned an incorrect computation")
 
 
+def read_readiness(stream, *, timeout_seconds: float, max_bytes: int = 8192) -> str:
+    """Read one bounded protocol line without blocking beyond the startup deadline."""
+    deadline = time.monotonic() + timeout_seconds
+    payload = bytearray()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([stream], [], [], remaining)[0]:
+            raise TimeoutError("frozen backend readiness timed out")
+        chunk = os.read(stream.fileno(), min(4096, max_bytes + 1 - len(payload)))
+        if not chunk:
+            return payload.decode("utf-8", errors="replace")
+        payload.extend(chunk)
+        newline = payload.find(b"\n")
+        line_size = newline + 1 if newline >= 0 else len(payload)
+        if line_size > max_bytes:
+            raise RuntimeError("frozen backend readiness exceeded size limit")
+        if newline >= 0:
+            return payload[:line_size].decode("utf-8", errors="replace")
+
+
 def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, object]:
     if not executable.is_file():
         raise FileNotFoundError(executable)
@@ -102,16 +123,17 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
             "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
         }
     )
-    process = subprocess.Popen(  # noqa: S603 - caller supplies the explicit built artifact
-        [str(executable)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        pass_fds=(listener.fileno(),),
-        env=environment,
-    )
+    process = None
     try:
+        process = subprocess.Popen(  # noqa: S603 - caller supplies the explicit built artifact
+            [str(executable)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            pass_fds=(listener.fileno(),),
+            env=environment,
+        )
         if process.stdin is None or process.stdout is None:
             raise RuntimeError("frozen backend pipes were not created")
         json.dump(
@@ -127,10 +149,7 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
         )
         process.stdin.write("\n")
         process.stdin.close()
-        ready, _, _ = select.select([process.stdout], [], [], timeout_seconds)
-        if not ready:
-            raise TimeoutError("frozen backend readiness timed out")
-        readiness_line = process.stdout.readline()
+        readiness_line = read_readiness(process.stdout, timeout_seconds=timeout_seconds)
         if not readiness_line:
             returncode = process.poll()
             child_error = process.stderr.read() if returncode is not None and process.stderr else ""
@@ -179,14 +198,21 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
             "ephemeral_loopback": True,
         }
     finally:
-        process.terminate()
         try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
-        listener.close()
-        shutil.rmtree(profile, ignore_errors=True)
+            if process is not None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        finally:
+            if process is not None:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+            listener.close()
+            shutil.rmtree(profile, ignore_errors=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

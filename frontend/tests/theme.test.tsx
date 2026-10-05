@@ -31,6 +31,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -147,6 +148,34 @@ describe('THEME_INIT_SCRIPT', () => {
 
 describe('useLocalStorageState', () => {
   const parseFlag = (raw: string) => (raw === 'true' ? true : raw === 'false' ? false : null)
+
+  it('keeps the app usable when storage reads are denied', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Storage unavailable', 'SecurityError')
+    })
+    stubMatchMedia(false)
+    const { result } = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    expect(result.current.resolvedTheme).toBe('light')
+  })
+
+  it('shares an in-memory preference after a failed write and recovers on the next write', () => {
+    const key = 'unwritable-preference'
+    localStorage.setItem(key, 'true')
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage full', 'QuotaExceededError')
+    })
+    const first = renderHook(() => useLocalStorageState(key, true, parseFlag))
+    const second = renderHook(() => useLocalStorageState(key, true, parseFlag))
+    act(() => first.result.current[1](false))
+    expect(first.result.current[0]).toBe(false)
+    expect(second.result.current[0]).toBe(false)
+    expect(localStorage.getItem(key)).toBe('true')
+
+    write.mockRestore()
+    act(() => second.result.current[1](true))
+    expect(first.result.current[0]).toBe(true)
+    expect(localStorage.getItem(key)).toBe('true')
+  })
 
   it('returns the fallback when nothing is stored', () => {
     const { result } = renderHook(() => useLocalStorageState('flag', true, parseFlag))

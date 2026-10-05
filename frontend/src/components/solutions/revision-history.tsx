@@ -1,5 +1,6 @@
 'use client'
 
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { MathText } from '@/components/solutions/math-text'
@@ -70,6 +71,8 @@ export function RevisionHistory({
 }: RevisionHistoryProps) {
   const revisions = usePartRevisions(artifactId, part?.id ?? null, kind)
   const restore = useRestoreRevision(artifactId, kind)
+  const restoring = useRef(false)
+  const [restorePending, setRestorePending] = useState(false)
 
   // Exactly one row is "shown now". A restore writes a new revision rather than rewinding,
   // so the history can hold duplicate content (e.g. [A, B, A]); matching every row against
@@ -83,35 +86,35 @@ export function RevisionHistory({
       : (revisions.data?.findIndex((revision) => revision.content === currentBody) ?? -1)
 
   const handleRestore = async (revision: number) => {
-    if (!part) return
+    if (!part || restoring.current) return
+    restoring.current = true
+    setRestorePending(true)
     // Draft bodies restore version-aware: confirm the current text first (so it is itself a
     // recoverable revision) and carry its version, so a stale tab cannot replace a body that
     // changed elsewhere. Solutions pass no barrier and restore unchanged.
-    let expectedVersion: number | undefined
-    if (saveBeforeRestore) {
-      const barrier = await saveBeforeRestore()
-      if (!barrier.ok) return
-      expectedVersion = barrier.version
+    try {
+      let expectedVersion: number | undefined
+      if (saveBeforeRestore) {
+        const barrier = await saveBeforeRestore()
+        if (!barrier.ok) return
+        expectedVersion = barrier.version
+      }
+      await restore.mutateAsync({ partId: part.id, revision, expectedVersion })
+      toast.success('Restored that version.')
+      onClose()
+    } catch (error) {
+      if (error instanceof DraftBodyConflictError && onBodyConflict) {
+        // The body moved elsewhere since this tab last read it: reconcile rather than
+        // replace. Nothing was written.
+        onBodyConflict({ serverVersion: error.currentVersion, serverBody: error.serverBody })
+        onClose()
+        return
+      }
+      toast.error(error instanceof ApiError ? error.message : 'Could not restore that version.')
+    } finally {
+      restoring.current = false
+      setRestorePending(false)
     }
-    restore.mutate(
-      { partId: part.id, revision, expectedVersion },
-      {
-        onSuccess: () => {
-          toast.success('Restored that version.')
-          onClose()
-        },
-        onError: (error) => {
-          if (error instanceof DraftBodyConflictError && onBodyConflict) {
-            // The body moved elsewhere since this tab last read it: reconcile rather than
-            // replace. Nothing was written.
-            onBodyConflict({ serverVersion: error.currentVersion, serverBody: error.serverBody })
-            onClose()
-            return
-          }
-          toast.error(error instanceof ApiError ? error.message : 'Could not restore that version.')
-        },
-      },
-    )
   }
 
   return (
@@ -178,7 +181,7 @@ export function RevisionHistory({
                         size="sm"
                         className="self-start"
                         onClick={() => void handleRestore(revision.revision)}
-                        disabled={restore.isPending}
+                        disabled={restorePending}
                       >
                         Restore
                       </Button>

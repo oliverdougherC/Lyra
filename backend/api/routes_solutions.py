@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
 from backend.core import artifacts, solver
-from backend.core.classes import get_class, touch_class
+from backend.core.classes import get_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.segmentation import SegmentedPart, SegmentedProblem
 from backend.storage.database import get_db
@@ -279,17 +279,21 @@ def create_solution(class_id: int, payload: SolutionCreate, conn: DbConn) -> dic
     for source in payload.sources:
         _require_ready(conn, source.document_id, class_id=class_id)
 
-    created = artifacts.create_artifact(
-        conn,
-        class_id,
-        payload.title or _default_title(conn, payload),
-        [
-            artifacts.SourceSpec(document_id=source.document_id, role=source.role)
-            for source in payload.sources
-        ],
-    )
-    touch_class(conn, class_id)
-    solver.enqueue(int(created["id"]))
+    with conn:
+        created = artifacts.create_artifact(
+            conn,
+            class_id,
+            payload.title or _default_title(conn, payload),
+            [
+                artifacts.SourceSpec(document_id=source.document_id, role=source.role)
+                for source in payload.sources
+            ],
+            commit=False,
+        )
+        conn.execute(
+            "update classes set last_active_at = datetime('now') where id = ?", (class_id,)
+        )
+        solver.enqueue(int(created["id"]))
     return _with_sources(conn, created)
 
 
@@ -344,16 +348,17 @@ def update_segmentation(
     to, and rewriting it underneath them would leave answers attached to problems that no
     longer exist.
     """
-    artifact = _require_solution_set(conn, artifact_id)
-    if artifact["state"] != artifacts.AWAITING_REVIEW:
-        raise ConflictError(NOT_AT_GATE_MESSAGE)
     if len(payload.problems) > MAX_PROBLEMS:
         raise LyraError(TOO_MANY_PROBLEMS)
-
-    corrected = _to_segmented(conn, artifact_id, payload)
-    artifacts.delete_parts(conn, artifact_id)
-    solver.write_problems(conn, artifact_id, corrected)
-    artifacts.set_problems_total(conn, artifact_id, len(corrected))
+    with conn:
+        conn.execute("begin immediate")
+        artifact = _require_solution_set(conn, artifact_id)
+        if artifact["state"] != artifacts.AWAITING_REVIEW:
+            raise ConflictError(NOT_AT_GATE_MESSAGE)
+        corrected = _to_segmented(conn, artifact_id, payload)
+        artifacts.delete_parts(conn, artifact_id, commit=False)
+        solver.write_problems(conn, artifact_id, corrected, commit=False)
+        artifacts.set_problems_total(conn, artifact_id, len(corrected))
     return read_solution(artifact_id, conn)
 
 
@@ -372,14 +377,21 @@ def start_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
     complete, so `Solve the rest` after a cancel is this same call rather than a second
     endpoint with its own resume logic to keep in step.
     """
-    artifact = _require_solution_set(conn, artifact_id)
-    if artifact["state"] not in STARTABLE_STATES:
-        raise ConflictError(ALREADY_RUNNING_MESSAGE)
-    if not _problem_count(conn, artifact_id):
-        raise LyraError(NO_PROBLEMS_MESSAGE)
-
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.PENDING)
-    solver.enqueue_solve(artifact_id)
+    with conn:
+        # Serialize admission with other starts/resegment requests before checking
+        # the state; a second request must see the first one's pending claim.
+        conn.execute("begin immediate")
+        artifact = _require_solution_set(conn, artifact_id)
+        if artifact["state"] not in STARTABLE_STATES:
+            raise ConflictError(ALREADY_RUNNING_MESSAGE)
+        if not _problem_count(conn, artifact_id):
+            raise LyraError(NO_PROBLEMS_MESSAGE)
+        conn.execute(
+            "update artifacts set state = ?, stage_detail = null, updated_at = datetime('now') "
+            "where id = ?",
+            (artifacts.PENDING, artifact_id),
+        )
+        solver.enqueue_solve(artifact_id)
     return _with_sources(conn, artifacts.get_artifact(conn, artifact_id))
 
 
@@ -472,12 +484,17 @@ def resegment_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
     Lyra redo than fix by hand. Refused once solving has started, for the same reason the
     correction endpoint is.
     """
-    artifact = _require_solution_set(conn, artifact_id)
-    if artifact["state"] in (artifacts.SOLVING, artifacts.SEGMENTING):
-        raise ConflictError("This solution set is already running.")
-
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.PENDING)
-    solver.enqueue(artifact_id)
+    with conn:
+        conn.execute("begin immediate")
+        artifact = _require_solution_set(conn, artifact_id)
+        if artifact["state"] in artifacts.RUNNING_STATES:
+            raise ConflictError(ALREADY_RUNNING_MESSAGE)
+        conn.execute(
+            "update artifacts set state = ?, stage_detail = null, updated_at = datetime('now') "
+            "where id = ?",
+            (artifacts.PENDING, artifact_id),
+        )
+        solver.enqueue(artifact_id)
     return _with_sources(conn, artifacts.get_artifact(conn, artifact_id))
 
 
@@ -486,14 +503,15 @@ def cancel_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
     """Stop a running solution set, keeping whatever it has already produced.
 
     A partly solved set is worth more than nothing, so completed problems stay. The
-    worker checks this state before it writes, so a run cancelled mid-pass discards its
-    proposal rather than landing the student back where they left.
+    segmentation worker discards an in-flight proposal. Solving finishes the current
+    problem, then stops before starting another; already completed problems stay readable.
     """
-    artifact = _require_solution_set(conn, artifact_id)
-    if artifact["state"] not in artifacts.RUNNING_STATES:
-        raise ConflictError(NOT_RUNNING_MESSAGE)
-
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.CANCELLED)
+    with conn:
+        conn.execute("begin immediate")
+        artifact = _require_solution_set(conn, artifact_id)
+        if artifact["state"] not in artifacts.RUNNING_STATES:
+            raise ConflictError(NOT_RUNNING_MESSAGE)
+        artifacts.set_artifact_state(conn, artifact_id, artifacts.CANCELLED)
     return _with_sources(conn, artifacts.get_artifact(conn, artifact_id))
 
 

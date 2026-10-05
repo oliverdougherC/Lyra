@@ -489,14 +489,23 @@ def increment_problems_done(conn: sqlite3.Connection, artifact_id: int) -> int:
 
 
 def mark_artifact_failed(
-    conn: sqlite3.Connection, artifact_id: int, stage: str, message: str
+    conn: sqlite3.Connection,
+    artifact_id: int,
+    stage: str,
+    message: str,
+    *,
+    expected_state: str | None = None,
 ) -> None:
-    """Record a failure with the stage it happened in and a message written for the user."""
+    """Record a failure, optionally only while the observed run state still holds.
+
+    Background workers provide ``expected_state`` so a concurrent cancellation or
+    restart cannot be replaced by a failure from the operation it superseded.
+    """
     get_artifact(conn, artifact_id)
     conn.execute(
         "update artifacts set state = ?, stage_detail = ?, error_message = ?, "
-        "updated_at = datetime('now') where id = ?",
-        (FAILED, stage, message, artifact_id),
+        "updated_at = datetime('now') where id = ? and (? is null or state = ?)",
+        (FAILED, stage, message, artifact_id, expected_state, expected_state),
     )
     conn.commit()
 
@@ -638,11 +647,12 @@ def delete_part(conn: sqlite3.Connection, part_id: int) -> None:
     conn.commit()
 
 
-def delete_parts(conn: sqlite3.Connection, artifact_id: int) -> None:
+def delete_parts(conn: sqlite3.Connection, artifact_id: int, *, commit: bool = True) -> None:
     """Drop every part of an artifact.
 
     This is what a re-segmentation does before writing the corrected problem list: merge
     and split are not expressible as per-row edits, so the list is replaced wholesale.
+    Use ``commit=False`` to keep the deletion inside the replacement transaction.
 
     Raises:
         NotFoundError: when no artifact carries that id.
@@ -650,7 +660,8 @@ def delete_parts(conn: sqlite3.Connection, artifact_id: int) -> None:
     get_artifact(conn, artifact_id)
     conn.execute("delete from artifact_parts where artifact_id = ?", (artifact_id,))
     _touch_artifact(conn, artifact_id)
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def set_part_content(

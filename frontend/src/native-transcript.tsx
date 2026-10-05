@@ -71,55 +71,78 @@ export function NativeTranscript({ hostId = childHostId }: { hostId?: string } =
   const reportedHeightRef = useRef(0)
   const readyReportedRef = useRef(false)
   const heightRetriesRef = useRef(0)
+  const heightRetryTimerRef = useRef<number | null>(null)
   const latestSnapshotRef = useRef<NativeChatSnapshot | null>(null)
 
-  const publishHeight = useCallback((height: number) => {
-    const owner = latestSnapshotRef.current
-    if (!owner) return
-    if (height > 18_000) {
-      report({ kind: 'overflow', hostId: owner.hostId, scope: owner.scope, version: owner.version })
-      return
+  const clearHeightRetry = useCallback(() => {
+    if (heightRetryTimerRef.current !== null) {
+      window.clearTimeout(heightRetryTimerRef.current)
+      heightRetryTimerRef.current = null
     }
-    if (Math.abs(height - reportedHeightRef.current) < 1 && readyReportedRef.current) return
-    reportedHeightRef.current = height
-    void callNativeChat('native_chat_set_content_height', {
-      hostId: owner.hostId,
-      scope: owner.scope,
-      version: owner.version,
-      height,
-    }).then(
-      () => {
-        if (latestSnapshotRef.current !== owner) return
-        heightRetriesRef.current = 0
-        if (!readyReportedRef.current) {
-          readyReportedRef.current = true
-          report({
-            kind: 'content-ready',
-            hostId: owner.hostId,
-            scope: owner.scope,
-            version: owner.version,
-          })
-        }
-      },
-      () => {
-        if (latestSnapshotRef.current !== owner) return
-        reportedHeightRef.current = 0
-        if (heightRetriesRef.current++ < 10)
-          window.setTimeout(() => publishHeight(contentRef.current?.scrollHeight ?? 0), 100)
-        else
-          report({
-            kind: 'overflow',
-            hostId: owner.hostId,
-            scope: owner.scope,
-            version: owner.version,
-          })
-      },
-    )
   }, [])
+
+  const publishHeight = useCallback(
+    (height: number) => {
+      const owner = latestSnapshotRef.current
+      if (!owner) return
+      clearHeightRetry()
+      if (height > 18_000) {
+        report({
+          kind: 'overflow',
+          hostId: owner.hostId,
+          scope: owner.scope,
+          version: owner.version,
+        })
+        return
+      }
+      if (Math.abs(height - reportedHeightRef.current) < 1 && readyReportedRef.current) return
+      reportedHeightRef.current = height
+      void callNativeChat('native_chat_set_content_height', {
+        hostId: owner.hostId,
+        scope: owner.scope,
+        version: owner.version,
+        height,
+      }).then(
+        () => {
+          if (latestSnapshotRef.current !== owner) return
+          heightRetriesRef.current = 0
+          if (!readyReportedRef.current) {
+            readyReportedRef.current = true
+            report({
+              kind: 'content-ready',
+              hostId: owner.hostId,
+              scope: owner.scope,
+              version: owner.version,
+            })
+          }
+        },
+        () => {
+          if (latestSnapshotRef.current !== owner) return
+          reportedHeightRef.current = 0
+          if (heightRetriesRef.current++ < 10) {
+            clearHeightRetry()
+            heightRetryTimerRef.current = window.setTimeout(() => {
+              heightRetryTimerRef.current = null
+              if (latestSnapshotRef.current === owner)
+                publishHeight(contentRef.current?.scrollHeight ?? 0)
+            }, 100)
+          } else
+            report({
+              kind: 'overflow',
+              hostId: owner.hostId,
+              scope: owner.scope,
+              version: owner.version,
+            })
+        },
+      )
+    },
+    [clearHeightRetry],
+  )
 
   useEffect(() => {
     window.__lyraNativeChatReceive = (incoming) => {
       if (incoming.hostId !== hostId || incoming.version <= versionRef.current) return
+      clearHeightRetry()
       versionRef.current = incoming.version
       latestSnapshotRef.current = incoming
       readyReportedRef.current = false
@@ -130,8 +153,10 @@ export function NativeTranscript({ hostId = childHostId }: { hostId?: string } =
     report({ kind: 'ready', hostId })
     return () => {
       delete window.__lyraNativeChatReceive
+      latestSnapshotRef.current = null
+      clearHeightRetry()
     }
-  }, [hostId])
+  }, [clearHeightRetry, hostId])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', Boolean(snapshot?.dark))

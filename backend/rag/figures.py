@@ -130,11 +130,20 @@ def _page_figures(page: "pymupdf.Page", page_number: int) -> list[Figure]:
         logger.warning("Could not read figures on page %s", page_number)
         return []
 
-    captions = _caption_blocks(page)
+    try:
+        captions = _caption_blocks(page)
+    except Exception:
+        # Caption text is optional enrichment. Keep readable image placements even
+        # when a damaged text layer cannot supply labels for them.
+        logger.warning("Could not read figure captions on page %s", page_number)
+        captions = []
     box = page.rect
     figures = []
     for index, rect in enumerate(rects, start=1):
         label, caption = _caption_for(rect, captions)
+        # Match captions in PDF text/image coordinates, then expose the geometry
+        # used by rendered pages and figure crops, which includes page rotation.
+        rect = rect * page.rotation_matrix
         figures.append(
             Figure(
                 page_number=page_number,
@@ -160,7 +169,13 @@ def _figure_rects(page: "pymupdf.Page") -> list["pymupdf.Rect"]:
     """
     page_area = page.rect.width * page.rect.height
     rects = []
+    seen_xrefs: set[int] = set()
     for xref, *_ in page.get_images(full=True):
+        # A reused image may have several resource entries. get_image_rects already
+        # returns every placement, so visit each underlying image only once.
+        if xref in seen_xrefs:
+            continue
+        seen_xrefs.add(xref)
         for rect in page.get_image_rects(xref):
             if _is_figure(rect, page_area):
                 rects.append(rect)

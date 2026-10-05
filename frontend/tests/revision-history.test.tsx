@@ -4,7 +4,7 @@
  * text is confirmed on disk first so restoring an older version loses nothing (PLA-289).
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -93,6 +93,59 @@ describe('RevisionHistory: provenance is visibly distinct per version', () => {
 })
 
 describe('RevisionHistory: version-aware draft restore', () => {
+  it('disables repeated restores while waiting for the current body to save', async () => {
+    let finishSave!: (value: { ok: boolean; version: number }) => void
+    const saveBeforeRestore = vi.fn(
+      () =>
+        new Promise<{ ok: boolean; version: number }>((resolve) => {
+          finishSave = resolve
+        }),
+    )
+    const restore = vi.spyOn(api, 'restorePartRevision').mockResolvedValue(restoredPart())
+    render(
+      <RevisionHistory
+        artifactId={3}
+        part={PART}
+        onClose={vi.fn()}
+        saveBeforeRestore={saveBeforeRestore}
+      />,
+      { wrapper: createWrapper() },
+    )
+    const button = await screen.findByRole('button', { name: 'Restore' })
+    fireEvent.click(button)
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(saveBeforeRestore).toHaveBeenCalledOnce()
+    await act(async () => finishSave({ ok: true, version: 5 }))
+    await waitFor(() => expect(restore).toHaveBeenCalledOnce())
+  })
+
+  it('keeps history open and allows retry after a save barrier throws', async () => {
+    const restore = vi.spyOn(api, 'restorePartRevision').mockResolvedValue(restoredPart())
+    const saveBeforeRestore = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Save unavailable'))
+      .mockResolvedValue({ ok: true, version: 5 })
+    const onClose = vi.fn()
+    render(
+      <RevisionHistory
+        artifactId={3}
+        part={PART}
+        onClose={onClose}
+        saveBeforeRestore={saveBeforeRestore}
+      />,
+      { wrapper: createWrapper() },
+    )
+    const button = await screen.findByRole('button', { name: 'Restore' })
+    await userEvent.click(button)
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(restore).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(button).toBeEnabled()
+    await userEvent.click(button)
+    await waitFor(() => expect(restore).toHaveBeenCalledOnce())
+  })
+
   it('confirms the current body first and restores against the version it reports', async () => {
     const restore = vi.spyOn(api, 'restorePartRevision').mockResolvedValue(restoredPart())
     const saveBeforeRestore = vi.fn().mockResolvedValue({ ok: true, version: 5 })

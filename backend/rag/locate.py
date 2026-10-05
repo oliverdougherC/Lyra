@@ -106,6 +106,19 @@ def _is_after(rect: "pymupdf.Rect", cursor: "pymupdf.Rect") -> bool:
     return abs(rect.y0 - cursor.y0) <= _SAME_LINE and rect.x0 > cursor.x0 + _SAME_LINE
 
 
+def page_rotation(path: Path | None, page_number: int) -> int | None:
+    """The source page's rotation, or None when its reading axis cannot be established."""
+    if path is None:
+        return None
+    try:
+        with pymupdf.open(path) as document:
+            if 1 <= page_number <= document.page_count:
+                return document[page_number - 1].rotation
+    except Exception:
+        logger.warning("Could not read source page rotation")
+    return None
+
+
 def find_labels(path: Path, page_number: int, labels: Sequence[str]) -> list[Rect | None]:
     """Where each of one page's problem labels sits, as fractions of the page box.
 
@@ -146,7 +159,13 @@ def find_labels(path: Path, page_number: int, labels: Sequence[str]) -> list[Rec
             box = page.rect
             if not box.width or not box.height:
                 return [None] * len(labels)
-            found = _walk_page(page, labels)
+            # Search results use unrotated PDF coordinates; the displayed pixmap
+            # and page.rect include the page rotation. Preserve source reading order
+            # while converting the final highlights to the rendered coordinate space.
+            found = [
+                None if rect is None else rect * page.rotation_matrix
+                for rect in _walk_page(page, labels)
+            ]
     except Exception:
         logger.warning(
             "Could not search %s page %d for %d labels", path.name, page_number, len(labels)

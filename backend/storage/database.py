@@ -199,20 +199,24 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     # same worker. A connection is never shared between concurrent requests, so the
     # accesses stay serial.
     conn = sqlite3.connect(path, check_same_thread=False, timeout=_SQLITE_BUSY_TIMEOUT_MS / 1_000)
-    conn.row_factory = sqlite3.Row
-    conn.enable_load_extension(True)
-    sqlite_vec.load(conn)
-    conn.enable_load_extension(False)
-    conn.execute("pragma foreign_keys = on")
-    conn.execute(f"pragma busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
-    conn.execute("pragma journal_mode = wal")
-    # The database and its WAL sidecars hold the same private state as the rest of the data
-    # tree. The parent directory is `0o700`, which is what actually keeps other users out;
-    # tightening the files as well is defence in depth for a database placed, by an explicit
-    # `LYRA_DB_PATH`, somewhere the directory contract does not otherwise reach.
-    private.secure_sqlite_file(path, create=False)
-    for suffix in _DB_SIDECAR_SUFFIXES:
-        private.secure_sqlite_file(path.with_name(path.name + suffix), create=False)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        conn.execute("pragma foreign_keys = on")
+        conn.execute(f"pragma busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+        conn.execute("pragma journal_mode = wal")
+        # The database and its WAL sidecars hold the same private state as the rest of the data
+        # tree. The parent directory is `0o700`, which is what actually keeps other users out;
+        # tightening the files as well is defence in depth for a database placed, by an explicit
+        # `LYRA_DB_PATH`, somewhere the directory contract does not otherwise reach.
+        private.secure_sqlite_file(path, create=False)
+        for suffix in _DB_SIDECAR_SUFFIXES:
+            private.secure_sqlite_file(path.with_name(path.name + suffix), create=False)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 

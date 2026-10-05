@@ -41,6 +41,13 @@ class ClassUpdate(BaseModel):
     semester: str | None = None
     archived: bool | None = None
 
+    @field_validator("archived")
+    @classmethod
+    def _check_archived(cls, value: bool | None) -> bool:
+        if value is None:
+            raise ValueError("Archived must be true or false.")
+        return value
+
     @field_validator("name")
     @classmethod
     def _check_name(cls, value: str | None) -> str:

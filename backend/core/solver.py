@@ -127,18 +127,28 @@ class _Job:
 
 
 _queue: queue.Queue[_Job] = queue.Queue()
+_queued_jobs: dict[int, _Job] = {}
+_queue_lock = threading.Lock()
 _worker_lock = threading.Lock()
 _worker_started = False
 
 
 def enqueue(artifact_id: int) -> None:
     """Hand an artifact to the worker for segmentation. Returns immediately."""
-    _queue.put(_Job(kind=SEGMENT, artifact_id=artifact_id))
+    _enqueue_latest(_Job(kind=SEGMENT, artifact_id=artifact_id))
 
 
 def enqueue_solve(artifact_id: int) -> None:
     """Hand a confirmed problem list to the worker for solving. Returns immediately."""
-    _queue.put(_Job(kind=SOLVE, artifact_id=artifact_id))
+    _enqueue_latest(_Job(kind=SOLVE, artifact_id=artifact_id))
+
+
+def _enqueue_latest(job: _Job) -> None:
+    # A cancelled job may still be in the FIFO when the user requests a different
+    # operation. Its identity must not consume the newer operation's pending state.
+    with _queue_lock:
+        _queued_jobs[job.artifact_id] = job
+        _queue.put(job)
 
 
 def enqueue_regenerate(artifact_id: int, part_id: int, correction: str = "") -> None:
@@ -180,17 +190,40 @@ def _drain_queue() -> None:
 
 def _run(job: _Job) -> None:
     """Dispatch one job to its arm."""
+    if job.kind in (SEGMENT, SOLVE):
+        conn = connect()
+        try:
+            with conn:
+                # Routes register the new identity inside their pending transaction.
+                # Take the DB lock first too, so identity and state form one claim.
+                conn.execute("begin immediate")
+                with _queue_lock:
+                    if _queued_jobs.get(job.artifact_id) is not job:
+                        return
+                    del _queued_jobs[job.artifact_id]
+                    if _current_state(conn, job.artifact_id) != artifacts.PENDING:
+                        return
+                    conn.execute(
+                        "update artifacts set state = ?, stage_detail = null, "
+                        "updated_at = datetime('now') where id = ?",
+                        (
+                            artifacts.SEGMENTING if job.kind == SEGMENT else artifacts.SOLVING,
+                            job.artifact_id,
+                        ),
+                    )
+        finally:
+            conn.close()
     if job.kind == SEGMENT:
-        run_segmentation(job.artifact_id)
+        run_segmentation(job.artifact_id, _claimed=True)
     elif job.kind == SOLVE:
-        run_solve(job.artifact_id)
+        run_solve(job.artifact_id, _claimed=True)
     elif job.kind == REGENERATE and job.part_id is not None:
         run_regeneration(job.artifact_id, job.part_id, job.correction)
     else:
         logger.warning("Ignoring unknown solve job kind: %s", job.kind)
 
 
-def run_segmentation(artifact_id: int) -> None:
+def run_segmentation(artifact_id: int, *, _claimed: bool = False) -> None:
     """Take one artifact from `pending` to `awaiting_review`.
 
     Takes only an id and opens its own connection, so the worker thread never touches a
@@ -202,25 +235,35 @@ def run_segmentation(artifact_id: int) -> None:
     """
     conn = connect()
     try:
-        _segment(conn, artifact_id)
+        _segment(conn, artifact_id, claimed=_claimed)
     except Exception as exc:
         stage = _current_state(conn, artifact_id)
-        if stage is None:
-            logger.warning("Segmentation skipped: artifact %s no longer exists", artifact_id)
+        if stage != artifacts.SEGMENTING:
+            logger.info("Segmentation skipped: artifact %s was deleted or cancelled", artifact_id)
             return
         logger.exception("Segmentation failed for artifact %s during %s", artifact_id, stage)
-        artifacts.mark_artifact_failed(conn, artifact_id, stage, _failure_message(exc))
+        artifacts.mark_artifact_failed(
+            conn, artifact_id, stage, _failure_message(exc), expected_state=stage
+        )
     finally:
         conn.close()
 
 
-def _segment(conn: sqlite3.Connection, artifact_id: int) -> None:
+def _segment(conn: sqlite3.Connection, artifact_id: int, *, claimed: bool = False) -> None:
     """Propose the problem list, then stop and wait for a person to confirm it."""
-    if _current_state(conn, artifact_id) is None:
-        logger.warning("Segmentation skipped: artifact %s no longer exists", artifact_id)
+    # Claim only still-queued work. Stop may have been pressed while this job waited
+    # behind another one, and dequeuing must never resurrect the cancelled artifact.
+    if not claimed:
+        cursor = conn.execute(
+            "update artifacts set state = ?, stage_detail = null, updated_at = datetime('now') "
+            "where id = ? and state = ?",
+            (artifacts.SEGMENTING, artifact_id, artifacts.PENDING),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return
+    if _current_state(conn, artifact_id) != artifacts.SEGMENTING:
         return
-
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.SEGMENTING)
     sources = artifacts.list_sources(conn, artifact_id, artifacts.PROBLEM_SET)
     if not sources:
         # Every problem-set document was deleted between creating this artifact and
@@ -247,15 +290,25 @@ def _segment(conn: sqlite3.Connection, artifact_id: int) -> None:
 
     # Replaced wholesale rather than merged: this runs on a re-segmentation too, and
     # merge and split are not expressible as per-row edits.
-    artifacts.delete_parts(conn, artifact_id)
-    write_problems(conn, artifact_id, proposed)
-    artifacts.set_problems_total(conn, artifact_id, len(proposed))
-    artifacts.set_problems_done(conn, artifact_id, 0)
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.AWAITING_REVIEW)
+    with conn:
+        conn.execute("begin immediate")
+        if _current_state(conn, artifact_id) != artifacts.SEGMENTING:
+            return
+        artifacts.delete_parts(conn, artifact_id, commit=False)
+        write_problems(conn, artifact_id, proposed, commit=False)
+        conn.execute(
+            "update artifacts set problems_total = ?, problems_done = 0 where id = ?",
+            (len(proposed), artifact_id),
+        )
+        artifacts.set_artifact_state(conn, artifact_id, artifacts.AWAITING_REVIEW)
 
 
 def write_problems(
-    conn: sqlite3.Connection, artifact_id: int, problems: list[SegmentedProblem]
+    conn: sqlite3.Connection,
+    artifact_id: int,
+    problems: list[SegmentedProblem],
+    *,
+    commit: bool = True,
 ) -> list[int]:
     """Write a problem list as parts, with sub-parts nested under their problem.
 
@@ -265,6 +318,8 @@ def write_problems(
     Whether a problem's sub-parts are then solved with it or one at a time is
     `solve_parts`, written here and read by `_solve_units`. Both readings put the same
     rows in the same shape; what changes is where the steps and the answer hang.
+
+    With ``commit=False``, the caller atomically replaces the list and its provenance.
 
     Returns:
         The ids of the top-level problem parts, in order.
@@ -290,6 +345,7 @@ def write_problems(
                 if problem.separate_parts and problem.parts
                 else artifacts.TOGETHER
             ),
+            commit=commit,
         )
         # A problem the student typed in at the gate belongs to no file, so it gets no
         # provenance rather than a row pointing at document zero. `document_id or None`
@@ -308,6 +364,7 @@ def write_problems(
                     )
                     for chunk_id in (problem.chunk_ids or (None,))
                 ],
+                commit=commit,
             )
         for index, part in enumerate(problem.parts):
             artifacts.create_part(
@@ -319,10 +376,11 @@ def write_problems(
                 content=part.statement,
                 parent_part_id=part_id,
                 origin=problem.origin,
+                commit=commit,
             )
         written.append(part_id)
 
-    _write_figures(conn, artifact_id, problems, written, positions)
+    _write_figures(conn, artifact_id, problems, written, positions, commit=commit)
     return written
 
 
@@ -332,6 +390,8 @@ def _write_figures(
     problems: list[SegmentedProblem],
     part_ids: list[int],
     positions: list[tuple[float, ...]],
+    *,
+    commit: bool = True,
 ) -> None:
     """Pull the figures a problem refers to into the solution.
 
@@ -398,7 +458,11 @@ def _write_figures(
         paired = (
             {}
             if anything_named
-            else _pair_by_alternation([positions[index] for index in indexes], available)
+            else _pair_by_alternation(
+                [positions[index] for index in indexes],
+                available,
+                rotation=locate.page_rotation(_pdf_path(conn, document_id), page_number),
+            )
         )
         # The unambiguous-shortcut precondition: this problem is alone on its page *and*
         # the census that says so is complete. With any problem of this document unplaced,
@@ -412,7 +476,9 @@ def _write_figures(
                 if len(indexes) == 1 and census_complete
                 else _figures_at(paired, position)
             )
-            _attach_figures(conn, artifact_id, part_ids[index], problems[index], chosen)
+            _attach_figures(
+                conn, artifact_id, part_ids[index], problems[index], chosen, commit=commit
+            )
 
 
 def _figures_at(paired: dict[int, dict[str, object]], position: int) -> list[dict[str, object]]:
@@ -421,9 +487,15 @@ def _figures_at(paired: dict[int, dict[str, object]], position: int) -> list[dic
     return [] if figure is None else [figure]
 
 
-def _top_of(bbox: object) -> float | None:
-    """The top edge of a rectangle stored as four fractions of the page box."""
+def _top_of(bbox: object, rotation: int = 0) -> float | None:
+    """The original reading-axis edge of a rectangle stored in rendered coordinates."""
     if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        if rotation == 90:
+            return 1.0 - float(bbox[2])
+        if rotation == 180:
+            return 1.0 - float(bbox[3])
+        if rotation == 270:
+            return float(bbox[0])
         return float(bbox[1])
     return None
 
@@ -441,7 +513,10 @@ _FIGURE, _MARKER = 0, 1
 
 
 def _pair_by_alternation(
-    positions: list[tuple[float, ...]], available: list[dict[str, object]]
+    positions: list[tuple[float, ...]],
+    available: list[dict[str, object]],
+    *,
+    rotation: int | None = 0,
 ) -> dict[int, dict[str, object]]:
     """One figure per problem where a page reads as a list, and nothing where it does not.
 
@@ -463,17 +538,21 @@ def _pair_by_alternation(
             marker was not found has an empty rectangle, and one of those is enough to
             refuse the whole page: an unplaced problem cannot take part in an ordering.
         available: The page's figures, in reading order.
+        rotation: Source page rotation. Stored boxes follow the rendered page, but
+            pairing follows the original reading axis. None refuses an unknown axis.
 
     Returns:
         Position in `positions` to figure, for the problems that pair, or an empty mapping
         when the page does not read as a list. Empty is the common answer and is a refusal
         rather than a failure.
     """
-    if len(available) < MIN_ALTERNATING_FIGURES or not positions:
+    if len(available) < MIN_ALTERNATING_FIGURES or not positions or rotation is None:
         return {}
 
-    markers = [(_top_of(bbox), index) for index, bbox in enumerate(positions)]
-    diagrams = [(_top_of(figure["bbox"]), index) for index, figure in enumerate(available)]
+    markers = [(_top_of(bbox, rotation), index) for index, bbox in enumerate(positions)]
+    diagrams = [
+        (_top_of(figure["bbox"], rotation), index) for index, figure in enumerate(available)
+    ]
     if any(top is None for top, _ in markers + diagrams):
         return {}
 
@@ -534,6 +613,8 @@ def _attach_figures(
     part_id: int,
     problem: SegmentedProblem,
     chosen: list[dict[str, object]],
+    *,
+    commit: bool = True,
 ) -> None:
     """Write one figure part per chosen figure, each citing the page it came from."""
     for index, figure in enumerate(chosen):
@@ -548,6 +629,7 @@ def _attach_figures(
             parent_part_id=part_id,
             status=artifacts.PART_COMPLETE,
             origin=problem.origin,
+            commit=commit,
         )
         artifacts.set_provenance(
             conn,
@@ -560,6 +642,7 @@ def _attach_figures(
                     bbox=tuple(float(value) for value in figure["bbox"]),  # type: ignore[union-attr]
                 )
             ],
+            commit=commit,
         )
 
 
@@ -650,30 +733,38 @@ def _unit_for(conn: sqlite3.Connection, part_id: int) -> _Unit:
     return _Unit(part=part, parent=parent)
 
 
-def run_solve(artifact_id: int) -> None:
+def run_solve(artifact_id: int, *, _claimed: bool = False) -> None:
     """Take one artifact from a confirmed problem list to `ready`.
 
     Opens its own connection, so tests can call it directly without the queue.
     """
     conn = connect()
     try:
-        _solve(conn, artifact_id)
+        _solve(conn, artifact_id, claimed=_claimed)
     except Exception as exc:
         stage = _current_state(conn, artifact_id)
-        if stage is None:
-            logger.warning("Solve skipped: artifact %s no longer exists", artifact_id)
+        if (
+            stage is None
+            or stage == artifacts.CANCELLED
+            or (_claimed and stage != artifacts.SOLVING)
+        ):
+            logger.info("Solve skipped: artifact %s was deleted or cancelled", artifact_id)
             return
         logger.exception("Solve failed for artifact %s during %s", artifact_id, stage)
         artifacts.mark_artifact_failed(
-            conn, artifact_id, stage, _failure_message(exc, _SOLVE_FAILURE)
+            conn, artifact_id, stage, _failure_message(exc, _SOLVE_FAILURE), expected_state=stage
         )
     finally:
         conn.close()
 
 
-def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
+def _solve(conn: sqlite3.Connection, artifact_id: int, *, claimed: bool = False) -> None:
     """Solve every unsolved problem in order, writing each one as it completes."""
     artifact = artifacts.get_artifact(conn, artifact_id)
+    if artifact["state"] == artifacts.CANCELLED or (
+        claimed and artifact["state"] != artifacts.SOLVING
+    ):
+        return
     class_id = int(artifact["class_id"])
 
     # Solving sends the student's own problem statements to the tutor model, so it is
@@ -694,7 +785,14 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
     if not units:
         raise LyraError(NO_PROBLEMS)
 
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.SOLVING)
+    cursor = conn.execute(
+        "update artifacts set state = ?, stage_detail = null, updated_at = datetime('now') "
+        "where id = ? and state = ?",
+        (artifacts.SOLVING, artifact_id, artifact["state"]),
+    )
+    conn.commit()
+    if cursor.rowcount == 0:
+        return
     artifacts.set_problems_total(conn, artifact_id, len(units))
     # A resumed run already holds finished problems. Counting from zero would report work
     # as undone that the student can read on screen right now.
@@ -703,12 +801,19 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
 
     consecutive = 0
     for unit in units:
-        if _current_state(conn, artifact_id) == artifacts.CANCELLED:
+        if _current_state(conn, artifact_id) != artifacts.SOLVING:
             logger.info("Solve of artifact %s stopped: cancelled", artifact_id)
             return
         if unit.part["status"] == artifacts.PART_COMPLETE:
             continue
-        artifacts.set_artifact_state(conn, artifact_id, artifacts.SOLVING, stage_detail=unit.label)
+        cursor = conn.execute(
+            "update artifacts set stage_detail = ?, updated_at = datetime('now') "
+            "where id = ? and state = ?",
+            (unit.label, artifact_id, artifacts.SOLVING),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return
         solved = _solve_one(conn, artifact_id, class_id, config, unit)
         _settle_parent(conn, unit)
         if solved:
@@ -726,7 +831,7 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
             )
             raise LyraError(ENDPOINT_SUSPECT_MESSAGE)
 
-    if _current_state(conn, artifact_id) == artifacts.CANCELLED:
+    if _current_state(conn, artifact_id) != artifacts.SOLVING:
         return
     # Re-read rather than trusted from the loop, because a resumed run's `units` carry the
     # statuses they had when the run began. A set in which not one problem was solved -
@@ -734,7 +839,12 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
     statuses = [str(artifacts.get_part(conn, unit.id)["status"]) for unit in units]
     if statuses and all(status == artifacts.PART_FAILED for status in statuses):
         raise LyraError(NOTHING_SOLVED_MESSAGE)
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.READY)
+    conn.execute(
+        "update artifacts set state = ?, stage_detail = null, updated_at = datetime('now') "
+        "where id = ? and state = ?",
+        (artifacts.READY, artifact_id, artifacts.SOLVING),
+    )
+    conn.commit()
 
 
 def _solve_one(

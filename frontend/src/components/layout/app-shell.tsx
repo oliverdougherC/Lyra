@@ -70,7 +70,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       open={open && !immersive}
       onOpenChange={handleOpenChange}
       style={SIDEBAR_STYLE}
-      className="h-svh overflow-hidden"
+      // Viewport units grow with CSS text zoom; fixed edges keep the composer inside
+      // the actual window instead of below it when the reader enlarges the interface.
+      className="fixed inset-0 min-h-0 overflow-hidden print:static print:overflow-visible"
     >
       <a
         href="#main-content"

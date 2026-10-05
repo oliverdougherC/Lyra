@@ -168,5 +168,5 @@ def test_frozen_smoke_overrides_inherited_database_before_spawn(tmp_path, monkey
         )
         assert not outside.exists()
     finally:
-        # Popen intentionally never ran, so remove only the harness-generated empty root.
-        root.parent.rmdir()
+        # Spawn failure must also reclaim the harness-generated profile.
+        assert not root.parent.exists()

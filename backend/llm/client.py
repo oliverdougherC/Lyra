@@ -936,9 +936,11 @@ async def complete(
         )
 
     choices = payload.get("choices") if isinstance(payload, dict) else None
-    if not choices:
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise UpstreamError(_ERROR_UNREADABLE)
-    message = choices[0].get("message") or {}
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        raise UpstreamError(_ERROR_UNREADABLE)
     content = message.get("content")
     if not isinstance(content, str):
         raise UpstreamError(_ERROR_UNREADABLE)
@@ -1264,7 +1266,7 @@ async def complete_with_tools(
             raise UpstreamError(_ERROR_UNREADABLE) from exc
 
     choices = payload.get("choices") if isinstance(payload, dict) else None
-    if not choices:
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise UpstreamError(_ERROR_UNREADABLE)
     message = choices[0].get("message")
     if not isinstance(message, dict):

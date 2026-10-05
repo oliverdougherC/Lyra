@@ -5,6 +5,8 @@ import { useCallback, useSyncExternalStore } from 'react'
 type Primitive = string | number | boolean
 
 const listeners = new Map<string, Set<() => void>>()
+// Preferences still work for this window when storage is denied or full.
+const unsavedValues = new Map<string, string>()
 
 function notify(key: string): void {
   for (const listener of listeners.get(key) ?? []) listener()
@@ -32,19 +34,29 @@ export function useLocalStorageState<T extends Primitive>(
       }
       forKey.add(callback)
       // Another tab writing the same key should move this one too.
-      window.addEventListener('storage', callback)
+      const onStorage = (event: StorageEvent) => {
+        if (event.key !== null && event.key !== key) return
+        unsavedValues.delete(key)
+        callback()
+      }
+      window.addEventListener('storage', onStorage)
       return () => {
         forKey.delete(callback)
-        window.removeEventListener('storage', callback)
+        if (forKey.size === 0) listeners.delete(key)
+        window.removeEventListener('storage', onStorage)
       }
     },
     [key],
   )
 
   const getSnapshot = useCallback(() => {
-    const raw = localStorage.getItem(key)
-    if (raw === null) return fallback
-    return parse(raw) ?? fallback
+    try {
+      const raw = unsavedValues.get(key) ?? localStorage.getItem(key)
+      if (raw === null) return fallback
+      return parse(raw) ?? fallback
+    } catch {
+      return fallback
+    }
   }, [key, fallback, parse])
 
   const getServerSnapshot = useCallback(() => fallback, [fallback])
@@ -53,7 +65,13 @@ export function useLocalStorageState<T extends Primitive>(
 
   const setValue = useCallback(
     (next: T) => {
-      localStorage.setItem(key, String(next))
+      const raw = String(next)
+      try {
+        localStorage.setItem(key, raw)
+        unsavedValues.delete(key)
+      } catch {
+        unsavedValues.set(key, raw)
+      }
       notify(key)
     },
     [key],

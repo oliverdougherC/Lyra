@@ -12,6 +12,7 @@ count that matters is asked of the tokenizer that will actually be used.
 """
 
 import logging
+import math
 import re
 
 import httpx
@@ -273,7 +274,7 @@ def _parse_vectors(payload: object, expected_count: int) -> list[list[float]]:
             raise UpstreamError(_BAD_RESPONSE_MESSAGE)
         index = item.get("index", position)
         embedding = item.get("embedding")
-        if not isinstance(index, int) or not isinstance(embedding, list):
+        if type(index) is not int or not isinstance(embedding, list):
             raise UpstreamError(_BAD_RESPONSE_MESSAGE)
         # A reply must account for exactly every input once (the same rule `_scores` in
         # `rag/rerank.py` enforces). Without it a repeated or out-of-range index passes
@@ -289,6 +290,19 @@ def _parse_vectors(payload: object, expected_count: int) -> list[list[float]]:
                 f"The local embedding server returned vectors of length {len(embedding)}, "
                 f"but {EMBEDDING_DIM} are required. The wrong model may be loaded."
             )
+        # Invalid numbers must fail at the provider boundary, before sqlite-vec can
+        # persist unusable distances or struct packing leaks an internal exception.
+        try:
+            valid = all(
+                type(value) in (int, float)
+                and math.isfinite(value)
+                and abs(value) <= 3.4028234663852886e38  # sqlite-vec stores float32.
+                for value in embedding
+            )
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise UpstreamError(_BAD_RESPONSE_MESSAGE)
         indexed.append((index, embedding))
 
     # The OpenAI embeddings schema does not promise the response preserves input order, so

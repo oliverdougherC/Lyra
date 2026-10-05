@@ -418,18 +418,22 @@ def begin_writer_run(
 def create_draft(class_id: int, payload: DraftCreate, conn: DbConn) -> dict[str, object]:
     """A draft is born empty and ready; the first AI pass comes through `/pass`."""
     get_class(conn, class_id)
-    created = artifacts.create_artifact(
-        conn, class_id, payload.title, [], kind=artifacts.KIND_DRAFT
-    )
-    artifacts.create_part(
-        conn,
-        int(created["id"]),
-        artifacts.DRAFT_BODY,
-        1,
-        content="",
-        status=artifacts.PART_COMPLETE,
-    )
-    artifacts.set_artifact_state(conn, int(created["id"]), artifacts.READY)
+    # A draft without its body cannot be opened or repaired by the workspace. Publish
+    # both together, and roll back the artifact if creating its body fails.
+    with conn:
+        created = artifacts.create_artifact(
+            conn, class_id, payload.title, [], kind=artifacts.KIND_DRAFT, commit=False
+        )
+        artifacts.create_part(
+            conn,
+            int(created["id"]),
+            artifacts.DRAFT_BODY,
+            1,
+            content="",
+            status=artifacts.PART_COMPLETE,
+            commit=False,
+        )
+        artifacts.set_artifact_state(conn, int(created["id"]), artifacts.READY)
     touch_class(conn, class_id)
     return artifacts.get_artifact(conn, int(created["id"]))
 
