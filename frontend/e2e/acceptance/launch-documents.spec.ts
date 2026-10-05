@@ -7,6 +7,7 @@
  */
 
 import { test, expect } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import {
   apiGet,
@@ -21,10 +22,15 @@ const TEST_DATA = resolve(__dirname, 'test-data')
 
 test.describe('Launch and documents', () => {
   let classId: number
+  const className = `Acceptance: Thermodynamics ${randomUUID()}`
 
   test.beforeAll(async () => {
-    const cls = await createClass('Acceptance: Thermodynamics')
+    const cls = await createClass(className)
     classId = cls.id
+  })
+
+  test.afterAll(async () => {
+    if (classId) await apiDelete(`/api/classes/${classId}`)
   })
 
   test('health endpoint reports ready', async () => {
@@ -37,7 +43,7 @@ test.describe('Launch and documents', () => {
 
   test('home page renders the created class', async ({ page }) => {
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Acceptance: Thermodynamics' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: className, exact: true })).toBeVisible()
   })
 
   test('upload supported text document and reach ready', async () => {
