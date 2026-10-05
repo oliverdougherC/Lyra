@@ -132,12 +132,10 @@ impl NativeChatOwner {
         if request_id == 0 || !self.matches_host(&self.host_id) {
             return None;
         }
-        self.client_presentation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (request_id > current).then_some(request_id)
-            })
-            .ok()
-            .map(|_| self.presentation.load(Ordering::Acquire))
+        let previous = self
+            .client_presentation
+            .fetch_max(request_id, Ordering::AcqRel);
+        (request_id > previous).then(|| self.presentation.load(Ordering::Acquire))
     }
 
     fn may_present_request(&self, request_id: u64, native_sequence: u64) -> bool {

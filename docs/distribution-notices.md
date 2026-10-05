@@ -6,6 +6,9 @@ license inventory, and locked Cargo metadata. It conservatively includes build d
 preserves available license/NOTICE text. Local source locations are not included in the inventory.
 Pinned llama.cpp source license files are retained under `packaging/notices`, with source commit
 and archive checksum. The b10287 server does not support `--license`.
+The vendored shadcn 4.16.1 Tailwind stylesheet retains its MIT attribution in
+`packaging/notices/shadcn-NOTICES.txt`; the build copies that notice into the app alongside
+the dependency notices. The stylesheet is retained locally without the component-generator CLI.
 
 This collection is attribution evidence, not a new license for Lyra or certification of compliance.
 Lyra source is licensed under [Apache License 2.0](../LICENSE). PyMuPDF 1.28.0 metadata explicitly
