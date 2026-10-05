@@ -19,6 +19,18 @@ prerequisites.
 ## If the app starts but looks wrong
 
 - Reopen `Lyra.app`. If only a source build looks stale, rebuild the Vite assets and `.app`.
+- If browser preference storage is unavailable or full, theme and layout preferences still work
+  for the current window, but may reset after reopening. This does not change where saved course
+  documents and drafts are stored.
+
+## If a source preview fails or points to the wrong place
+
+- Use **Retry source** after a source lookup fails, or **Retry page** if the page itself fails to
+  load. A temporary lookup failure does not mean the document was deleted.
+- Newly processed rotated PDFs use the displayed page orientation for figure crops and source
+  highlights. Coordinates already saved by older builds are not rewritten automatically.
+  Reindex the affected document to refresh extracted figures, and regenerate the affected solution
+  provenance to refresh saved highlights. Preserve any manually corrected work before regenerating.
 
 ## If the draft editor cannot open
 

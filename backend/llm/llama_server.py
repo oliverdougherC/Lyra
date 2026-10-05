@@ -685,7 +685,18 @@ class LlamaServer:
                 idle_timeout_seconds=self.idle_timeout_seconds,
                 detail=download_detail,
             )
-        with self._lock:
+        # Startup holds this lock through model loading and its health wait. A
+        # status poll must not queue behind that wait (including the race where
+        # loading starts just after the download check above). Report the transient
+        # lifecycle state until a coherent snapshot can be taken on the next poll.
+        if not self._lock.acquire(blocking=False):
+            return HelperStatus(
+                state="loading",
+                lease_count=0,
+                owned=True,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+            )
+        try:
             stop_pending = self._stop_pending
             starting = self._starting
             lease_count = self._lease_count
@@ -696,6 +707,8 @@ class LlamaServer:
             failed_at = self._failed_at
             idle_since = self._idle_since
             last_stop_reason = self._last_stop_reason
+        finally:
+            self._lock.release()
 
         if stop_pending:
             return HelperStatus(

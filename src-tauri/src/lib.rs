@@ -1187,7 +1187,11 @@ impl StartupDiagnostics {
 fn read_readiness<R: Read + Send + 'static>(stdout: R) -> Result<SidecarReady, LaunchError> {
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::with_capacity(256);
-    let read = reader.read_until(b'\n', &mut line)?;
+    // Limit consumption before looking for a newline: a noisy or broken sidecar
+    // must not grow this allocation until the startup deadline.
+    let read = (&mut reader)
+        .take((MAX_READY_LINE_BYTES + 1) as u64)
+        .read_until(b'\n', &mut line)?;
     if read == 0 {
         return Err(LaunchError::invalid_readiness(
             "stdout closed before a readiness line arrived",
@@ -2094,6 +2098,25 @@ raise SystemExit("unsupported startup fixture mode")
                 session_secret: "a".repeat(64),
             }
         );
+    }
+
+    #[test]
+    fn rejects_unterminated_oversized_readiness_before_reading_more_output() {
+        struct NoisyReadiness {
+            reads: usize,
+        }
+        impl Read for NoisyReadiness {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                if self.reads > 1 {
+                    return Err(std::io::Error::other("read past the readiness bound"));
+                }
+                buffer.fill(b'x');
+                Ok(buffer.len())
+            }
+        }
+        let error = read_readiness(NoisyReadiness { reads: 0 }).unwrap_err();
+        assert!(error.to_string().contains("exceeded the 512 byte limit"));
     }
 
     #[test]

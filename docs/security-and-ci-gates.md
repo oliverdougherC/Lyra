@@ -18,7 +18,7 @@ The aggregate gate currently requires these lanes:
 | --- | --- |
 | `backend` | `ruff format --check`, `ruff check`, full `pytest` |
 | `backend-targeted` | mocked Exa, helper lifecycle, path/auth, readiness, and packaging-helper regression tests |
-| `frontend` | `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm audit --prod`, `pnpm test:e2e` |
+| `frontend` | `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm audit` (including build/test tools), `pnpm test:e2e` |
 | `acceptance` | real-backend Playwright acceptance against the built frontend |
 | `python-security` | locked production Python dependency audit from `uv.lock` |
 | `packaged-python-smoke` | import/resource smoke for the Python modules and packaged resources the desktop build needs |

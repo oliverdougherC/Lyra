@@ -172,6 +172,41 @@ describe('native chat host ownership', () => {
     h.unmount()
   })
 
+  it('keeps native scrolling in control when an active transcript receives another publication', async () => {
+    const first: Snapshot = { scope: 'class:one', rows: [row('a')], agent: true }
+    const h = harness(first)
+    await waitFor(() => expect(h.last('native_chat_render')).toBeTruthy())
+    const sent = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    act(() =>
+      action({
+        kind: 'content-ready',
+        hostId: sent.hostId,
+        scope: sent.scope,
+        version: sent.version,
+      }),
+    )
+    await waitFor(() => expect(h.current().active).toBe(true))
+    const showCount = h.calls.filter((call) => call.command === 'native_chat_show').length
+    h.rerender({ snapshot: { ...first, rows: [row('a extended')] }, occluded: false })
+    await waitFor(() =>
+      expect(
+        (h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot).version,
+      ).toBeGreaterThan(sent.version),
+    )
+    const next = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    await act(async () =>
+      action({
+        kind: 'content-ready',
+        hostId: next.hostId,
+        scope: next.scope,
+        version: next.version,
+      }),
+    )
+    expect(h.calls.filter((call) => call.command === 'native_chat_show')).toHaveLength(showCount)
+    expect(h.current().active).toBe(true)
+    h.unmount()
+  })
+
   it('unmounts on frame rejection and keeps the fallback visible', async () => {
     const h = harness({ scope: 'class:one', rows: [row('a')], agent: true })
     await waitFor(() => expect(h.last('native_chat_render')).toBeTruthy())

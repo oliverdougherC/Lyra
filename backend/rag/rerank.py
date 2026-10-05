@@ -13,6 +13,7 @@ model did not download gets slightly worse search, not a broken class.
 import enum
 import json
 import logging
+import math
 from dataclasses import dataclass
 
 import httpx
@@ -133,11 +134,17 @@ def _scores(payload: object, expected: int) -> list[float] | None:
         if not isinstance(result, dict):
             return None
         index, score = result.get("index"), result.get("relevance_score")
-        if not isinstance(index, int) or not isinstance(score, int | float):
+        if type(index) is not int or type(score) not in (int, float):
             return None
         if not 0 <= index < expected or scores[index] is not None:
             return None
-        scores[index] = float(score)
+        try:
+            numeric_score = float(score)
+        except OverflowError:
+            return None
+        if not math.isfinite(numeric_score):
+            return None
+        scores[index] = numeric_score
 
     if any(score is None for score in scores):
         return None

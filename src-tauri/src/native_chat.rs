@@ -132,12 +132,10 @@ impl NativeChatOwner {
         if request_id == 0 || !self.matches_host(&self.host_id) {
             return None;
         }
-        self.client_presentation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (request_id > current).then_some(request_id)
-            })
-            .ok()
-            .map(|_| self.presentation.load(Ordering::Acquire))
+        let previous = self
+            .client_presentation
+            .fetch_max(request_id, Ordering::AcqRel);
+        (request_id > previous).then(|| self.presentation.load(Ordering::Acquire))
     }
 
     fn may_present_request(&self, request_id: u64, native_sequence: u64) -> bool {
@@ -417,29 +415,35 @@ mod macos {
             let (tx, rx) = mpsc::channel();
             let host_id_c = std::ffi::CString::new(host_id.as_str())
                 .map_err(|_| "The native chat host is invalid")?;
-            child
-                .with_webview(move |platform| {
-                    let scroll = unsafe {
-                        lyra_native_chat_attach(
-                            platform.ns_window(),
-                            platform.inner(),
-                            rect.x,
-                            rect.top,
-                            rect.width,
-                            rect.height,
-                            host_id_c.as_ptr(),
-                        )
-                    };
-                    if tx.send(scroll as usize).is_err() && !scroll.is_null() {
-                        // The blocking mount timed out. This callback still owns the retained
-                        // view and is already on the main thread, so release it here.
-                        unsafe { lyra_native_chat_detach(scroll) };
-                    }
-                })
-                .map_err(|_| "The native chat scroll view could not be attached")?;
-            let scroll = rx
-                .recv_timeout(Duration::from_secs(5))
-                .map_err(|_| "The native chat scroll view did not become ready")?;
+            let attachment = child.with_webview(move |platform| {
+                let scroll = unsafe {
+                    lyra_native_chat_attach(
+                        platform.ns_window(),
+                        platform.inner(),
+                        rect.x,
+                        rect.top,
+                        rect.width,
+                        rect.height,
+                        host_id_c.as_ptr(),
+                    )
+                };
+                if tx.send(scroll as usize).is_err() && !scroll.is_null() {
+                    // The blocking mount timed out. This callback still owns the retained
+                    // view and is already on the main thread, so release it here.
+                    unsafe { lyra_native_chat_detach(scroll) };
+                }
+            });
+            if attachment.is_err() {
+                let _ = child.close();
+                return Err("The native chat scroll view could not be attached".into());
+            }
+            let scroll = match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(scroll) => scroll,
+                Err(_) => {
+                    let _ = child.close();
+                    return Err("The native chat scroll view did not become ready".into());
+                }
+            };
             if scroll == 0 {
                 let _ = child.close();
                 return Err("The native chat scroll view could not be attached".into());
@@ -648,22 +652,29 @@ mod macos {
                 let scroll = current.scroll;
                 let owner = Arc::clone(&current.owner);
                 let (tx, rx) = mpsc::channel();
-                child
-                    .with_webview(move |platform| {
-                        let result = owner.matches_host(&owner.host_id)
-                            && unsafe {
-                                lyra_native_chat_add_section(
-                                    scroll as *mut c_void,
-                                    platform.inner(),
-                                )
-                            };
-                        let _ = tx.send(result);
-                    })
-                    .map_err(|_| "A chat section could not be attached")?;
-                if !rx
-                    .recv_timeout(Duration::from_secs(5))
-                    .map_err(|_| "A chat section did not become ready")?
-                {
+                let attachment = child.with_webview(move |platform| {
+                    let result = owner.matches_host(&owner.host_id)
+                        && unsafe {
+                            lyra_native_chat_add_section(scroll as *mut c_void, platform.inner())
+                        };
+                    if tx.send(result).is_err() && result {
+                        // The render timed out before registering this section. Undo
+                        // its attachment here, while still on the main thread.
+                        unsafe { lyra_native_chat_remove_last_section(scroll as *mut c_void) };
+                    }
+                });
+                if attachment.is_err() {
+                    let _ = child.close();
+                    return Err("A chat section could not be attached".into());
+                }
+                let attached = match rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(attached) => attached,
+                    Err(_) => {
+                        let _ = child.close();
+                        return Err("A chat section did not become ready".into());
+                    }
+                };
+                if !attached {
                     let _ = child.close();
                     return Err("A chat section could not be attached".into());
                 }

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
+import { OBSERVATION_ERROR_POLL_MS } from '@/lib/hooks/polling-policy'
 import type { PartStatus, SegmentationUpdate, SolutionCreate, SolutionState } from '@/types'
 
 export const solutionKeys = {
@@ -29,6 +30,13 @@ export function useSolutions(classId: number, enabled = true) {
     queryKey: solutionKeys.list(classId),
     queryFn: ({ signal }) => api.listSolutions(classId, signal),
     enabled: enabled && Number.isFinite(classId),
+    refetchInterval: (query) =>
+      query.state.error
+        ? OBSERVATION_ERROR_POLL_MS
+        : query.state.data?.some((solution) => !isSettled(solution.state))
+          ? 1500
+          : false,
+    refetchOnWindowFocus: 'always',
   })
 }
 
@@ -59,6 +67,7 @@ export function useSolutionStatus(artifactId: number, enabled = true) {
     queryFn: ({ signal }) => api.getSolutionStatus(artifactId, signal),
     enabled: enabled && Number.isFinite(artifactId),
     refetchInterval: (query) => {
+      if (query.state.error) return OBSERVATION_ERROR_POLL_MS
       const status = query.state.data
       if (!status) return 500
       const working =
@@ -68,6 +77,7 @@ export function useSolutionStatus(artifactId: number, enabled = true) {
       const polls = query.state.dataUpdateCount
       return Math.min(500 + polls * 250, 2000)
     },
+    refetchOnWindowFocus: 'always',
   })
 }
 

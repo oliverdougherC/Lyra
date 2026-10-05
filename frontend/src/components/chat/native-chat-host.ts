@@ -109,6 +109,7 @@ export function useNativeChatHost(
       if (
         !belongs(owner) ||
         !owner.mounted ||
+        activeRef.current ||
         occludedRef.current ||
         owner.readyScope !== payload.scope
       )

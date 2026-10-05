@@ -8,7 +8,9 @@
  */
 
 import { test, expect } from '@playwright/test'
+import { randomUUID } from 'node:crypto'
 import {
+  apiDelete,
   createClass,
   createDraft,
   navigateToChat,
@@ -23,8 +25,12 @@ test.describe('Accessibility: keyboard and focus', () => {
   let classId: number
 
   test.beforeAll(async () => {
-    const cls = await createClass('Acceptance: A11y')
+    const cls = await createClass(`Acceptance: A11y ${randomUUID()}`)
     classId = cls.id
+  })
+
+  test.afterAll(async () => {
+    if (classId) await apiDelete(`/api/classes/${classId}`)
   })
 
   test.afterEach(async () => {
@@ -32,19 +38,35 @@ test.describe('Accessibility: keyboard and focus', () => {
   })
 
   test('home page: class links are reachable by keyboard', async ({ page, browserName }) => {
-    await page.goto('/')
-    const classLink = page.locator(`#main-content a[href$="/classes/${classId}"]`)
-    await expect(classLink).toBeVisible()
+    const extraClassIds: number[] = []
+    try {
+      // Other browser projects share the backend. Exercise a realistic long list so
+      // keyboard reachability cannot accidentally depend on this file running first.
+      for (let i = 0; i < 45; i++) {
+        const extra = await createClass(`A11y navigation ${i} ${randomUUID()}`)
+        extraClassIds.push(extra.id)
+      }
+      await page.goto('/')
+      const classLink = page.locator(`#main-content a[href$="/classes/${classId}"]`)
+      await expect(classLink).toBeVisible()
 
-    // macOS WebKit includes links/buttons with Option-Tab when full keyboard access is off.
-    const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
-    for (let i = 0; i < 40; i++) {
-      await page.keyboard.press(tab)
-      if (await classLink.evaluate((element) => document.activeElement === element)) break
+      // macOS WebKit includes links/buttons with Option-Tab when full keyboard access is off.
+      const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
+      const tabStops = await page
+        .locator(
+          'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )
+        .count()
+      for (let i = 0; i <= tabStops; i++) {
+        await page.keyboard.press(tab)
+        if (await classLink.evaluate((element) => document.activeElement === element)) break
+      }
+      await expect(classLink).toBeFocused()
+      await page.keyboard.press('Enter')
+      await expect(page).toHaveURL(new RegExp(`/classes/${classId}(?:[?]|$)`))
+    } finally {
+      for (const id of extraClassIds) await apiDelete(`/api/classes/${id}`)
     }
-    await expect(classLink).toBeFocused()
-    await page.keyboard.press('Enter')
-    await expect(page).toHaveURL(new RegExp(`/classes/${classId}(?:[?]|$)`))
   })
 
   test('chat composer: Enter sends a message and focus returns to the composer', async ({

@@ -117,8 +117,8 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
-      - name: Audit production dependencies
-        run: pnpm audit --prod
+      - name: Audit frontend and build dependencies
+        run: pnpm audit
 
       - name: Install Playwright Chromium and WebKit
         run: pnpm exec playwright install --with-deps chromium webkit

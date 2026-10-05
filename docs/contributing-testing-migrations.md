@@ -28,7 +28,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm audit --prod
+pnpm audit
 pnpm test:e2e
 ```
 

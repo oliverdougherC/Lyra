@@ -16,12 +16,14 @@ import { isolatedBackendEnvironment } from './backend-environment'
 
 import { test, expect } from '@playwright/test'
 import { execSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, unlink } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
   apiGet,
+  apiDelete,
   apiPut,
   apiPost,
   apiPatch,
@@ -93,9 +95,34 @@ test.describe('Credentials and recovery', () => {
 })
 
 test.describe('Backup and restore', () => {
+  const ownedClassIds = new Set<number>()
+  const temporaryDirectories = new Set<string>()
+
+  async function fixtureClass(name: string) {
+    const cls = await createClass(`${name} ${randomUUID()}`)
+    ownedClassIds.add(cls.id)
+    return cls
+  }
+
+  async function temporaryDirectory(prefix: string) {
+    const path = await mkdtemp(join(tmpdir(), prefix))
+    temporaryDirectories.add(path)
+    return path
+  }
+
+  test.afterEach(async () => {
+    try {
+      for (const id of ownedClassIds) await apiDelete(`/api/classes/${id}`)
+    } finally {
+      ownedClassIds.clear()
+      for (const path of temporaryDirectories) await rm(path, { recursive: true, force: true })
+      temporaryDirectories.clear()
+    }
+  })
+
   test('real backup() creates archive, real restore() recovers entities', async () => {
     // Create data worth backing up
-    const cls = await createClass('Backup Test Class')
+    const cls = await fixtureClass('Backup Test Class')
     const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
     const docData = await doc.json()
     await waitForDocumentReady(docData.id, 30_000)
@@ -106,9 +133,9 @@ test.describe('Backup and restore', () => {
     const dataDir = state!.dataDir
     expect(dataDir).toBeTruthy()
 
-    const backupDir = await mkdtemp(join(tmpdir(), 'lyra-backup-'))
+    const backupDir = await temporaryDirectory('lyra-backup-')
     const archivePath = join(backupDir, 'backup.tar.gz')
-    const restoreParent = await mkdtemp(join(tmpdir(), 'lyra-restore-'))
+    const restoreParent = await temporaryDirectory('lyra-restore-')
     const restoreDir = join(restoreParent, 'data')
 
     // Call real backup() with monkeypatched load_runtime, stop_supervised_stack,
@@ -194,12 +221,12 @@ print(json.dumps({
     const result = JSON.parse(verifyOutput.trim())
     expect(result.rc).toBe(0)
     expect(result.integrity).toBe('ok')
-    expect(result.class_names).toContain('Backup Test Class')
+    expect(result.class_names).toContain(cls.name)
     expect(result.document_count).toBeGreaterThan(0)
   })
 
   test('backup archive round-trips: backup → corrupt data → restore → verify', async () => {
-    const cls = await createClass('Round-Trip Class')
+    const cls = await fixtureClass('Round-Trip Class')
     const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'supplement.md'), 'supplement.md')
     const docData = await doc.json()
     await waitForDocumentReady(docData.id, 30_000)
@@ -208,7 +235,7 @@ print(json.dumps({
     expect(state).toBeTruthy()
     const dataDir = state!.dataDir
 
-    const backupDir = await mkdtemp(join(tmpdir(), 'lyra-roundtrip-'))
+    const backupDir = await temporaryDirectory('lyra-roundtrip-')
     const archivePath = join(backupDir, 'roundtrip.tar.gz')
 
     // Create backup
@@ -251,7 +278,7 @@ print(json.dumps({'valid': True, 'version': manifest.get('version')}))
   })
 
   test('injected archive failure leaves no corrupt final archive; retry succeeds and restores', async () => {
-    const cls = await createClass('Backup Failure Test')
+    const cls = await fixtureClass('Backup Failure Test')
     const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
     const docData = await doc.json()
     await waitForDocumentReady(docData.id, 30_000)
@@ -260,7 +287,7 @@ print(json.dumps({'valid': True, 'version': manifest.get('version')}))
     expect(state).toBeTruthy()
     const dataDir = state!.dataDir
 
-    const backupDir = await mkdtemp(join(tmpdir(), 'lyra-failbackup-'))
+    const backupDir = await temporaryDirectory('lyra-failbackup-')
     const archivePath = join(backupDir, 'backup.tar.gz')
 
     // Inject failure: make the archive target read-only so the hardlink
@@ -374,7 +401,7 @@ print(json.dumps({
     const result = JSON.parse(restoreOutput.trim())
     expect(result.rc).toBe(0)
     expect(result.integrity).toBe('ok')
-    expect(result.class_names).toContain('Backup Failure Test')
+    expect(result.class_names).toContain(cls.name)
     expect(result.document_count).toBeGreaterThan(0)
   })
 
@@ -384,7 +411,7 @@ print(json.dumps({
     // Build a REPRESENTATIVE pre-disaster state covering every entity type a student would
     // lose without a backup: class, ready document, tutor session with a durable exchange,
     // flashcard deck with generated cards, draft with non-empty body + snapshot/revision.
-    const cls = await createClass('DR Class')
+    const cls = await fixtureClass('DR Class')
     const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
     const docData = (await doc.json()) as { id: number }
     await waitForDocumentReady(docData.id, 30_000)
@@ -443,7 +470,7 @@ print(json.dumps({
     expect(state).toBeTruthy()
     const dataDir = state!.dataDir
 
-    const backupDir = await mkdtemp(join(tmpdir(), 'lyra-dr-'))
+    const backupDir = await temporaryDirectory('lyra-dr-')
     const archivePath = join(backupDir, 'dr-backup.tar.gz')
     execSync(
       `uv run python -c "
@@ -553,12 +580,11 @@ sys.exit(rc)
       const classesRes = await fetch(`${drBase}/api/classes`, { headers: H })
       expect(classesRes.status).toBe(200)
       const classes = (await classesRes.json()) as Array<{ id: number; name: string }>
-      const restoredClass = classes.find((c) => c.name === 'DR Class')
+      const restoredClass = classes.find((c) => c.id === cls.id)
       expect(
         restoredClass,
         'restored class should have the pre-backup name, not CORRUPTED',
-      ).toBeTruthy()
-      expect(classes.some((c) => c.name === 'CORRUPTED DR Class')).toBe(false)
+      ).toMatchObject({ id: cls.id, name: cls.name })
 
       // The session's durable exchange is readable.
       const msgsRes = await fetch(`${drBase}/api/sessions/${session.id}/messages`, { headers: H })

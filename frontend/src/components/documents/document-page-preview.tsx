@@ -47,8 +47,12 @@ export function DocumentPagePreview({
             documentPagePath(documentId, page),
             controller.signal,
           )
+          if (controller.signal.aborted) {
+            asset.release?.()
+            return
+          }
           release = asset.release
-          if (!controller.signal.aborted) setPreview({ kind: 'image', url: asset.url })
+          setPreview({ kind: 'image', url: asset.url })
         } else if (page === 1) {
           const text = await api.getDocumentText(documentId, controller.signal)
           if (!controller.signal.aborted)
@@ -77,7 +81,19 @@ export function DocumentPagePreview({
         </DialogHeader>
         <div className="min-h-0 overflow-auto">
           {documents.isPending ? <p role="status">Loading source…</p> : null}
-          {documents.isError || (documents.data && !document) ? (
+          {documents.isError ? (
+            <div role="alert" className="space-y-2">
+              <p>Could not load the source. Try again.</p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={documents.isFetching}
+                onClick={() => void documents.refetch()}
+              >
+                Retry source
+              </Button>
+            </div>
+          ) : documents.data && !document ? (
             <p role="alert">This source is no longer in this class.</p>
           ) : null}
           {document && !preview && !error ? <p role="status">Opening page…</p> : null}
@@ -89,13 +105,14 @@ export function DocumentPagePreview({
               </Button>
             </div>
           ) : null}
-          {preview?.kind === 'image' ? (
+          {!error && document && preview?.kind === 'image' ? (
             <img
               src={preview.url}
               alt={`${document ? effectiveDocumentName(document) : 'Source'}, page ${page}`}
               className="mx-auto h-auto max-w-full"
+              onError={() => setError(true)}
             />
-          ) : preview?.kind === 'text' ? (
+          ) : !error && document && preview?.kind === 'text' ? (
             <div>
               <pre className="font-sans text-sm whitespace-pre-wrap">{preview.text}</pre>
               {preview.truncated ? (
