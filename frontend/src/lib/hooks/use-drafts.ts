@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { api } from '@/lib/api'
+import { api, DraftBodyConflictError } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
 import { OBSERVATION_ERROR_POLL_MS } from '@/lib/hooks/polling-policy'
 import { solutionKeys } from '@/lib/hooks/use-solutions'
@@ -11,6 +11,7 @@ import type {
   ArtifactState,
   BriefWrite,
   DraftBodyUpdate,
+  DraftDetail,
   DraftPlanUpdate,
   DraftPlan,
   DraftStatus,
@@ -185,19 +186,44 @@ export function useDeleteDraft(classId: number) {
 }
 
 /**
- * The autosave mutation, and deliberately not an invalidating one: refetching the detail
- * under the writer's cursor would reset the editor they are typing in. A snapshot is a
- * history point, so it alone invalidates the revision list.
+ * Publish acknowledged body versions to the detail cache without refetching under the
+ * writer's cursor. Once a clean save session retires, a quick route re-entry seeds the
+ * next editor from this cache; leaving its old body here would falsely show Saved and
+ * make the next edit conflict with this window's own successful save.
  */
 export function useUpdateBody(draftId: number) {
   const queryClient = useQueryClient()
+  async function publishBody(content: string, version: number) {
+    const queryKey = draftKeys.detail(draftId)
+    // A detail read started before this write can still carry the previous body.
+    // Cancel it before publishing the acknowledgement so it cannot roll the cache back.
+    await queryClient.cancelQueries({ queryKey, exact: true })
+    queryClient.setQueryData<DraftDetail>(queryKey, (current) => {
+      if (!current || current.body_version > version) return current
+      return { ...current, body: content, body_version: version }
+    })
+    // An evicted/unloaded detail has no metadata to seed safely. Restart any active
+    // read after the write instead of leaving its cancelled initial load pending.
+    if (!queryClient.getQueryData(queryKey)) {
+      await queryClient.invalidateQueries({ queryKey, exact: true })
+    }
+  }
   return useMutation({
     mutationFn: (body: DraftBodyUpdate) => api.updateDraftBody(draftId, body),
-    onSuccess: (result, body) => {
+    onSuccess: async (result, body) => {
+      await publishBody(body.content, result.version)
       if (body.snapshot) {
         queryClient.invalidateQueries({
           queryKey: solutionKeys.revisions(draftId, result.part_id),
         })
+      }
+    },
+    onError: async (error) => {
+      // A version conflict also proves the server's body. The engine may adopt it
+      // as an acknowledged save when a prior success response was lost, or the user
+      // may choose that version in the conflict dialog. Neither path may reopen stale text.
+      if (error instanceof DraftBodyConflictError) {
+        await publishBody(error.serverBody, error.currentVersion)
       }
     },
   })

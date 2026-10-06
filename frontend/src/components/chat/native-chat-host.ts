@@ -262,6 +262,11 @@ export function useNativeChatHost(
         fail(owner)
         return
       }
+      if (action.kind === 'toggle-sidebar') {
+        if (activeRef.current && !occludedRef.current)
+          window.dispatchEvent(new Event('lyra:toggle-sidebar'))
+        return
+      }
       if (action.kind === 'retry') {
         const row = payload.rows.find((item) => item.key === action.rowKey)
         if (row?.retryAction === action.action) callbacksRef.current.onRetry(action.action, row.key)
@@ -326,14 +331,24 @@ export function useNativeChatHost(
     void queueLifetime('native_chat_mount', {
       hostId: owner.hostId,
       rect: nativeChatRect(host),
-    }).then(
-      () => {
-        if (!belongs(owner)) return
-        owner.mounted = true
-        sendSnapshot()
-      },
-      () => fail(owner),
-    )
+    })
+      .then(
+        async () => {
+          if (!belongs(owner)) return
+          // Layout may change while the native child is being created. Its initial
+          // rectangle and any resize notifications from that interval are stale.
+          await callNativeChat('native_chat_set_frame', {
+            hostId: owner.hostId,
+            rect: nativeChatRect(host),
+          })
+          if (!belongs(owner)) return
+          owner.mounted = true
+          schedulePosition()
+          sendSnapshot()
+        },
+        () => fail(owner),
+      )
+      .catch(() => fail(owner))
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', schedulePosition)

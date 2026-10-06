@@ -48,6 +48,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Learning quality causal follow-up](learning-followup-evidence/README.md) | Candidate evidence; reviewed PR #80 preserved |
 | [PLA-461 local Guide quality pass — September 8, 2026](local-guide-quality-20260908.md) | Candidate/incident evidence; recorded revision only |
 | [macOS Apple Silicon Release Checklist](macos-apple-silicon-release-checklist.md) | Maintained |
+| [Native usability repair — October 5, 2026](review-evidence/native-usability-20261005.md) | Candidate/incident evidence; native input and painting checks |
 | [Phase 2 Handoff](phase-2-handoff.md) | Historical record |
 | [Phase 3 Handoff](phase-3-handoff.md) | Historical record |
 | [Phase 3 Verification Handoff](phase-3-verification-handoff.md) | Historical record |
