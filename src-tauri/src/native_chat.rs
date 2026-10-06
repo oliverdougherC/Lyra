@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager, Webview};
 pub struct NativeChatState {
     inner: Arc<Mutex<Option<NativeChatHandle>>>,
     next_instance: AtomicU64,
+    document_epoch: Arc<AtomicU64>,
 }
 
 #[cfg(target_os = "macos")]
@@ -68,11 +69,15 @@ struct NativeChatOwner {
     presentation: AtomicU64,
     client_presentation: AtomicU64,
     live: AtomicBool,
+    document_epoch: Arc<AtomicU64>,
+    mounted_epoch: u64,
 }
 
 impl NativeChatOwner {
-    fn new(host_id: String, generation: u64) -> Self {
+    fn new(host_id: String, generation: u64, document_epoch: Arc<AtomicU64>) -> Self {
         Self {
+            mounted_epoch: document_epoch.load(Ordering::Acquire),
+            document_epoch,
             host_id,
             generation: AtomicU64::new(generation),
             geometry: AtomicU64::new(0),
@@ -84,7 +89,9 @@ impl NativeChatOwner {
     }
 
     fn matches_host(&self, host_id: &str) -> bool {
-        self.live.load(Ordering::Acquire) && self.host_id == host_id
+        self.live.load(Ordering::Acquire)
+            && self.document_epoch.load(Ordering::Acquire) == self.mounted_epoch
+            && self.host_id == host_id
     }
 
     fn may_run(&self, generation: u64) -> bool {
@@ -145,6 +152,16 @@ impl NativeChatOwner {
 
     fn deactivate(&self) {
         self.live.store(false, Ordering::Release);
+    }
+}
+
+fn take_stale_native_chat(slot: &mut Option<NativeChatHandle>) -> Option<NativeChatHandle> {
+    if slot.as_ref().is_some_and(|current| {
+        current.owner.document_epoch.load(Ordering::Acquire) != current.owner.mounted_epoch
+    }) {
+        slot.take()
+    } else {
+        None
     }
 }
 
@@ -219,6 +236,16 @@ fn current_action_version(
         }
 }
 
+fn scroll_key_code(action: &serde_json::Value) -> Option<u32> {
+    match action.get("key")?.as_str()? {
+        "PageUp" => Some(0),
+        "PageDown" => Some(1),
+        "Home" => Some(2),
+        "End" => Some(3),
+        _ => None,
+    }
+}
+
 fn valid_host_id(host_id: &str) -> bool {
     (8..=128).contains(&host_id.len())
         && host_id
@@ -278,12 +305,15 @@ mod macos {
         fn lyra_native_chat_attach(
             window: *mut c_void,
             webview: *mut c_void,
+            coordinate_view: *mut c_void,
             x: f64,
             top: f64,
             width: f64,
             height: f64,
             host_id: *const std::ffi::c_char,
         ) -> *mut c_void;
+        fn lyra_native_chat_retain_view(view: *mut c_void) -> *mut c_void;
+        fn lyra_native_chat_release_view(view: *mut c_void);
         fn lyra_native_chat_set_frame(
             scroll: *mut c_void,
             x: f64,
@@ -296,8 +326,58 @@ mod macos {
         fn lyra_native_chat_remove_last_section(scroll: *mut c_void);
         fn lyra_native_chat_scroll_to_bottom(scroll: *mut c_void);
         fn lyra_native_chat_set_scroll_ratio(scroll: *mut c_void, ratio: f64);
+        fn lyra_native_chat_scroll_key(scroll: *mut c_void, key: u32);
         fn lyra_native_chat_set_visible(scroll: *mut c_void, visible: bool);
         fn lyra_native_chat_detach(scroll: *mut c_void);
+    }
+
+    struct CoordinateViewLease {
+        view: usize,
+        app: AppHandle,
+    }
+
+    impl Drop for CoordinateViewLease {
+        fn drop(&mut self) {
+            let view = self.view;
+            let _ = self.app.run_on_main_thread(move || unsafe {
+                lyra_native_chat_release_view(view as *mut c_void);
+            });
+        }
+    }
+
+    // Call only from a blocking worker: an in-flight render can hold the state
+    // mutex while waiting for main-thread callbacks. Navigation must not lock it.
+    fn detach_handle<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+        current: NativeChatHandle,
+    ) -> Result<(), String> {
+        current.owner.deactivate();
+        let (tx, rx) = mpsc::channel();
+        app.run_on_main_thread(move || {
+            unsafe { lyra_native_chat_detach(current.scroll as *mut c_void) };
+            for child in current.webviews {
+                let _ = child.close();
+            }
+            let _ = tx.send(());
+        })
+        .map_err(|_| "The native chat view could not close")?;
+        rx.recv_timeout(Duration::from_secs(5))
+            .map_err(|_| "The native chat view did not close")?;
+        Ok(())
+    }
+
+    pub(crate) fn main_document_started<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+        let state = app.state::<NativeChatState>();
+        // Revocation is immediate even while an old mount/render holds the slot.
+        state.document_epoch.fetch_add(1, Ordering::AcqRel);
+        let inner = Arc::clone(&state.inner);
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let Ok(mut guard) = inner.lock() else { return };
+            if let Some(stale) = take_stale_native_chat(&mut guard) {
+                let _ = detach_handle(&app, stale);
+            }
+        });
     }
 
     fn handle(
@@ -366,10 +446,26 @@ mod macos {
         let state = app.state::<NativeChatState>();
         let inner = Arc::clone(&state.inner);
         let instance_id = state.next_instance.fetch_add(1, Ordering::Relaxed);
+        let owner = Arc::new(NativeChatOwner::new(
+            host_id.clone(),
+            0,
+            Arc::clone(&state.document_epoch),
+        ));
         tauri::async_runtime::spawn_blocking(move || {
             let mut guard = inner
                 .lock()
                 .map_err(|_| "Chat scroll state is unavailable")?;
+            if !owner.matches_host(&host_id) {
+                return Err("The desktop document is no longer current.".into());
+            }
+            // A new document may mount before the navigation cleanup worker gets
+            // the mutex. Reap the old slot here instead of falling back forever.
+            if let Some(stale) = take_stale_native_chat(&mut guard) {
+                detach_handle(&app, stale)?;
+            }
+            if !owner.matches_host(&host_id) {
+                return Err("The desktop document is no longer current.".into());
+            }
             if let Some(existing) = guard.as_ref() {
                 if existing.host_id != host_id {
                     return Err("Another native chat host is still mounted".into());
@@ -395,6 +491,26 @@ mod macos {
             let window = app
                 .get_window("main")
                 .ok_or("The desktop window is unavailable")?;
+            let main = app
+                .get_webview("main")
+                .ok_or("The desktop view is unavailable")?;
+            let (anchor_tx, anchor_rx) = mpsc::channel();
+            let anchor_app = app.clone();
+            main.with_webview(move |platform| {
+                let lease = CoordinateViewLease {
+                    view: unsafe { lyra_native_chat_retain_view(platform.inner()) } as usize,
+                    app: anchor_app,
+                };
+                // A timed-out receiver drops the lease too, on the main thread.
+                let _ = anchor_tx.send(lease);
+            })
+            .map_err(|_| "The desktop coordinates are unavailable")?;
+            let anchor = anchor_rx
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| "The desktop coordinates did not become ready")?;
+            if !owner.matches_host(&host_id) {
+                return Err("The desktop document is no longer current.".into());
+            }
             let builder = WebviewBuilder::new(
                 format!("native-chat-{instance_id}-0"),
                 WebviewUrl::App(format!("native-transcript.html?hostId={host_id}").into()),
@@ -415,18 +531,26 @@ mod macos {
             let (tx, rx) = mpsc::channel();
             let host_id_c = std::ffi::CString::new(host_id.as_str())
                 .map_err(|_| "The native chat host is invalid")?;
+            let attachment_owner = Arc::clone(&owner);
             let attachment = child.with_webview(move |platform| {
-                let scroll = unsafe {
-                    lyra_native_chat_attach(
-                        platform.ns_window(),
-                        platform.inner(),
-                        rect.x,
-                        rect.top,
-                        rect.width,
-                        rect.height,
-                        host_id_c.as_ptr(),
-                    )
+                let anchor = anchor;
+                let scroll = if attachment_owner.matches_host(&attachment_owner.host_id) {
+                    unsafe {
+                        lyra_native_chat_attach(
+                            platform.ns_window(),
+                            platform.inner(),
+                            anchor.view as *mut c_void,
+                            rect.x,
+                            rect.top,
+                            rect.width,
+                            rect.height,
+                            host_id_c.as_ptr(),
+                        )
+                    }
+                } else {
+                    std::ptr::null_mut()
                 };
+                drop(anchor);
                 if tx.send(scroll as usize).is_err() && !scroll.is_null() {
                     // The blocking mount timed out. This callback still owns the retained
                     // view and is already on the main thread, so release it here.
@@ -448,8 +572,8 @@ mod macos {
                 let _ = child.close();
                 return Err("The native chat scroll view could not be attached".into());
             }
-            *guard = Some(NativeChatHandle {
-                owner: Arc::new(NativeChatOwner::new(host_id.clone(), 0)),
+            let current = NativeChatHandle {
+                owner,
                 host_id,
                 instance_id,
                 webviews: vec![child],
@@ -461,7 +585,12 @@ mod macos {
                 scope: String::new(),
                 version: 0,
                 scroll,
-            });
+            };
+            if !current.owner.matches_host(&current.host_id) {
+                detach_handle(&app, current)?;
+                return Err("The desktop document is no longer current.".into());
+            }
+            *guard = Some(current);
             Ok(())
         })
         .await
@@ -762,6 +891,8 @@ mod macos {
                 | "reasoning-open"
                 | "navigate"
                 | "selection"
+                | "scroll-key"
+                | "toggle-sidebar"
         ) {
             return Err("The chat action is unavailable.".into());
         }
@@ -813,7 +944,7 @@ mod macos {
                             sent_version,
                             current.version,
                             value,
-                            delayed_turn_event,
+                            delayed_turn_event || matches!(kind, "scroll-key" | "toggle-sidebar"),
                         )
                     })
                 {
@@ -854,6 +985,27 @@ mod macos {
                     {
                         return Ok(());
                     }
+                }
+                if kind == "scroll-key" {
+                    let key =
+                        scroll_key_code(&action).ok_or("The chat scrolling key is invalid")?;
+                    let scroll = current.scroll;
+                    let owner = Arc::clone(&current.owner);
+                    let presentation = owner.presentation.load(Ordering::Acquire);
+                    let client_presentation = owner.latest_client_presentation();
+                    let scroll_sequence = owner.scroll_order.load(Ordering::Acquire);
+                    app.run_on_main_thread(move || {
+                        // Relative page steps must accumulate; do not supersede one
+                        // keystroke with the next. A newer explicit scroll, conversation
+                        // presentation, or teardown still invalidates queued input.
+                        if owner.may_scroll(scroll_sequence)
+                            && owner.may_present_native(presentation, client_presentation)
+                        {
+                            unsafe { lyra_native_chat_scroll_key(scroll as *mut c_void, key) };
+                        }
+                    })
+                    .map_err(|_| "The chat could not be scrolled")?;
+                    return Ok(());
                 }
                 if kind == "content-ready" {
                     let Some(current_version) = acknowledge_section(
@@ -1025,19 +1177,7 @@ mod macos {
                 return Ok(());
             }
             let current = guard.take().expect("checked above");
-            current.owner.deactivate();
-            let (tx, rx) = mpsc::channel();
-            app.run_on_main_thread(move || {
-                unsafe { lyra_native_chat_detach(current.scroll as *mut c_void) };
-                for child in current.webviews {
-                    let _ = child.close();
-                }
-                let _ = tx.send(());
-            })
-            .map_err(|_| "The native chat view could not close")?;
-            rx.recv_timeout(Duration::from_secs(5))
-                .map_err(|_| "The native chat view did not close")?;
-            Ok(())
+            detach_handle(&app, current)
         })
         .await
         .map_err(|_| "The native chat view stopped unexpectedly".to_string())?
@@ -1147,8 +1287,108 @@ mod tests {
     use super::*;
 
     #[test]
+    fn page_reload_revokes_every_deferred_operation_without_locking_the_slot() {
+        let state = NativeChatState::default();
+        let owner = NativeChatOwner::new("old-host".into(), 4, Arc::clone(&state.document_epoch));
+        let _busy_slot = state.inner.lock().unwrap();
+        let geometry = owner.next_geometry();
+        let scroll = owner.next_scroll();
+        let presentation = owner.next_presentation();
+        let client = owner.latest_client_presentation();
+        assert!(owner.matches_host("old-host"));
+        state.document_epoch.fetch_add(1, Ordering::AcqRel);
+        assert!(!owner.matches_host("old-host"));
+        assert!(!owner.may_run(4));
+        assert!(!owner.may_set_geometry(geometry));
+        assert!(!owner.may_scroll(scroll));
+        assert!(!owner.may_present_native(presentation, client));
+        assert!(!may_size_section(&owner, &AtomicU64::new(4), 4));
+        assert_eq!(owner.accept_presentation_request(1), None);
+        let fresh = NativeChatOwner::new("new-host".into(), 0, Arc::clone(&state.document_epoch));
+        assert!(fresh.matches_host("new-host"));
+    }
+
+    #[test]
+    fn stale_slot_is_reaped_without_removing_a_fresh_reload_owner() {
+        let state = NativeChatState::default();
+        let make_handle = |host: &str| NativeChatHandle {
+            owner: Arc::new(NativeChatOwner::new(
+                host.into(),
+                0,
+                Arc::clone(&state.document_epoch),
+            )),
+            host_id: host.into(),
+            instance_id: 0,
+            webviews: vec![],
+            loaded: vec![],
+            ready: vec![],
+            sent_versions: vec![],
+            section_revisions: vec![],
+            last_sections: vec![],
+            scope: String::new(),
+            version: 0,
+            #[cfg(target_os = "macos")]
+            scroll: 0,
+        };
+        let mut slot = Some(make_handle("old-host"));
+        state.document_epoch.fetch_add(1, Ordering::AcqRel);
+        assert_eq!(
+            take_stale_native_chat(&mut slot).unwrap().host_id,
+            "old-host"
+        );
+        assert!(slot.is_none());
+        slot = Some(make_handle("new-host"));
+        assert!(take_stale_native_chat(&mut slot).is_none());
+        assert_eq!(slot.as_ref().unwrap().host_id, "new-host");
+    }
+
+    #[test]
+    fn scrolling_keys_are_explicit_and_do_not_borrow_editing_keys() {
+        for (key, code) in [("PageUp", 0), ("PageDown", 1), ("Home", 2), ("End", 3)] {
+            assert_eq!(
+                scroll_key_code(&serde_json::json!({"key": key})),
+                Some(code)
+            );
+        }
+        for action in [
+            serde_json::json!({}),
+            serde_json::json!({"key": 0}),
+            serde_json::json!({"key": "Space"}),
+            serde_json::json!({"key": "ArrowUp"}),
+        ] {
+            assert_eq!(scroll_key_code(&action), None);
+        }
+    }
+
+    #[test]
+    fn keyboard_scroll_survives_stream_publication_but_not_replacement_or_explicit_scroll() {
+        // A child can process input before receiving the newest streamed snapshot.
+        assert!(current_action_version(4, 5, 3, true));
+        assert!(!current_action_version(4, 5, 0, true));
+        assert!(!current_action_version(4, 5, 5, true));
+        let owner = NativeChatOwner::new("host".into(), 3, Arc::default());
+        let presentation = owner.presentation.load(Ordering::Acquire);
+        let client_presentation = owner.latest_client_presentation();
+        let scroll = owner.scroll_order.load(Ordering::Acquire);
+        let permitted = || {
+            owner.may_scroll(scroll) && owner.may_present_native(presentation, client_presentation)
+        };
+        owner.set_generation(4);
+        assert!(permitted());
+        assert!(permitted(), "relative page steps must accumulate");
+        owner.next_scroll();
+        assert!(!permitted());
+        let current_scroll = owner.scroll_order.load(Ordering::Acquire);
+        owner.next_presentation();
+        assert!(owner.may_scroll(current_scroll));
+        assert!(!owner.may_present_native(presentation, client_presentation));
+        owner.deactivate();
+        assert!(!owner.may_scroll(current_scroll));
+    }
+
+    #[test]
     fn stale_host_cannot_control_replacement() {
-        let owner = NativeChatOwner::new("new-host".into(), 2);
+        let owner = NativeChatOwner::new("new-host".into(), 2, Arc::default());
         assert!(!owner.matches_host("old-host"));
         assert!(owner.matches_host("new-host"));
         owner.deactivate();
@@ -1157,7 +1397,7 @@ mod tests {
 
     #[test]
     fn queued_work_does_not_survive_new_snapshot_or_unmount() {
-        let owner = NativeChatOwner::new("host".into(), 2);
+        let owner = NativeChatOwner::new("host".into(), 2, Arc::default());
         assert!(owner.may_run(2));
         owner.set_generation(3);
         assert!(!owner.may_run(2));
@@ -1168,7 +1408,7 @@ mod tests {
 
     #[test]
     fn later_visibility_request_supersedes_queued_show_or_hide() {
-        let owner = NativeChatOwner::new("host".into(), 2);
+        let owner = NativeChatOwner::new("host".into(), 2, Arc::default());
         let show = owner.next_presentation();
         assert!(owner.may_present(show));
         let hide = owner.next_presentation();
@@ -1180,7 +1420,7 @@ mod tests {
 
     #[test]
     fn older_show_arriving_after_newer_hide_is_rejected() {
-        let owner = NativeChatOwner::new("host".into(), 2);
+        let owner = NativeChatOwner::new("host".into(), 2, Arc::default());
         let hide = owner.accept_presentation_request(2).expect("new hide");
         assert!(owner.may_present_request(2, hide));
         assert!(owner.accept_presentation_request(1).is_none());
@@ -1192,7 +1432,7 @@ mod tests {
 
     #[test]
     fn current_client_show_supersedes_queued_native_scope_hide() {
-        let owner = NativeChatOwner::new("host".into(), 2);
+        let owner = NativeChatOwner::new("host".into(), 2, Arc::default());
         let previous_client = owner.latest_client_presentation();
         let scope_hide = owner.next_presentation();
         let show = owner.accept_presentation_request(1).expect("current show");
@@ -1215,7 +1455,7 @@ mod tests {
             .collect();
         let sections: Vec<_> = rows.chunks(32).collect();
         assert_eq!(sections.len(), 3);
-        let owner = NativeChatOwner::new("host".into(), 1);
+        let owner = NativeChatOwner::new("host".into(), 1, Arc::default());
         let revisions: Vec<_> = (0..3).map(|_| AtomicU64::new(1)).collect();
         let mut sent_versions = vec![1; 3];
         let mut ready = vec![false; 3];
@@ -1248,7 +1488,7 @@ mod tests {
 
     #[test]
     fn geometry_and_scroll_work_survive_an_unrelated_publication() {
-        let owner = NativeChatOwner::new("host".into(), 1);
+        let owner = NativeChatOwner::new("host".into(), 1, Arc::default());
         let frame = owner.next_geometry();
         let scroll = owner.next_scroll();
         owner.set_generation(2);

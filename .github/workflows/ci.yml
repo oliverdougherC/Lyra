@@ -271,6 +271,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Run native AppKit chat regression
+        run: uv run --python 3.12 --extra dev pytest backend/tests/test_native_chat_view_smoke.py -q
+
       - name: Prepare Tauri compile-time frontend fixture
         run: |
           mkdir -p frontend/dist

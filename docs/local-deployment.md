@@ -56,6 +56,13 @@ production identity on the normal account as a test. A unique-ID/nonpersistent-s
 limited evidence, not candidate-equivalent or real Keychain certification. The prior normal-profile
 startup incident remains uncertain; do not infer absence of impact from backend selectors.
 
+Diagnostic variants must enforce their disposable backend selectors on **every** startup,
+including a LaunchServices reopen. Environment variables supplied only to the initial shell launch
+are insufficient: UI automation may reopen a closed app while requesting its state. Use a distinct
+compiled identifier, nonpersistent stores for the main and all child WebViews, and a diagnostic-only
+entry point that fixes the disposable paths before any backend launch. Verify the running identity
+and profile boundary again after a restart.
+
 ### Packaging steps for release and troubleshooting
 
 These lower-level steps retain a review artifact; install a copy for private installer checks. Build with

@@ -307,6 +307,8 @@ describe('StreamingMarkdown', () => {
 
   describe('long-answer reparse edges (PLA-511)', () => {
     it('re-parses a held long answer in full the moment the turn ends', () => {
+      // These commits must remain inside the reparse gap even on a busy CI CPU.
+      vi.spyOn(performance, 'now').mockReturnValue(1_000)
       const { container, rerender } = render(<StreamingMarkdown content="seed" streaming />)
       // Prime: a re-parse runs, stamping the schedule's last-parse time.
       rerender(<StreamingMarkdown content={LONG_A} streaming />)
@@ -321,6 +323,7 @@ describe('StreamingMarkdown', () => {
     })
 
     it('strands no held text across a generation reset, and drains the new generation', () => {
+      vi.spyOn(performance, 'now').mockReturnValue(1_000)
       const { container, rerender } = render(
         <StreamingMarkdown content="seed" streaming generation="gen1" />,
       )

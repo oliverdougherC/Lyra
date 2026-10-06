@@ -41,6 +41,14 @@ pub(crate) fn create_main_window<R: Runtime>(app: &mut App<R>) -> tauri::Result<
 
     WebviewWindowBuilder::from_config(app.handle(), &config)?
         .on_navigation(policy::is_app_navigation_allowed)
+        .on_page_load(|webview, payload| {
+            #[cfg(target_os = "macos")]
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                crate::native_chat::main_document_started(webview.app_handle());
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (webview, payload);
+        })
         .on_new_window(|_url, _features| tauri::webview::NewWindowResponse::Deny)
         .build()?;
 

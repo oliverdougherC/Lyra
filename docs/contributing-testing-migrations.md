@@ -66,6 +66,27 @@ cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-targets
 (cd src-tauri && cargo audit)
 ```
 
+On macOS with the developer tools installed, also run the native chat regression:
+
+```bash
+uv run --python 3.12 --extra dev pytest backend/tests/test_native_chat_view_smoke.py -q
+```
+
+The `rust-desktop` CI job runs this check on macOS. It compiles the production
+Objective-C chat view into a temporary test app, uses real AppKit and nonpersistent
+WKWebViews, and keeps its window offscreen without activation. It does not launch Lyra,
+start a backend, or open a production profile. The harness checks viewport, document,
+and section clipping; resizing and section heights; and vertical wheel routing through
+the test process's AppKit event queue, hit testing, and the actual responder. Click and horizontal
+wheel targets remain in WebKit. Keyboard checks exercise the native action helper;
+frontend tests separately check the child DOM's key handling and bridge messages.
+
+Browser tests and mocked bridge tests do not exercise these AppKit views. Conversely,
+this native harness does not prove rendered header pixels, the complete Tauri keyboard
+bridge, physical trackpad behavior, or the packaged app's full UI. Those need explicit
+packaged-app acceptance in the isolated environment described in
+[local deployment](local-deployment.md).
+
 Do not add Rust/Tauri claims to the live docs unless those checks and the desktop artifact job have
 real evidence behind them.
 

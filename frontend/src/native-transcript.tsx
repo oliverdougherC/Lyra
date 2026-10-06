@@ -209,6 +209,64 @@ export function NativeTranscript({ hostId = childHostId }: { hostId?: string } =
   }, [])
 
   useEffect(() => {
+    const scrollKey = (event: KeyboardEvent) => {
+      const owner = latestSnapshotRef.current
+      const target = event.target
+      const editing =
+        target instanceof Element &&
+        target.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]',
+        )
+      if (
+        owner &&
+        !editing &&
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        !event.repeat &&
+        !event.altKey &&
+        !event.shiftKey &&
+        (event.metaKey || event.ctrlKey) &&
+        event.key === 'b'
+      ) {
+        event.preventDefault()
+        report({
+          kind: 'toggle-sidebar',
+          hostId: owner.hostId,
+          scope: owner.scope,
+          version: owner.version,
+        })
+        return
+      }
+      if (
+        !owner ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        (event.key !== 'PageUp' &&
+          event.key !== 'PageDown' &&
+          event.key !== 'Home' &&
+          event.key !== 'End') ||
+        window.getSelection()?.isCollapsed === false
+      )
+        return
+      if (editing) return
+      event.preventDefault()
+      report({
+        kind: 'scroll-key',
+        hostId: owner.hostId,
+        scope: owner.scope,
+        version: owner.version,
+        key: event.key,
+      })
+    }
+    document.addEventListener('keydown', scrollKey)
+    return () => document.removeEventListener('keydown', scrollKey)
+  }, [])
+
+  useEffect(() => {
     let frame: number | null = null
     const reportSelection = () => {
       frame = null
@@ -231,6 +289,7 @@ export function NativeTranscript({ hostId = childHostId }: { hostId?: string } =
         ref={contentRef}
         className="mx-auto max-w-[860px] p-4 md:px-6"
         aria-label="Conversation"
+        tabIndex={0}
       >
         {snapshot?.rows.map((row) => (
           <div key={row.key} data-native-row-key={row.key} className="contents">

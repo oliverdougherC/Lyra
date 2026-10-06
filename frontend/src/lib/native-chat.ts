@@ -33,6 +33,14 @@ export type NativeChatAction =
   | { kind: 'ready'; hostId: string }
   | { kind: 'content-ready'; hostId: string; scope: string; version: number }
   | { kind: 'overflow'; hostId: string; scope: string; version: number }
+  | { kind: 'toggle-sidebar'; hostId: string; scope: string; version: number }
+  | {
+      kind: 'scroll-key'
+      hostId: string
+      scope: string
+      version: number
+      key: 'PageUp' | 'PageDown' | 'Home' | 'End'
+    }
   | {
       kind: 'retry'
       hostId: string

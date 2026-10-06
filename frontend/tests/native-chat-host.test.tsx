@@ -61,8 +61,104 @@ function harness(initial: Snapshot) {
 
 describe('native chat host ownership', () => {
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
     delete window.__TAURI_INTERNALS__
+  })
+
+  it('remeasures after delayed mounting and waits for the fresh frame before publishing', async () => {
+    let bounds = { x: 20, y: 80, width: 600, height: 400 }
+    const frames: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) =>
+      frames.push(callback),
+    )
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => bounds as DOMRect,
+    )
+    const h = harness({ scope: 'class:resize', rows: [row('a')], agent: true })
+    const mount = deferred()
+    const frame = deferred()
+    h.pending.set('native_chat_mount', mount)
+    h.pending.set('native_chat_set_frame', frame)
+    await waitFor(() => expect(h.last('native_chat_mount')).toBeTruthy())
+    bounds = { x: 240, y: 80, width: 380, height: 350 }
+    act(() => window.dispatchEvent(new Event('resize')))
+    act(() => frames.shift()?.(0))
+    expect(h.last('native_chat_set_frame')).toBeUndefined()
+    await act(async () => mount.resolve())
+    expect(h.last('native_chat_set_frame')?.args.rect).toEqual({
+      x: 240,
+      top: 80,
+      width: 380,
+      height: 350,
+    })
+    expect(h.last('native_chat_render')).toBeUndefined()
+    await act(async () => frame.resolve())
+    expect(h.last('native_chat_render')).toBeTruthy()
+    h.unmount()
+  })
+
+  it('forwards sidebar toggles only from the active unoccluded conversation', async () => {
+    const toggle = vi.fn()
+    window.addEventListener('lyra:toggle-sidebar', toggle)
+    const snapshot: Snapshot = { scope: 'class:sidebar', rows: [row('a')], agent: true }
+    const h = harness(snapshot)
+    await waitFor(() => expect(h.last('native_chat_render')).toBeTruthy())
+    const sent = h.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    await act(async () =>
+      action({
+        kind: 'content-ready',
+        hostId: sent.hostId,
+        scope: sent.scope,
+        version: sent.version,
+      }),
+    )
+    await waitFor(() => expect(h.current().active).toBe(true))
+    const toggleAction = {
+      kind: 'toggle-sidebar' as const,
+      hostId: sent.hostId,
+      scope: sent.scope,
+      version: sent.version,
+    }
+    act(() => action(toggleAction))
+    expect(toggle).toHaveBeenCalledTimes(1)
+    act(() => action({ ...toggleAction, scope: 'former-conversation' }))
+    act(() => action({ ...toggleAction, hostId: 'former-host' }))
+    h.rerender({ snapshot, occluded: true })
+    act(() => action(toggleAction))
+    expect(toggle).toHaveBeenCalledTimes(1)
+    h.unmount()
+    act(() => action(toggleAction))
+    expect(toggle).toHaveBeenCalledTimes(1)
+    window.removeEventListener('lyra:toggle-sidebar', toggle)
+  })
+
+  it('ignores a rejected initial frame after its owner has unmounted', async () => {
+    const old = harness({ scope: 'class:old', rows: [row('a')], agent: true })
+    const frame = deferred()
+    old.pending.set('native_chat_set_frame', frame)
+    await waitFor(() => expect(old.last('native_chat_set_frame')).toBeTruthy())
+    old.unmount()
+    const next = harness({ scope: 'class:new', rows: [row('b')], agent: true })
+    await waitFor(() => expect(next.last('native_chat_render')).toBeTruthy())
+    const sent = next.last('native_chat_render')!.args.snapshot as NativeChatSnapshot
+    await act(async () =>
+      action({
+        kind: 'content-ready',
+        hostId: sent.hostId,
+        scope: sent.scope,
+        version: sent.version,
+      }),
+    )
+    await waitFor(() => expect(next.current().active).toBe(true))
+    const unmounts = next.calls.filter((call) => call.command === 'native_chat_unmount').length
+    await act(async () => frame.reject(new Error('old frame failed')))
+    expect(next.current().active).toBe(true)
+    expect(next.calls.filter((call) => call.command === 'native_chat_unmount')).toHaveLength(
+      unmounts,
+    )
+    expect(old.last('native_chat_render')).toBeUndefined()
+    next.unmount()
   })
 
   it('ignores a show acknowledgment after overflow and tears the view down', async () => {
@@ -222,8 +318,13 @@ describe('native chat host ownership', () => {
     await waitFor(() => expect(h.current().active).toBe(true))
     const frame = deferred()
     h.pending.set('native_chat_set_frame', frame)
+    const frames = h.calls.filter((call) => call.command === 'native_chat_set_frame').length
     await act(async () => window.dispatchEvent(new Event('resize')))
-    await waitFor(() => expect(h.last('native_chat_set_frame')).toBeTruthy())
+    await waitFor(() =>
+      expect(
+        h.calls.filter((call) => call.command === 'native_chat_set_frame').length,
+      ).toBeGreaterThan(frames),
+    )
     await act(async () => frame.reject(new Error('frame failed')))
     await waitFor(() => expect(h.last('native_chat_unmount')).toBeTruthy())
     expect(h.current().active).toBe(false)

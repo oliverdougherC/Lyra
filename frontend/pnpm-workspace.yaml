@@ -1,10 +1,16 @@
 # Force one katex version everywhere: rehype-katex's ^0.16.0 range would otherwise
 # resolve a nested 0.16.x whose emitted classes mismatch the 0.18.x stylesheet we import.
 overrides:
-  katex: 0.18.1
+  katex: 0.18.2
   # DOMPurify 3.4.13–3.4.15 leaves hook-detached handlers armed in IN_PLACE mode
   # (GHSA-p98j-92pf-mc4p). Pin the existing Milkdown transitive dependency.
   'dompurify@': 3.4.16
+  # GHSA-c8x8-7fp4-3x9w: validate pasted HTML in the existing Milkdown editor.
+  'prosemirror-view@<1.42.3': 1.42.3
+  # GHSA-68fv-2mgg-jv7q: bound indexed source-map processing.
+  'source-map-js@>=1.0.0 <1.2.2': 1.2.2
+  # GHSA-g2v6-rqmx-r4w6: use Vue's patched renderer and matching package family.
+  'vue@>=3.5.0 <3.5.42': 3.5.42
   # fast-uri <3.1.8 carries SSRF / host-confusion and host-normalization advisories
   # (GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf,
   # GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3, GHSA-58mr-gqgx-xq4g,
