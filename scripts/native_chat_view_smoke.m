@@ -9,12 +9,38 @@ void lyra_native_chat_scroll_changed(const char *hostId, bool atBottom, double r
 
 static unsigned failures = 0;
 static unsigned webviewWheelEvents = 0;
-@interface SmokeWebView : WKWebView
+@interface SmokeWebView : WKWebView <WKNavigationDelegate>
+@property (nonatomic) BOOL contentNavigationFinished;
+@property (nonatomic, strong) NSError *contentLoadError;
 @end
 @implementation SmokeWebView
 - (void)scrollWheel:(NSEvent *)event {
     webviewWheelEvents++;
     [super scrollWheel:event];
+}
+- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+    (void)webView; (void)navigation;
+    self.contentNavigationFinished = NO;
+    self.contentLoadError = nil;
+}
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    (void)webView; (void)navigation;
+    self.contentNavigationFinished = YES;
+}
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation
+     withError:(NSError *)error {
+    (void)webView; (void)navigation;
+    self.contentLoadError = error;
+}
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation
+     withError:(NSError *)error {
+    (void)webView; (void)navigation;
+    self.contentLoadError = error;
+}
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    (void)webView;
+    self.contentLoadError = [NSError errorWithDomain:@"NativeChatSmoke" code:1
+        userInfo:@{NSLocalizedDescriptionKey: @"WebKit content process terminated"}];
 }
 @end
 
@@ -44,14 +70,46 @@ static void pump(double seconds) {
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
 }
 
+static BOOL waitForSyntheticContent(SmokeWebView *view) {
+    // A cold WebKit process can take seconds to initialize on the macOS runner.
+    // Wait for navigation, then validate the loaded DOM, under one shared bound.
+    double started = NSProcessInfo.processInfo.systemUptime;
+    double deadline = started + 15;
+    while (!view.contentNavigationFinished && !view.contentLoadError &&
+           NSProcessInfo.processInfo.systemUptime < deadline) pump(0.01);
+    __block BOOL contentReady = NO;
+    __block BOOL contentChecked = NO;
+    __block NSError *scriptError = nil;
+    if (view.contentNavigationFinished && !view.contentLoadError) {
+        [view evaluateJavaScript:@"document.readyState === 'complete' && document.getElementById('native-chat-smoke-sentinel')?.textContent === 'Synthetic transcript only'"
+               completionHandler:^(id value, NSError *error) {
+            scriptError = error;
+            contentReady = !error && [value isKindOfClass:NSNumber.class] && [value boolValue];
+            contentChecked = YES;
+        }];
+        while (!contentChecked && !view.contentLoadError &&
+               NSProcessInfo.processInfo.systemUptime < deadline) pump(0.01);
+    }
+    if (!contentReady || view.contentLoadError) {
+        printf("DIAGNOSTIC content-load elapsed=%.2fs navigationFinished=%d loading=%d progress=%.2f sentinelChecked=%d sentinelReady=%d url=%s error=%s\n",
+               NSProcessInfo.processInfo.systemUptime - started, view.contentNavigationFinished,
+               view.loading, view.estimatedProgress, contentChecked, contentReady,
+               (view.URL.absoluteString ?: @"(none)").UTF8String,
+               (view.contentLoadError.localizedDescription ?: scriptError.localizedDescription ?: @"navigation/DOM deadline expired or sentinel did not match").UTF8String);
+        fflush(stdout);
+    }
+    return contentReady && !view.contentLoadError;
+}
+
 static WKWebView *sectionOfClass(Class viewClass) {
     WKWebViewConfiguration *configuration = [WKWebViewConfiguration new];
     configuration.websiteDataStore = WKWebsiteDataStore.nonPersistentDataStore;
-    WKWebView *view = [[viewClass alloc] initWithFrame:NSMakeRect(0, 0, 600, 500)
+    SmokeWebView *view = [[viewClass alloc] initWithFrame:NSMakeRect(0, 0, 600, 500)
                                      configuration:configuration];
     // Match Wry's child view before production attachment reparents it.
     view.autoresizingMask = NSViewMinYMargin;
-    [view loadHTMLString:@"<html><body style='margin:0;overflow:hidden'><div style='height:1800px;background:#eed'>Synthetic transcript only</div></body></html>"
+    view.navigationDelegate = view;
+    [view loadHTMLString:@"<html><body style='margin:0;overflow:hidden'><div id='native-chat-smoke-sentinel' style='height:1800px;background:#eed'>Synthetic transcript only</div></body></html>"
                 baseURL:nil];
     return view;
 }
@@ -123,17 +181,8 @@ int main(void) {
         check(scroll.documentView.layer.masksToBounds && first.superview.layer.masksToBounds,
               @"document and section backing layers clip hosted content");
         lyra_native_chat_set_visible(raw, true);
-        pump(1.5);
-        __block BOOL contentReady = NO;
-        __block BOOL contentChecked = NO;
-        [first evaluateJavaScript:@"document.body.textContent.includes('Synthetic transcript only')"
-                 completionHandler:^(id value, NSError *error) {
-            contentReady = !error && [value isKindOfClass:NSNumber.class] && [value boolValue];
-            contentChecked = YES;
-        }];
-        NSDate *contentDeadline = [NSDate dateWithTimeIntervalSinceNow:5];
-        while (!contentChecked && contentDeadline.timeIntervalSinceNow > 0) pump(0.01);
-        check(contentReady, @"real nonpersistent WKWebView loads synthetic content");
+        check(waitForSyntheticContent((SmokeWebView *)first),
+              @"real nonpersistent WKWebView loads synthetic content");
         lyra_native_chat_set_section_height(raw, 0, 90);
         lyra_native_chat_set_frame(raw, 40, 100, 600, 300);
         check(fabs(NSMaxY(scroll.frame) - (668 - 100)) < 0.5,

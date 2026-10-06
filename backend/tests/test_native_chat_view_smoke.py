@@ -60,7 +60,7 @@ def test_native_chat_view_smoke(tmp_path: Path) -> None:
         env={**os.environ, "TMPDIR": str(tmp_path)},
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=45,
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
